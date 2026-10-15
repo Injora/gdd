@@ -35,6 +35,10 @@ export class FirstPersonController {
     this.bobPhase = 0;
     this.enabled = true;
     this.sensitivity = 0.0022;
+    // Spell buffs (set by the game each frame)
+    this.speedMul = 1; // Shadow Step / Tailwind / Phoenix
+    this.noStamina = false; // Tailwind: sprint without tiring
+    this.ignoreProps = false; // Shadow Step: through furniture
     this.keys = new Set();
     this.onStep = null; // (info) => void, fired at each footfall
 
@@ -96,10 +100,10 @@ export class FirstPersonController {
     } else {
       this.sprinting = false;
     }
-    if (this.sprinting && this.moving) this.stamina = Math.max(0, this.stamina - STAMINA.drain * dt);
+    if (this.sprinting && this.moving && !this.noStamina) this.stamina = Math.max(0, this.stamina - STAMINA.drain * dt);
     else this.stamina = Math.min(STAMINA.max, this.stamina + STAMINA.regen * dt * (this.moving ? 0.6 : 1));
 
-    const maxSpeed = this.crouch ? SPEED.crouch : this.sprinting ? SPEED.sprint : SPEED.walk;
+    const maxSpeed = (this.crouch ? SPEED.crouch : this.sprinting ? SPEED.sprint : SPEED.walk) * this.speedMul;
     const sin = Math.sin(this.yaw), cos = Math.cos(this.yaw);
     let wx = -sin * f + cos * s;
     let wz = -cos * f - sin * s;
@@ -110,7 +114,7 @@ export class FirstPersonController {
     this.vz += (wz * maxSpeed - this.vz) * Math.min(1, dt * accel);
 
     const before = { x: this.x, z: this.z };
-    const r = moveCircle(this.world, this.floor, this.x, this.z, this.vx * dt, this.vz * dt, PLAYER_RADIUS);
+    const r = moveCircle(this.world, this.floor, this.x, this.z, this.vx * dt, this.vz * dt, PLAYER_RADIUS, { ignoreProps: this.ignoreProps });
     this.x = r.x;
     this.z = r.z;
     const actual = dt > 0 ? Math.hypot(r.x - before.x, r.z - before.z) / dt : 0;

@@ -165,7 +165,8 @@ export class WizardAvatar {
     this.label.material.opacity = onFloor ? Math.max(0, Math.min(0.75, (8 - dist) / 4)) : 0;
 
     if (this.light) {
-      const lit = onFloor && this.state.li !== false;
+      const lumos = !!this.state.li; // the wand always glows; Lumos is a bright wide torch
+      const lit = onFloor;
       this.tip.getWorldPosition(this._tipWorld);
       this.light.position.copy(this._tipWorld);
       const fx = -Math.sin(this.yaw) * Math.cos(this.pitch);
@@ -173,9 +174,11 @@ export class WizardAvatar {
       const fy = Math.sin(this.pitch);
       this.light.target.position.set(this._tipWorld.x + fx * 6, this._tipWorld.y + fy * 6, this._tipWorld.z + fz * 6);
       this.light.target.updateMatrixWorld();
-      this.light.intensity = lit ? 45 * (channel ? 1.5 : 1) : 0;
+      this.light.angle = lumos ? 0.85 : 0.44;
+      this.light.distance = lumos ? 28 : 24;
+      this.light.intensity = lit ? (lumos ? 130 : 45) * (channel ? 1.5 : 1) : 0;
     }
-    this.tipMat.color.set(this.wizard.color).multiplyScalar(this.state.li === false ? 0.15 : 1);
+    this.tipMat.color.set(this.wizard.color).multiplyScalar(this.state.li ? 1.8 : 1);
   }
 
   dispose() {

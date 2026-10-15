@@ -180,7 +180,7 @@ export class LobbyManager {
 
     // In-game traffic is forwarded to the lobby's Game.
     socket.on('p:state', (data) => this.lobbyOf(socket)?.game?.onPlayerState(socket.id, data));
-    socket.on('p:interact', (data) => this.lobbyOf(socket)?.game?.onInteract(socket.id, data?.propId));
+    socket.on('p:interact', (data) => this.lobbyOf(socket)?.game?.onInteract(socket.id, data?.propId, data?.entityId));
     socket.on('p:cancel', () => this.lobbyOf(socket)?.game?.onCancel(socket.id));
     socket.on('p:cast', (data) => this.lobbyOf(socket)?.game?.onCast(socket.id, data));
     socket.on('p:ping', () => this.lobbyOf(socket)?.game?.onPing(socket.id));
@@ -200,6 +200,7 @@ export class LobbyManager {
     socket.on('debug:husk', () => debugGame()?.debugHusk(socket.id));
     socket.on('debug:mode', () => debugGame()?.debugMode(socket.id));
     socket.on('debug:capture', () => debugGame()?.debugCapture(socket.id));
+    socket.on('debug:ult', () => debugGame()?.debugUlt(socket.id));
     socket.on('debug:wizard', (data) => debugGame()?.debugWizard(socket.id, data?.wizardId));
 
     socket.on('disconnect', () => this.leave(socket));

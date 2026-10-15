@@ -7,14 +7,14 @@ import { PHASE, HEART_COUNT, STAMINA } from '/shared/constants.js';
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
-const ELEMENT_GLYPHS = {
-  Black: '\u263E',
-  Fire: '\u2668',
-  Water: '\u2652',
-  Earth: '\u25B2',
-  Wind: '\u2248',
-  White: '\u2600',
-  'Anti-magic': '\u2205',
+const SPELL_GLYPHS = {
+  psychic_torment: '\u263E', dimension_slash: '\u263D', black_hole: '\u25C9', shadow_step: '\u2601', abyssal_mind_fracture: '\u2620',
+  ignis_blast: '\u2668', calidus_brachium: '\u270A', sol_linea: '\u2600', phoenix_aura: '\u2735', fiendfyre_dragon: '\u2652',
+  tidal_surge: '\u2652', water_spear: '\u2191', sea_cradle: '\u25CE', riptide_vortex: '\u058D', abyssal_deluge: '\u2248',
+  terra_spike: '\u25B2', devils_snare: '\u2698', golem_boulder: '\u25CF', granite_skin: '\u25A3', yggdrasil: '\u2E19',
+  gale_force: '\u2248', kamaitachi: '\u263E', zephyr_tailwind: '\u27B3', vacuum_tempest: '\u058E', sylph_dragon: '\u2652',
+  sacred_bind: '\u2600', arrows_of_judgment: '\u2694', patronus_beacon: '\u2726', flash_step: '\u26A1', dawn_sacred_order: '\u2609',
+  aegis_void: '\u2205', black_slash: '\u2694', null_zone: '\u29B8', bull_thrust: '\u2648', devil_union: '\u2742',
 };
 
 const OBJECTIVES = {
@@ -91,9 +91,7 @@ export class HUD {
     el.classList.toggle('full', v >= STAMINA.max - 0.5);
   }
 
-  light(on) {
-    $('hud-light').textContent = on ? '' : 'WAND DARK [F]';
-  }
+  light(on) { this.lumos(on); }
 
   team(roster, positions, selfId, roomName) {
     const ul = $('hud-team');
@@ -104,7 +102,8 @@ export class HUD {
         const p = positions.get(m.id);
         const where = p ? roomName(p) : 'gone';
         const held = p?.cap ? ' <span class="held">HELD</span>' : p?.cg ? ' <span class="held">TAKEN</span>' : '';
-        return `<li style="--wiz:${w?.color ?? '#555'}"><span class="dot"></span>${esc(m.name)}${held} <span class="where">${esc(where)}</span></li>`;
+        const hp = p ? `<span class="hpbar"><i style="width:${Math.max(0, Math.min(100, p.hp ?? 100))}%"></i></span>` : '';
+        return `<li style="--wiz:${w?.color ?? '#555'}"><span class="dot"></span>${esc(m.name)}${held} ${hp} <span class="where">${esc(where)}</span></li>`;
       })
       .join('');
     if (html !== this._teamHtml) {
@@ -147,36 +146,96 @@ export class HUD {
       .join('');
   }
 
-  // ---- spell widget ---------------------------------------------------------------
+  // ---- hotbar: 4 spells + Ultimate --------------------------------------------------
 
-  setSpell(wizard) {
-    const el = $('hud-spell');
-    el.style.setProperty('--wiz', wizard.color);
-    el.querySelector('.spell-name').textContent = wizard.ability.name;
-    el.querySelector('.spell-wiz').textContent = `${wizard.title} \u00b7 ${wizard.element}`;
-    el.querySelector('.dial-glyph').textContent = ELEMENT_GLYPHS[wizard.element] ?? '\u2726';
-    el.title = wizard.ability.description;
-    this._cd = null;
+  setWizard(wizard) {
+    this.wizard = wizard;
+    const bar = $('hud-hotbar');
+    bar.style.setProperty('--wiz', wizard.color);
+    $('hud-bottom').style.setProperty('--wiz', wizard.color);
+    bar.innerHTML = '';
+    this.slots = wizard.spells.map((sp, i) => {
+      const el = document.createElement('div');
+      el.className = 'slot';
+      el.style.setProperty('--wiz', wizard.color);
+      el.title = `${sp.name}: ${sp.description}`;
+      el.innerHTML = `<span class="glyph">${SPELL_GLYPHS[sp.id] ?? '\u2726'}</span><span class="key">${i + 1}</span><div class="cd"></div><span class="time"></span>`;
+      bar.appendChild(el);
+      return el;
+    });
+    const ult = document.createElement('div');
+    ult.className = 'slot ult';
+    ult.style.setProperty('--wiz', wizard.color);
+    ult.title = `ULTIMATE: ${wizard.ultimate.name}: ${wizard.ultimate.description}`;
+    ult.innerHTML = `<div class="charge"></div><span class="glyph">${SPELL_GLYPHS[wizard.ultimate.id] ?? '\u2605'}</span><span class="key">R</span><span class="pct"></span>`;
+    bar.appendChild(ult);
+    this.ultEl = ult;
+    $('hud-wizard').textContent = `${wizard.name} \u00b7 ${wizard.title} \u00b7 ${wizard.element}`;
+    this._cdKeys = [];
+    this._ultKey = null;
+    this.select(this.selected ?? 0);
   }
 
-  /** remaining/duration in seconds; call every frame. */
-  cooldown(remaining, duration) {
-    const key = remaining > 0 ? Math.ceil(remaining * 10) : 0;
-    if (key === this._cd) return;
-    this._cd = key;
-    const el = $('hud-spell');
-    const frac = remaining > 0 && duration > 0 ? remaining / duration : 0;
-    el.querySelector('.arc').style.strokeDashoffset = `${175.93 * frac}`;
-    el.querySelector('.dial-time').textContent = remaining > 0 ? (remaining >= 10 ? Math.ceil(remaining) : remaining.toFixed(1)) : '';
-    el.classList.toggle('cooling', remaining > 0);
-    el.classList.toggle('ready', remaining <= 0);
+  select(slot) {
+    this.selected = slot;
+    this.slots?.forEach((el, i) => el.classList.toggle('selected', i === slot));
+    const sp = this.wizard?.spells[slot];
+    if (sp) $('hud-spellname').textContent = sp.name;
   }
 
-  denied() {
-    const el = $('hud-spell');
+  /** remaining/duration (seconds) per slot; call every frame. */
+  cooldowns(list) {
+    list.forEach(({ remaining, duration }, i) => {
+      const key = remaining > 0 ? Math.ceil(remaining * 10) : 0;
+      if (this._cdKeys[i] === key) return;
+      this._cdKeys[i] = key;
+      const el = this.slots?.[i];
+      if (!el) return;
+      el.style.setProperty('--cd', remaining > 0 && duration > 0 ? String(remaining / duration) : '0');
+      el.querySelector('.time').textContent = remaining > 0 ? (remaining >= 10 ? Math.ceil(remaining) : remaining.toFixed(1)) : '';
+    });
+  }
+
+  ult(charge) {
+    const key = Math.floor(charge);
+    if (key === this._ultKey || !this.ultEl) return;
+    this._ultKey = key;
+    this.ultEl.style.setProperty('--charge', String(Math.min(1, charge / 100)));
+    this.ultEl.querySelector('.pct').textContent = charge >= 100 ? 'READY' : `${key}%`;
+    this.ultEl.classList.toggle('ready', charge >= 100);
+  }
+
+  denied(slot) {
+    const el = slot === 'ult' ? this.ultEl : this.slots?.[slot ?? this.selected];
+    if (!el) return;
     el.classList.remove('denied');
     void el.offsetWidth;
     el.classList.add('denied');
+  }
+
+  hp(value) {
+    const key = Math.ceil(value);
+    if (key === this._hp) return;
+    this._hp = key;
+    const el = $('hud-hp');
+    el.querySelector('.fill').style.width = `${Math.max(0, Math.min(100, value))}%`;
+    el.querySelector('span').textContent = key;
+    el.classList.toggle('low', value <= 40);
+  }
+
+  lumos(on) {
+    const el = $('hud-lumos');
+    el.textContent = on ? 'LUMOS' : 'NOX';
+    el.classList.toggle('on', on);
+  }
+
+  buffs(codes) {
+    const key = codes.join(',');
+    if (key === this._buffKey) return;
+    this._buffKey = key;
+    const order = ['union', 'shadow', 'phoenix', 'granite', 'cradle', 'tailwind'];
+    const show = order.find((c) => codes.includes(c));
+    $('buff-fx').className = `buff-fx${show ? ` ${show}` : ''}`;
   }
 
   /** Full-screen flash: 'torment' | 'white' | 'hit' | 'blocked'. */

@@ -339,7 +339,7 @@ input:focus { border-color: var(--gold); }
 .hud-banner p { margin: 8px 0 0; font-style: italic; color: var(--ink); text-shadow: 0 1px 4px #000; padding: 0 16px; }
 .hud-whisper {
   position: absolute;
-  bottom: 18%;
+  bottom: 212px; /* above the hotbar */
   width: 100%;
   padding: 0 16px;
   text-align: center;
@@ -381,66 +381,115 @@ input:focus { border-color: var(--gold); }
 .hud-light {
   position: absolute;
   right: 20px;
-  bottom: 104px;
+  bottom: 20px;
   font-family: var(--display);
   font-size: 0.75rem;
   letter-spacing: 0.2em;
   color: var(--ink-dim);
 }
 
-/* Spell / cooldown widget */
-.hud-spell {
-  --wiz: #b08d4a;
+/* Hotbar: 4 spells + Ultimate, HP, Lumos */
+.hud-bottom {
   position: absolute;
-  right: 20px;
-  bottom: 20px;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: 6px;
   text-shadow: 0 1px 4px #000;
 }
-.hud-spell .dial { position: relative; width: 68px; height: 68px; flex: none; }
-.hud-spell svg { width: 100%; height: 100%; transform: rotate(-90deg); }
-.hud-spell circle { fill: rgba(0, 0, 0, 0.55); stroke-width: 4; }
-.hud-spell .track { stroke: rgba(255, 255, 255, 0.08); }
-.hud-spell .arc {
-  fill: none;
-  stroke: var(--wiz);
-  stroke-linecap: round;
-  stroke-dasharray: 175.93;
-  stroke-dashoffset: 0;
-  filter: drop-shadow(0 0 4px var(--wiz));
+.hud-spellname { font-family: var(--display); letter-spacing: 0.1em; font-size: 0.9rem; color: var(--wiz, var(--gold)); min-height: 1.2em; }
+.hud-vitals { display: flex; align-items: center; gap: 10px; }
+.hud-hp {
+  position: relative;
+  width: 260px;
+  height: 10px;
+  background: rgba(40, 0, 4, 0.75);
+  border: 1px solid rgba(212, 34, 44, 0.45);
 }
-.hud-spell .dial-glyph, .hud-spell .dial-time {
-  position: absolute;
-  inset: 0;
+.hud-hp .fill { height: 100%; width: 100%; background: linear-gradient(#e0303a, #8e0f16); transition: width 0.25s; }
+.hud-hp.low .fill { animation: hp-low 0.8s infinite; }
+@keyframes hp-low { 50% { filter: brightness(1.8); } }
+.hud-hp span { position: absolute; right: -44px; top: -4px; font-family: var(--display); font-size: 0.8rem; color: #f0d0d0; width: 40px; }
+.hud-lumos {
+  font-family: var(--display);
+  font-size: 0.7rem;
+  letter-spacing: 0.2em;
+  color: var(--ink-dim);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 1px 6px;
+  margin-left: 40px;
+}
+.hud-lumos.on { color: #fff3dc; border-color: #fff3dc; box-shadow: 0 0 10px rgba(255, 243, 220, 0.6); }
+.hud-hotbar { display: flex; gap: 8px; align-items: flex-end; }
+.slot {
+  --wiz: #b08d4a;
+  position: relative;
+  width: 58px;
+  height: 58px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(8, 6, 8, 0.75);
   display: grid;
   place-items: center;
-  font-family: var(--display);
+  overflow: hidden;
 }
-.hud-spell .dial-glyph { font-size: 1.5rem; color: var(--wiz); transition: opacity 0.2s; text-shadow: 0 0 12px var(--wiz); }
-.hud-spell .dial-time { font-size: 1.15rem; color: #fff; font-variant-numeric: tabular-nums; }
-.hud-spell.cooling .dial-glyph { opacity: 0.18; }
-.hud-spell.ready .dial { animation: ready-glow 1.6s ease-in-out infinite; border-radius: 50%; }
-@keyframes ready-glow {
-  0%, 100% { box-shadow: 0 0 0 0 transparent; }
-  50% { box-shadow: 0 0 18px 2px color-mix(in srgb, var(--wiz) 55%, transparent); }
+.slot.selected { border-color: var(--wiz); box-shadow: 0 0 12px color-mix(in srgb, var(--wiz) 60%, transparent), inset 0 0 12px color-mix(in srgb, var(--wiz) 30%, transparent); }
+.slot .glyph { font-size: 1.6rem; color: var(--wiz); text-shadow: 0 0 10px var(--wiz); }
+.slot .key { position: absolute; left: 4px; top: 2px; font-family: var(--display); font-size: 0.7rem; color: var(--gold); }
+.slot .cd {
+  position: absolute;
+  inset: 0;
+  background: conic-gradient(rgba(0, 0, 0, 0.78) calc(var(--cd, 0) * 1turn), transparent 0);
 }
-.hud-spell.denied .dial { animation: denied 0.35s; }
+.slot .time { position: absolute; inset: 0; display: grid; place-items: center; font-family: var(--display); font-size: 1rem; color: #fff; font-variant-numeric: tabular-nums; }
+.slot.denied { animation: denied 0.35s; }
 @keyframes denied {
   20% { transform: translateX(-4px); }
   40% { transform: translateX(4px); }
   60% { transform: translateX(-3px); }
   80% { transform: translateX(2px); }
 }
-.hud-spell .spell-name { font-family: var(--display); letter-spacing: 0.08em; color: var(--wiz); font-size: 1rem; }
-.hud-spell .spell-wiz { font-size: 0.85rem; color: var(--ink); font-style: italic; }
-.hud-spell .spell-key { font-size: 0.72rem; color: var(--ink-dim); margin-top: 2px; }
-.hud-spell kbd { font-family: var(--display); color: var(--gold); border: 1px solid var(--line); padding: 0 4px; background: rgba(0, 0, 0, 0.5); }
+.slot.ult {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  margin-left: 8px;
+  background: radial-gradient(circle, rgba(30, 10, 30, 0.9), rgba(5, 3, 5, 0.9));
+  border-color: rgba(255, 255, 255, 0.2);
+}
+.slot.ult .charge {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(var(--wiz) calc(var(--charge, 0) * 1turn), rgba(255, 255, 255, 0.06) 0);
+  -webkit-mask: radial-gradient(circle, transparent 58%, #000 60%);
+  mask: radial-gradient(circle, transparent 58%, #000 60%);
+}
+.slot.ult.ready { animation: ult-ready 1.2s ease-in-out infinite; border-color: var(--wiz); }
+@keyframes ult-ready {
+  0%, 100% { box-shadow: 0 0 8px var(--wiz); }
+  50% { box-shadow: 0 0 28px var(--wiz), 0 0 50px color-mix(in srgb, var(--wiz) 40%, transparent); }
+}
+.slot.ult .pct { position: absolute; bottom: 6px; width: 100%; text-align: center; font-family: var(--display); font-size: 0.65rem; color: var(--ink); }
+.hud-wizard { font-size: 0.78rem; font-style: italic; color: var(--ink-dim); }
+.hud-team .hpbar { width: 60px; height: 4px; background: rgba(60, 0, 6, 0.8); display: inline-block; vertical-align: middle; }
+.hud-team .hpbar i { display: block; height: 100%; background: #c52a32; }
+
+/* Personal buff overlays */
+.buff-fx { position: fixed; inset: 0; pointer-events: none; z-index: 3; transition: box-shadow 0.4s, background 0.4s; }
+.buff-fx.shadow { background: radial-gradient(ellipse at center, transparent 35%, rgba(10, 0, 20, 0.85) 100%); }
+.buff-fx.phoenix { box-shadow: inset 0 0 120px 20px rgba(255, 110, 20, 0.45); }
+.buff-fx.granite { box-shadow: inset 0 0 90px 30px rgba(90, 82, 70, 0.6); }
+.buff-fx.cradle { box-shadow: inset 0 0 100px 25px rgba(40, 160, 255, 0.35); }
+.buff-fx.tailwind { box-shadow: inset 0 0 80px 10px rgba(150, 255, 230, 0.3); }
+.buff-fx.union { box-shadow: inset 0 0 160px 40px rgba(110, 0, 20, 0.65), inset 0 0 40px 6px rgba(0, 0, 0, 0.9); }
+.screen-fx.hurt { animation: fx-fade 0.5s ease-out; box-shadow: inset 0 0 220px 70px rgba(200, 0, 10, 0.8); }
 
 .hud-caption {
   position: absolute;
-  bottom: 12%;
+  bottom: 182px;
   width: 100%;
   padding: 0 16px;
   text-align: center;

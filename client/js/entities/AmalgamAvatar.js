@@ -32,6 +32,7 @@ export class AmalgamAvatar {
     this.rise = 0;
     this.forced = null;
     this.heartsLit = 6;
+    this.liftK = 0;
 
     const skin = new THREE.MeshStandardMaterial({ color: 0xcdc3b4, roughness: 0.55 });
     const bone = new THREE.MeshStandardMaterial({ color: 0x9a8c7a, roughness: 0.7 });
@@ -279,6 +280,22 @@ export class AmalgamAvatar {
     requestAnimationFrame(tick);
   }
 
+  /** Turn this into a phantom: one dark translucent material, no hearts. */
+  ghostify() {
+    this.ghostMat = new THREE.MeshBasicMaterial({ color: 0x0a0608, transparent: true, opacity: 0, depthWrite: false });
+    this.group.traverse((o) => {
+      if (o.isMesh && !this.overlays.includes(o)) o.material = this.ghostMat;
+    });
+    this.hearts.forEach((h) => { h.glow.visible = false; });
+    this.ghost = true;
+    if (this.label) this.label.visible = false;
+  }
+
+  setOpacity(v) {
+    if (this.ghostMat) this.ghostMat.opacity = v;
+    for (const gl of this.glints) gl.material.opacity = v;
+  }
+
   /** Destroyed Hearts extinguish the nodes in its ribcage. */
   setHeartsLit(n) { this.heartsLit = n; }
 
@@ -312,7 +329,7 @@ export class AmalgamAvatar {
     const forced = this.forced && performance.now() < this.forced.until ? this.forced.pose : null;
     const act = forced ?? s.act;
     const hunting = s.state === 'hunting';
-    const twitching = this.has('stun') || this.has('torment');
+    const twitching = this.has('stun') || this.has('torment') || this.has('confused');
     const moving = s.mv && !forced;
 
     if (moving) {
@@ -365,6 +382,33 @@ export class AmalgamAvatar {
         this.jaw.scale.y = 2.1;
         this.head.rotation.x = 1.1;
         break;
+      case 'claw': // one long arm drawn back to rake
+        this.arms[1].sh.rotation.set(2.6, 0, 0.9);
+        this.arms[1].elbow.rotation.x = 1.2;
+        this.spine.rotation.y = -0.4;
+        break;
+      case 'shockwave': // both arms high, about to slam the floor
+        this.arms.forEach((a) => { a.sh.rotation.set(3.0, 0, a.s * 0.4); a.elbow.rotation.x = 0.2; });
+        this.spine.rotation.x = 0.25;
+        this.jaw.scale.y = 2;
+        break;
+      case 'tendril': // the chest splits; one arm thrust forward
+        this.arms[0].sh.rotation.set(1.5, 0, -0.1);
+        this.arms[0].elbow.rotation.x = 0;
+        this.spine.rotation.x = -0.6;
+        this.jaw.scale.y = 1.8;
+        break;
+      case 'smash':
+        this.arms.forEach((a) => { a.sh.rotation.set(2.9, 0, a.s * 0.15); a.elbow.rotation.x = 0.6; });
+        break;
+      case 'confused': // tearing at its own skull
+        this.arms.forEach((a) => {
+          a.sh.rotation.set(2.7 + jitter(0.4), 0, a.s * (0.9 + jitter(0.3)));
+          a.elbow.rotation.x = 2.0 + jitter(0.5);
+        });
+        this.spine.rotation.x = -0.3 + jitter(0.3);
+        this.jaw.scale.y = 2.2 + Math.random();
+        break;
       case 'scream': // the jumpscare: face-to-face, jaw unhinged
         this.spine.rotation.x = -0.25;
         this.neck.rotation.x = -0.1;
@@ -408,8 +452,11 @@ export class AmalgamAvatar {
     // Retreat: claws its way up into the ceiling.
     const rising = s.act === 'retreat' && !forced;
     this.rise = rising ? Math.min(1, this.rise + dt * 1.2) : s.hid ? 0 : Math.max(0, this.rise - dt * 3);
-    this.group.position.set(this.x, FLOOR_Y[s.f] + this.rise * this.rise * 3.2, this.z);
-    this.group.rotation.y = this.yaw;
+    // Lifted by a vortex / geyser, or swept away by the wind dragon.
+    const lifted = this.has('lift') || this.has('carried');
+    this.liftK += ((lifted ? 1 : 0) - this.liftK) * Math.min(1, dt * 6);
+    this.group.position.set(this.x, FLOOR_Y[s.f] + this.rise * this.rise * 3.2 + this.liftK * 1.4, this.z);
+    this.group.rotation.y = this.yaw + (lifted ? t * 5 : 0);
 
     // Stop-motion skeleton.
     this.poseAcc += dt;
@@ -421,7 +468,7 @@ export class AmalgamAvatar {
 
     // Heart-nodes pulse (one goes dark per destroyed Heart).
     this.hearts.forEach((h, i) => {
-      const lit = i < this.heartsLit;
+      const lit = i < this.heartsLit && !this.ghost;
       const p = (t * 1.3 + h.phase) % 1;
       const beat = Math.exp(-((p - 0.05) ** 2) / 0.002) + 0.6 * Math.exp(-((p - 0.22) ** 2) / 0.002);
       h.mat.color.setRGB(lit ? 0.5 + beat * 0.5 : 0.05, lit ? 0.02 : 0.02, lit ? 0.02 : 0.02);
@@ -430,7 +477,7 @@ export class AmalgamAvatar {
     });
     this.eyeMat.color.setScalar(0.7 + Math.random() * 0.3);
     const watching = s.state === 'haunt' || s.state === 'stalking' || s.act === 'peek';
-    for (const gl of this.glints) gl.material.opacity = watching ? 0.55 + Math.random() * 0.3 : 0.25;
+    if (!this.ghost) for (const gl of this.glints) gl.material.opacity = watching ? 0.55 + Math.random() * 0.3 : 0.25;
 
     const burning = this.has('burn'), stunned = this.has('stun'), slowed = this.has('slow'), blocked = this.has('block');
     this.skin.emissive.setRGB(burning ? 0.5 : stunned ? 0.35 : blocked ? 0.5 : 0, burning ? 0.12 : stunned ? 0.28 : blocked ? 0.5 : 0, stunned ? 0.06 : blocked ? 0.55 : 0);

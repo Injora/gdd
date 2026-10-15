@@ -88,7 +88,7 @@ function pushOut(x, z, r, minX, maxX, minZ, maxZ) {
   return [x, maxZ + r];
 }
 
-function resolve(world, floor, x, z, r, ignoreDynamic = false) {
+function resolve(world, floor, x, z, r, ignoreDynamic = false, ignoreProps = false) {
   const fl = world.floors[floor];
   const f = fl.f;
   for (let iter = 0; iter < 3; iter++) {
@@ -105,6 +105,7 @@ function resolve(world, floor, x, z, r, ignoreDynamic = false) {
         if (!boxes) continue;
         for (const b of boxes) {
           if (b.prop?.collider.dynamic && (ignoreDynamic || !world.isActive(b.prop))) continue;
+          if (ignoreProps && b.prop && !b.prop.collider.dynamic) continue; // Shadow Step: through furniture
           const res = pushOut(x, z, r, b.minX, b.maxX, b.minZ, b.maxZ);
           if (res) { [x, z] = res; moved = true; }
         }
@@ -115,14 +116,17 @@ function resolve(world, floor, x, z, r, ignoreDynamic = false) {
   return [x, z];
 }
 
-/** Move a circle of radius r by (dx, dz) on `floor`, sliding along obstacles. */
-export function moveCircle(world, floor, x, z, dx, dz, r) {
+/**
+ * Move a circle of radius r by (dx, dz) on `floor`, sliding along obstacles.
+ * `ignoreProps` lets it pass through furniture (walls, gates and barricades still block).
+ */
+export function moveCircle(world, floor, x, z, dx, dz, r, { ignoreProps = false } = {}) {
   const dist = Math.hypot(dx, dz);
   const steps = Math.max(1, Math.ceil(dist / (r * 0.5)));
   const sx = dx / steps, sz = dz / steps;
   for (let i = 0; i < steps; i++) {
-    [x, z] = resolve(world, floor, x + sx, z, r);
-    [x, z] = resolve(world, floor, x, z + sz, r);
+    [x, z] = resolve(world, floor, x + sx, z, r, false, ignoreProps);
+    [x, z] = resolve(world, floor, x, z + sz, r, false, ignoreProps);
   }
   return { x, z };
 }

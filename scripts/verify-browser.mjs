@@ -89,11 +89,14 @@ async function main() {
   });
   /** Press P until the server reports the wanted debug monster mode. */
   const setMode = async (mode) => {
+    const seen = [];
     for (let i = 0; i < 7; i++) {
       await page.keyboard.press('KeyP');
       const ev = await waitEvent('debug:mode', 3000);
+      seen.push(ev?.mode ?? 'none');
       if (ev?.mode === mode) return true;
     }
+    console.log(`  (debug modes seen while looking for ${mode}: ${seen.join(', ')})`);
     return false;
   };
 
@@ -179,105 +182,31 @@ async function main() {
     const hasHusk = () => page.evaluate(() => window.__game.monsters.has('husk'));
     const toggleHusk = () => page.evaluate(() => window.__game.net.emit('debug:husk'));
 
-    // ------------------------------------------------------------------ spells
-    console.log('\n— Spells —');
     const fpsSamples = [];
-    for (let i = 0; i < 7; i++) {
-      const wizardId = Object.keys(EXPECT)[i];
-      const exp = EXPECT[wizardId];
-      await page.keyboard.press(`Digit${i + 1}`);
-      await page.waitForFunction((id) => window.__game.wizard.id === id, { timeout: 5000 }, wizardId);
-      await standAndFace();
-      if (await hasHusk()) {
-        await toggleHusk();
-        await page.waitForFunction(() => !window.__game.monsters.has('husk'), { timeout: 5000 });
-      }
-      await toggleHusk();
-      await page.waitForFunction(() => window.__game.monsters.has('husk'), { timeout: 5000 });
-      await sleep(250);
-      await page.evaluate(() => {
-        const g = window.__game;
-        const m = g.monsters.get('husk');
-        g.controller.yaw = Math.atan2(-(m.x - g.controller.x), -(m.z - g.controller.z));
-        window.__events.length = 0;
-      });
-      await sleep(120);
-      await page.keyboard.press('KeyQ');
-      await sleep(exp.ability === 'ignis_blast' ? 180 : 260);
-
-      const r = await page.evaluate(() => {
-        const g = window.__game;
-        const self = g.selfId;
-        const myCast = window.__events.find((e) => e.type === 'cast' && e.caster === self);
-        const impact = window.__events.find((e) => e.type === 'impact' && e.id === myCast?.id);
-        const m = g.monsters.get('husk')?.snap;
-        return {
-          ability: myCast?.ability,
-          hit: myCast?.hit ?? impact?.hit ?? null,
-          wall: myCast?.wall?.tiles?.length ?? 0,
-          shielded: myCast?.shielded ?? null,
-          selfShielded: !!g.positions.get(self)?.sh,
-          huskStatus: m?.st ?? [],
-          huskHp: m?.hp,
-          cooldownText: document.querySelector('#hud-spell .dial-time').textContent,
-          spellName: document.querySelector('#hud-spell .spell-name').textContent,
-          barriersInFx: g.fx.barriers.size,
-          self,
-        };
-      });
-      await shot(`spell-${i + 1}-${exp.ability}`);
-      const fps = await measureFps();
-      fpsSamples.push(fps);
-
-      const tag = `${wizardId}/${exp.ability}`;
-      check(r.ability === exp.ability, `${tag}: server did not broadcast our cast (got ${r.ability})`);
-      check(r.cooldownText !== '', `${tag}: cooldown dial is not counting down`);
-      if (exp.ability === 'aegis_void') {
-        check(r.shielded?.includes(r.self), `${tag}: caster not shielded`);
-        check(r.selfShielded, `${tag}: shield flag missing from snapshot`);
-      } else {
-        check(r.hit === 'husk', `${tag}: spell did not hit the husk (hit=${r.hit})`);
-      }
-      if (exp.ability === 'terra_spike') check(r.wall > 0 && r.barriersInFx > 0, `${tag}: no barricade raised`);
-      for (const st of exp.status) check(r.huskStatus.includes(st), `${tag}: husk missing status "${st}" (has ${r.huskStatus.join(',') || 'none'})`);
-      console.log(`${i + 1}. ${r.spellName.padEnd(18)} hit=${String(r.hit ?? (r.shielded && 'shield')).padEnd(7)} status=[${r.huskStatus.join(', ')}] hp=${r.huskHp} fps≈${Math.round(fps)}`);
-      await sleep(400);
-    }
-
-    // Bots fight the husk.
-    await page.evaluate(() => { window.__events.length = 0; });
-    let botCasts = [];
-    for (let s = 0; s < 45; s++) {
-      await sleep(1000);
-      botCasts = await page.evaluate(() => {
-        const bots = new Set(window.__game.roster.filter((m) => m.isBot).map((m) => m.id));
-        return window.__events.filter((e) => e.type === 'cast' && bots.has(e.caster)).map((e) => e.ability);
-      });
-      if (new Set(botCasts).size >= 2) break;
-    }
-    console.log(`Bot casts: ${botCasts.join(', ') || 'none'}`);
-    check(botCasts.length > 0, 'bots never cast at the husk');
-    await toggleHusk();
-
     // ------------------------------------------------------------------ horror
     console.log('\n— The Malphas Amalgam —');
     await standAndFace();
     await page.evaluate(() => { window.__events.length = 0; });
 
     // 1. Haunting (before the Tome): in view at a distance, vanishes when lit.
-    await page.keyboard.press('KeyF'); // wand dark, so looking at it doesn't light it
     check(await setMode('haunt'), 'debug P never reached haunt mode');
     const haunted = await page.waitForFunction(() => window.__game.monsters.get('amalgam')?.snap.state === 'haunt', { timeout: 4000 }).catch(() => null);
     if (check(haunted, 'no haunting appeared')) {
-      await faceAmalgam();
-      await sleep(250);
+      await page.evaluate(() => { // glimpse it from just outside the beam
+        const g = window.__game;
+        const m = g.monsters.get('amalgam');
+        g.controller.yaw = Math.atan2(-(m.x - g.controller.x), -(m.z - g.controller.z)) + 0.45;
+      });
+      await sleep(200);
       await shot('horror-1-haunting-in-the-dark');
-      await page.keyboard.press('KeyF'); // light it up
+      await faceAmalgam();
+      await page.keyboard.press('KeyF'); // Lumos: light it up
       await sleep(80);
       await shot('horror-1b-lit-glimpse');
       const vanish = await waitEvent('monster:vanish', 3000);
       check(vanish?.lit === true, `haunting did not vanish when lit (${JSON.stringify(vanish)})`);
       console.log(`haunting: appeared at a corner, vanished when lit=${vanish?.lit}`);
+      await page.keyboard.press('KeyF'); // Nox
     }
 
     // 2. Capture test: it appears right in front of you and lunges.
@@ -287,7 +216,13 @@ async function main() {
     await shot('horror-2-amalgam-windup');
     const self = await page.evaluate(() => window.__game.selfId);
     const cap = await waitEvent('capture', 5000);
-    check(cap?.id === self, 'capture-test lunge did not take you');
+    if (!check(cap?.id === self, 'capture-test lunge did not take you')) {
+      console.log('  capture diagnostics:', await page.evaluate(() => JSON.stringify({
+        monster: window.__game.monsters.get('amalgam')?.snap,
+        me: window.__game.positions.get(window.__game.selfId),
+        events: window.__events.slice(-15).map((e) => e.type + (e.kind ? `:${e.kind}` : '') + (e.stage ? `:${e.stage}` : '')),
+      })));
+    }
     await sleep(350);
     await shot('horror-3-jumpscare');
     await page.waitForFunction(() => window.__game.captured, { timeout: 5000 }).catch(() => {});
@@ -350,6 +285,120 @@ async function main() {
     } else {
       console.log('hunt: the Amalgam did not close within 20s (bots may have driven it off)');
     }
+
+    // ------------------------------------------------------------------ grimoire
+    console.log('\n— Grimoire: 7 wizards × (4 spells + Ultimate) —');
+    const freshHusk = async () => {
+      if (await hasHusk()) {
+        await toggleHusk();
+        await page.waitForFunction(() => !window.__game.monsters.has('husk'), { timeout: 5000 });
+      }
+      await toggleHusk();
+      await page.waitForFunction(() => window.__game.monsters.has('husk'), { timeout: 5000 });
+      await sleep(200);
+      await page.evaluate(() => {
+        const g = window.__game;
+        const m = g.monsters.get('husk');
+        g.controller.yaw = Math.atan2(-(m.x - g.controller.x), -(m.z - g.controller.z));
+        g.controller.pitch = -0.05;
+      });
+      await sleep(120);
+    };
+    const ULT_CHECK = {
+      injorath: ['Abyssal Mind Fracture', () => window.__game.monsters.get('husk')?.snap.st.includes('confused')],
+      parthius: ['Fiendfyre Great Dragon', () => window.__events.some((e) => e.type === 'impact' && e.ability === 'fiendfyre_dragon')],
+      himandriel: ['Abyssal Deluge', () => window.__game.flooded === true],
+      sushantus: ['Yggdrasil', () => window.__game.ents.some((e) => e.k === 'tree' && e.n === window.__game.roster.length)],
+      kartavian: ['Sylph\u2019s Great Wind Dragon', () => window.__events.some((e) => e.type === 'impact' && e.ability === 'sylph_dragon')],
+      soham: ['Dawn of the Sacred Order', () => window.__game.dawnActive && window.__game.monsters.get('husk')?.snap.st.includes('frozen')],
+      himanshu: ['Devil Union', () => window.__game.buffs.includes('union')],
+    };
+    for (let i = 0; i < 7; i++) {
+      const wizardId = Object.keys(EXPECT)[i];
+      await page.keyboard.down('Shift');
+      await page.keyboard.press(`Digit${i + 1}`);
+      await page.keyboard.up('Shift');
+      await page.waitForFunction((id) => window.__game.wizard.id === id, { timeout: 5000 }, wizardId);
+      await standAndFace();
+      await freshHusk();
+      const cast = [];
+      for (let slot = 0; slot < 4; slot++) {
+        await page.evaluate(() => {
+          const g = window.__game;
+          const m = g.monsters.get('husk');
+          if (m) g.controller.yaw = Math.atan2(-(m.x - g.controller.x), -(m.z - g.controller.z));
+          window.__events.length = 0;
+        });
+        await sleep(80);
+        await page.keyboard.press(`Digit${slot + 1}`);
+        await sleep(slot === 0 ? 260 : 450);
+        const r = await page.evaluate((s) => {
+          const g = window.__game;
+          const ev = window.__events.find((e) => e.type === 'cast' && e.caster === g.selfId);
+          return { ability: ev?.ability, expected: g.wizard.spells[s].id, name: g.wizard.spells[s].name, cd: document.querySelectorAll('#hud-hotbar .slot .time')[s]?.textContent };
+        }, slot);
+        if (slot === 0) await shot(`spell-${i + 1}-${r.expected}`);
+        else await shot(`spell-${i + 1}${'abc'[slot - 1]}-${r.expected}`);
+        check(r.ability === r.expected, `${wizardId}: slot ${slot + 1} cast ${r.ability} (expected ${r.expected})`);
+        check(r.cd !== '', `${wizardId}: slot ${slot + 1} cooldown not shown`);
+        cast.push(r.name);
+        if (slot === 0) {
+          const st = await page.evaluate(() => window.__game.monsters.get('husk')?.snap.st ?? []);
+          for (const code of EXPECT[wizardId].status) check(st.includes(code), `${wizardId}: slot 1 missing status ${code} (${st})`);
+        }
+        await sleep(350);
+      }
+      // Ultimate
+      await freshHusk();
+      await page.keyboard.press('KeyU');
+      await page.waitForFunction(() => window.__game.ultCharge >= 100, { timeout: 4000 }).catch(() => {});
+      await page.evaluate(() => {
+        const g = window.__game;
+        const m = g.monsters.get('husk');
+        if (m) g.controller.yaw = Math.atan2(-(m.x - g.controller.x), -(m.z - g.controller.z));
+        window.__events.length = 0;
+      });
+      await sleep(100);
+      await page.keyboard.press('KeyR');
+      const [ultName, ultCheck] = ULT_CHECK[wizardId];
+      const ok = await page.waitForFunction(ultCheck, { timeout: 8000 }).then(() => true).catch(() => false);
+      await sleep(wizardId === 'sushantus' ? 1800 : 300);
+      await shot(`ult-${i + 1}-${wizardId}`);
+      const fps = await measureFps();
+      fpsSamples.push(fps);
+      check(ok, `${wizardId}: Ultimate ${ultName} had no visible effect`);
+      console.log(`${i + 1}. ${cast.join(' · ')}  ⟶  R: ${ultName} ${ok ? '✓' : '✗'}  fps≈${Math.round(fps)}`);
+      await sleep(600);
+    }
+    // Lumos
+    const lumos = await page.evaluate(async () => {
+      const g = window.__game;
+      const before = { i: g.wandLight.intensity, a: g.wandLight.angle };
+      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyF' }));
+      await new Promise((r) => setTimeout(r, 600));
+      const after = { i: g.wandLight.intensity, a: g.wandLight.angle, server: g.positions.get(g.selfId)?.li };
+      return { before, after, hud: document.getElementById('hud-lumos').textContent };
+    });
+    check(lumos.after.a > lumos.before.a + 0.2 && lumos.after.i > lumos.before.i && lumos.hud === 'LUMOS' && lumos.after.server === true,
+      `Lumos did not brighten/widen the wand (${JSON.stringify(lumos)})`);
+    console.log(`Lumos: angle ${lumos.before.a.toFixed(2)}→${lumos.after.a.toFixed(2)}, intensity ${Math.round(lumos.before.i)}→${Math.round(lumos.after.i)}, server sees it: ${lumos.after.server}`);
+    await shot('lumos-on');
+    await page.keyboard.press('KeyF');
+
+    // Bots fight the husk.
+    await page.evaluate(() => { window.__events.length = 0; });
+    let botCasts = [];
+    for (let s = 0; s < 45; s++) {
+      await sleep(1000);
+      botCasts = await page.evaluate(() => {
+        const bots = new Set(window.__game.roster.filter((m) => m.isBot).map((m) => m.id));
+        return window.__events.filter((e) => e.type === 'cast' && bots.has(e.caster)).map((e) => e.ability);
+      });
+      if (new Set(botCasts).size >= 2) break;
+    }
+    console.log(`Bot casts: ${botCasts.join(', ') || 'none'}`);
+    check(botCasts.length > 0, 'bots never cast at the husk');
+    await toggleHusk();
 
     const audio = await page.evaluate(() => ({ state: window.__game.audio.ctx?.state, played: window.__game.audio.played }));
     console.log(`audio: context ${audio.state}, ${audio.played} sounds synthesised`);

@@ -47,6 +47,15 @@ export class Bot {
     if (p.channel) return; // holding E on the lock
     if (p.captured) return this.idle(dt, t);
 
+    // Badly hurt: eat from a Tree of Life if one is growing on this floor.
+    if (p.hp < 50) {
+      const tree = g.spells.entities.find((e) => e.kind === 'tree' && e.fruits > 0 && e.floor === p.floor);
+      if (tree) {
+        if (this.moveTo({ x: tree.x, z: tree.z, floor: tree.floor }, 2.2, dt, t)) g.onInteract(p.id, null, tree.id);
+        return;
+      }
+    }
+
     // Rescue
     const gateId = g.map.ids.gate;
     if (g.prisoners().length && !g.propState[gateId]?.open) {
@@ -76,33 +85,57 @@ export class Bot {
 
   // ---- spells ------------------------------------------------------------------
 
-  /** Fire this bot's spell when it makes sense. */
+  /**
+   * Pick and cast a spell (or the Ultimate) that fits the moment, using each
+   * spell's `bot` hint: target / ally / self / escape / zone / heal.
+   */
   tryCast(t) {
     const g = this.game, p = this.p;
     if (t < this.castAt) return;
-    const ability = WIZARD_BY_ID[p.wizardId]?.ability;
-    if (!ability || g.spells.cooldownLeft(p, ability.id) > 0) return;
-    const m = g.monsters().find((mm) => mm.floor === p.floor);
-    if (!m) return;
-    const d = Math.hypot(m.x - p.x, m.z - p.z);
-
+    const w = WIZARD_BY_ID[p.wizardId];
+    if (!w) return;
+    const m = g.monsters().find((mm) => mm.floor === p.floor) ?? null;
+    const d = m ? Math.hypot(m.x - p.x, m.z - p.z) : Infinity;
+    const isHusk = m?.kind === 'husk';
+    const los = !!m && lineOfSight(g.map, p.floor, p.x, p.z, m.x, m.z);
     // The real Amalgam is only engaged when it threatens someone.
-    const isHusk = m.kind === 'husk';
-    const threat = isHusk || m.state === 'hunting' || d < THREAT_RADIUS;
-    if (!threat) return;
+    const threat = !!m && (isHusk || m.state === 'hunting' || d < THREAT_RADIUS);
+    const huntedClose = !!m && !isHusk && m.state === 'hunting' && m.targetId === p.id && d < 5;
+    const hurt = [...g.players.values()].some((o) => !o.captured && o.floor === p.floor && o.hp < 55);
 
-    let want;
-    if (ability.id === 'aegis_void') {
-      want = [...g.players.values()].some((o) => o.floor === p.floor && !o.captured &&
-        Math.hypot(o.x - p.x, o.z - p.z) <= ability.shieldRadius && Math.hypot(o.x - m.x, o.z - m.z) < (isHusk ? 3 : 4.5));
-    } else {
-      want = d <= ability.range * 0.9;
+    const fits = (s) => {
+      switch (s.bot) {
+        case 'target': return threat && los && d <= (s.range ?? 10) * 0.9;
+        case 'zone': return threat && los && d <= 12;
+        case 'escape': return huntedClose;
+        case 'heal': return hurt;
+        case 'self': return threat && d < 10;
+        case 'ally':
+          if (s.id === 'aegis_void') {
+            return !!m && [...g.players.values()].some((o) => o.floor === p.floor && !o.captured &&
+              Math.hypot(o.x - p.x, o.z - p.z) <= s.shieldRadius && Math.hypot(o.x - m.x, o.z - m.z) < (isHusk ? 3 : 4.5));
+          }
+          return threat && d < (isHusk ? 4 : 8);
+        default: return false;
+      }
+    };
+    const aim = () => (m ? yawFromDir(m.x - p.x, m.z - p.z) : p.yaw);
+    const fire = (slot) => {
+      p.yaw = aim();
+      p.pitch = 0;
+      const res = g.spells.cast(p, p.yaw, 0, slot);
+      if (res.ok) this.castAt = t + (isHusk ? 1.5 + Math.random() * 2 : 0.4 + Math.random() * 0.6);
+      return res.ok;
+    };
+
+    // Ultimates are saved for the real Amalgam (or for healing), never the training husk.
+    if ((p.ult ?? 0) >= 100 && (!isHusk || w.ultimate.bot === 'heal') && fits(w.ultimate) && fire('ult')) return;
+    const slots = [0, 1, 2, 3].sort(() => Math.random() - 0.5);
+    for (const slot of slots) {
+      const s = w.spells[slot];
+      if (g.spells.cooldownLeft(p, s.id) > 0 || !fits(s)) continue;
+      if (fire(slot)) return;
     }
-    if (!want || !lineOfSight(g.map, p.floor, p.x, p.z, m.x, m.z)) return;
-    p.yaw = yawFromDir(m.x - p.x, m.z - p.z);
-    p.pitch = 0;
-    g.spells.cast(p, p.yaw, 0);
-    this.castAt = t + (isHusk ? 1.5 + Math.random() * 2 : 0.4 + Math.random() * 0.6);
   }
 
   /** The training husk, when our spell is (nearly) ready. */

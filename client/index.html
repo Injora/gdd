@@ -87,23 +87,18 @@
     <div id="hud-stamina" class="hud-stamina"><div></div></div>
     <div id="hud-light" class="hud-light"></div>
     <div id="hud-caption" class="hud-caption"></div>
-    <div id="hud-spell" class="hud-spell">
-      <div class="dial">
-        <svg viewBox="0 0 64 64" aria-hidden="true">
-          <circle class="track" cx="32" cy="32" r="28"></circle>
-          <circle class="arc" cx="32" cy="32" r="28"></circle>
-        </svg>
-        <span class="dial-glyph"></span>
-        <span class="dial-time"></span>
+    <div id="hud-bottom" class="hud-bottom">
+      <div id="hud-spellname" class="hud-spellname"></div>
+      <div class="hud-vitals">
+        <div id="hud-hp" class="hud-hp"><div class="fill"></div><span></span></div>
+        <div id="hud-lumos" class="hud-lumos">NOX</div>
       </div>
-      <div class="spell-info">
-        <div class="spell-name"></div>
-        <div class="spell-wiz"></div>
-        <div class="spell-key"><kbd>LMB</kbd> / <kbd>Q</kbd></div>
-      </div>
+      <div id="hud-hotbar" class="hud-hotbar"></div>
+      <div id="hud-wizard" class="hud-wizard"></div>
     </div>
   </section>
   <div id="screen-fx" class="screen-fx"></div>
+  <div id="buff-fx" class="buff-fx"></div>
 
   <div id="journal" class="overlay hidden">
     <div class="journal-page">
@@ -123,15 +118,18 @@
         <tr><td>Mouse</td><td>Look</td></tr>
         <tr><td>Shift</td><td>Sprint (loud)</td></tr>
         <tr><td>C / Ctrl</td><td>Crouch (quiet)</td></tr>
-        <tr><td>LMB / Q</td><td>Cast your wizard's spell</td></tr>
+        <tr><td>1 – 4</td><td>Cast spell 1–4 (and select it)</td></tr>
+        <tr><td>LMB / Q</td><td>Cast the selected spell</td></tr>
+        <tr><td>R</td><td>Ultimate (needs 100% charge)</td></tr>
+        <tr><td>F</td><td>Lumos / Nox: bright torch (you're seen 50% further)</td></tr>
         <tr><td>E (hold)</td><td>Interact / destroy / read / break lock</td></tr>
-        <tr><td>F</td><td>Wand light on / off</td></tr>
         <tr><td>J</td><td>Journal</td></tr>
         <tr><td>G</td><td>Call for help (ping your location)</td></tr>
         <tr class="debug-only"><td>M</td><td>Debug map (click to teleport)</td></tr>
         <tr class="debug-only"><td>P</td><td>Cycle monster: Husk → Haunt → Stalk → Hunt → Capture → Auto</td></tr>
         <tr class="debug-only"><td>K</td><td>Instant capture / break the lock</td></tr>
-        <tr class="debug-only"><td>1 – 7</td><td>Hot-swap wizard</td></tr>
+        <tr class="debug-only"><td>Shift + 1 – 7</td><td>Hot-swap wizard</td></tr>
+        <tr class="debug-only"><td>U</td><td>Fill Ultimate charge</td></tr>
       </table>
     </div>
   </div>

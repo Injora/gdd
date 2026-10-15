@@ -8,7 +8,7 @@ import { FLOOR_Y, TILE } from '/shared/constants.js';
 import { ABILITY_BY_ID } from '/shared/wizards.js';
 
 const WAND_HEIGHT = 1.35;
-const LIGHT_POOL = 3;
+const LIGHT_POOL = 5; // fixed: fireballs, scorches, flashes, auras, dragons, the Tree
 const ease = (k) => 1 - (1 - k) ** 3;
 
 function softTexture() {
@@ -56,7 +56,7 @@ function scorchTextures() {
 }
 
 /** Jagged stone spike: a cone with jittered vertices, base at y = 0. */
-function jaggedSpike(radius, height) {
+export function jaggedSpike(radius, height) {
   const g = new THREE.ConeGeometry(radius, height, 5, 3);
   const p = g.attributes.position;
   for (let i = 0; i < p.count; i++) {
@@ -75,7 +75,7 @@ function jaggedSpike(radius, height) {
 // ---------------------------------------------------------------------------
 // Particles: one Points object with a ring buffer of fading, falling motes.
 
-class Particles {
+export class Particles {
   constructor(scene, capacity, { blending, size, texture, opacity = 1 }) {
     this.cap = capacity;
     this.pos = new Float32Array(capacity * 3).fill(-9999);
@@ -195,7 +195,7 @@ const HEX_FRAG = /* glsl */`
     gl_FragColor = vec4(col, clamp(alpha, 0.0, 1.0));
   }`;
 
-function hexMaterial() {
+export function hexMaterial() {
   return new THREE.ShaderMaterial({
     vertexShader: HEX_VERT,
     fragmentShader: HEX_FRAG,

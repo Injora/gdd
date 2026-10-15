@@ -6,11 +6,11 @@ import { performance } from 'node:perf_hooks';
 import { generateMansion, publicMap } from '../shared/mapgen.js';
 import { createCollisionWorld, overlapsSolid } from '../shared/collision.js';
 import {
-  PHASE, CHANNEL, INTERACT_RANGE, TICK_RATE, SPEED, HEART_COUNT, TILE, TILE_WALL, PLAYER_RADIUS,
+  PHASE, CHANNEL, INTERACT_RANGE, TICK_RATE, SPEED, HEART_COUNT, TILE, TILE_WALL, PLAYER_RADIUS, HP,
 } from '../shared/constants.js';
 import { DECOY_LINES, TOME_TEXT } from '../shared/lore.js';
 import { PROP_LABELS } from '../shared/propdefs.js';
-import { WIZARD_BY_ID } from '../shared/wizards.js';
+import { WIZARD_BY_ID, ULT } from '../shared/wizards.js';
 import { Bot } from './Bot.js';
 import { SpellSystem } from './SpellSystem.js';
 import { TrainingHusk } from './TrainingHusk.js';
@@ -49,6 +49,8 @@ export class Game {
     this.spells = new SpellSystem(this);
     this.husk = null; // debug Training Husk
     this.phaseBefore = null; // phase to restore on "Retry" after a game over
+    this.flood = null; // Abyssal Deluge: { until, slow }
+    this.dawn = null; // Dawn of the Sacred Order: { until }
     this.debugModeIdx = -1;
 
     this.players = new Map();
@@ -74,6 +76,10 @@ export class Game {
         channel: null,
         cooldowns: {},
         shieldUntil: 0,
+        hp: HP.MAX,
+        ult: 0, // Ultimate charge 0–100
+        buffs: {},
+        lastHurtAt: -Infinity,
         captured: false, // held in the Basement Ritual Cell
         capturing: 0, // game time at which the jumpscare ends and the teleport happens
         noiseAt: 0,
@@ -178,8 +184,15 @@ export class Game {
         sh: this.spells.isShielded(p),
         cap: p.captured,
         cg: !!p.capturing,
+        hp: Math.ceil(p.hp),
+        u: Math.floor(p.ult),
+        bf: this.spells.buffCodes(p),
       })),
       monsters: this.bodies().map((m) => m.snapshot()),
+      prj: this.spells.snapshotProjectiles(),
+      ents: this.spells.snapshotEntities(),
+      fl: this.flood && this.time < this.flood.until ? r2(this.flood.until - this.time) : 0,
+      dw: this.dawn && this.time < this.dawn.until ? r2(this.dawn.until - this.time) : 0,
     };
   }
 
@@ -198,6 +211,7 @@ export class Game {
     for (const bot of this.bots) if (this.players.has(bot.p.id)) bot.update(dt, this.time);
     for (const m of this.bodies()) m.update(dt);
     this.spells.update(dt);
+    this.updateVitals(dt);
     for (const p of this.players.values()) if (p.channel) this.updateChannel(p);
     this.updateCaptures();
     this.updateGate();
@@ -220,7 +234,10 @@ export class Game {
     const now = Date.now();
     const dt = Math.max(0.05, (now - p.lastStateAt) / 1000);
     const moved = Math.hypot(x - p.x, z - p.z);
-    if (moved > SPEED.sprint * 1.5 * dt + 0.75 || this.insideWall(p.floor, x, z)) {
+    // Speed buffs (Shadow Step, Phoenix Aura, Tailwind) raise the allowance.
+    const boost = 1 + (this.spells.hasBuff(p, 'shadow') ? 0.4 : 0) + (this.spells.hasBuff(p, 'phoenix') ? 0.3 : 0) +
+      (this.spells.hasBuff(p, 'tailwind') ? 0.45 : 0);
+    if (moved > SPEED.sprint * 1.5 * boost * dt + 0.75 || this.insideWall(p.floor, x, z)) {
       this.teleport(p, p.x, p.z, p.floor, p.yaw);
       return;
     }
@@ -261,8 +278,12 @@ export class Game {
     return p.floor === prop.floor && Math.hypot(p.x - prop.x, p.z - prop.z) <= INTERACT_RANGE + slack;
   }
 
-  onInteract(id, propId) {
+  onInteract(id, propId, entityId) {
     const p = this.players.get(id);
+    if (entityId !== undefined && entityId !== null) {
+      if (p && !p.capturing) this.spells.useEntity(p, entityId);
+      return;
+    }
     const prop = this.props[propId];
     if (!p || p.capturing || !prop?.interact || prop.floor !== p.floor) return;
     if (!this.inRange(p, prop, 0.75)) return this.whisper(p, 'You need to be closer.');
@@ -338,7 +359,7 @@ export class Game {
 
   completeInteraction(p, prop) {
     if (prop.interact === 'gate') {
-      this.openGate(p.name);
+      this.openGate(p.name, p);
       return;
     }
     if (prop.interact === 'tome' && !this.tomeReadBy) {
@@ -352,6 +373,7 @@ export class Game {
     if (heart && !this.destroyed.has(prop.id) && this.phase === PHASE.HEARTS) {
       this.destroyed.add(prop.id);
       this.propState[prop.id] = { destroyed: true };
+      for (const o of this.players.values()) this.addUlt(o, ULT.HEART);
       this.emitAll({
         type: 'heart',
         propId: prop.id,
@@ -371,11 +393,12 @@ export class Game {
     const p = this.players.get(id);
     if (!p || p.isBot || p.capturing) return;
     if (p.channel) this.cancelChannel(p);
-    const res = this.spells.cast(p, Number(d?.yaw), Number(d?.pitch));
-    const ability = WIZARD_BY_ID[p.wizardId]?.ability;
+    const slot = d?.slot === 'ult' ? 'ult' : Math.max(0, Math.min(3, Math.floor(Number(d?.slot) || 0)));
+    const res = this.spells.cast(p, Number(d?.yaw), Number(d?.pitch), slot);
+    const spell = this.spells.spellFor(p, slot);
     this.socketOf(p)?.emit('game:cooldown', res.ok
-      ? { ok: true, ability: ability.id, readyIn: res.cooldown, duration: res.cooldown }
-      : { ok: false, ability: ability?.id, readyIn: res.remaining ?? 0, reason: res.reason });
+      ? { ok: true, slot, ability: spell.id, readyIn: res.cooldown, duration: res.cooldown }
+      : { ok: false, slot, ability: spell?.id, readyIn: res.remaining ?? 0, reason: res.reason });
   }
 
   /** Debug: spawn the Training Husk ~4 units in front of the player, or remove it. */
@@ -450,6 +473,8 @@ export class Game {
       if (!p.capturing || this.time < p.capturing) continue;
       p.capturing = 0;
       p.captured = true;
+      p.hp = Math.max(p.hp, HP.CELL); // prisoners stabilise
+      p.buffs = {};
       this.closeGate();
       const held = this.prisoners().length - 1;
       const spot = this.map.cell.points[held % this.map.cell.points.length];
@@ -459,13 +484,14 @@ export class Game {
     }
   }
 
-  openGate(by) {
+  openGate(by, rescuer) {
     const gateId = this.map.ids.gate;
     this.propState[gateId] = { open: true };
     this.gateCloseAt = this.time + GATE_OPEN_TIME;
     this.emitAll({ type: 'gate', propId: gateId, open: true, by });
     const freed = this.prisoners();
     for (const p of freed) p.captured = false;
+    if (freed.length && rescuer && !rescuer.captured) this.addUlt(rescuer, ULT.RESCUE);
     if (freed.length) this.emitAll({ type: 'freed', ids: freed.map((p) => p.id), names: freed.map((p) => p.name), by });
   }
 
@@ -493,6 +519,8 @@ export class Game {
       p.captured = false;
       p.capturing = 0;
       p.shieldUntil = 0;
+      p.hp = HP.MAX;
+      p.buffs = {};
       const sp = this.map.spawn.points[i++ % this.map.spawn.points.length];
       this.teleport(p, sp.x, sp.z, this.map.spawn.floor, this.map.spawn.yaw);
     }
@@ -501,6 +529,76 @@ export class Game {
     if (this.phase === PHASE.TOME) this.monster.resume();
     else this.monster.hideFor(10);
     this.emitAll({ type: 'restart' });
+  }
+
+  // --- health & ultimate charge ------------------------------------------------------
+
+  addUlt(p, amount) {
+    if (!p) return;
+    p.ult = Math.min(ULT.MAX, (p.ult ?? 0) + amount);
+  }
+
+  /**
+   * A Monster attack lands on p. Resolution order: Devil Union (no effect,
+   * attacker recoils) → Void shield (blocked) → capture rule (HP ≤ 40, unless
+   * it's a splash) → Granite Skin → Sea Dragon's Cradle → HP; 0 HP = captured.
+   * @returns 'immune' | 'blocked' | 'captured' | 'hit' | 'none'
+   */
+  damagePlayer(p, amount, attacker, kind) {
+    if (!p || p.captured || p.capturing || this.phase === PHASE.GAMEOVER) return 'none';
+    if (this.spells.hasBuff(p, 'union')) {
+      attacker?.block?.();
+      this.emitAll({ type: 'player:immune', id: p.id, attacker: attacker?.id });
+      return 'immune';
+    }
+    if (this.spells.isShielded(p)) {
+      attacker?.block?.();
+      this.emitAll({ type: 'monster:blocked', id: attacker?.id, targetId: p.id });
+      return 'blocked';
+    }
+    // The heavy telegraphed lunge always drags you away; other hits do when you're at ≤ 40 HP.
+    if (kind === 'lunge') return this.capture(p, attacker) ? 'captured' : 'none';
+    const splash = kind === 'shockwave';
+    if (!splash && p.hp <= HP.CAPTURE_AT) return this.capture(p, attacker) ? 'captured' : 'none';
+    let dmg = amount;
+    if (this.spells.hasBuff(p, 'granite')) dmg *= 1 - WIZARD_BY_ID.sushantus.spells[3].reduction;
+    let absorbed = 0;
+    const cradle = p.buffs.cradle;
+    if (cradle && this.spells.hasBuff(p, 'cradle')) {
+      absorbed = Math.min(cradle.hp, dmg);
+      cradle.hp -= absorbed;
+      dmg -= absorbed;
+      if (cradle.hp <= 0) delete p.buffs.cradle;
+    }
+    p.hp = Math.max(0, p.hp - dmg);
+    p.lastHurtAt = this.time;
+    this.emitAll({ type: 'player:hit', id: p.id, amount: Math.round(dmg), absorbed: Math.round(absorbed), hp: Math.ceil(p.hp), kind });
+    if (p.hp <= 0) return this.capture(p, attacker) ? 'captured' : 'hit';
+    return 'hit';
+  }
+
+  updateVitals(dt) {
+    if (this.flood && this.time >= this.flood.until) {
+      this.flood = null;
+      this.emitAll({ type: 'flood:end' });
+    }
+    if (this.dawn && this.time >= this.dawn.until) {
+      this.dawn = null;
+      this.emitAll({ type: 'dawn:end' });
+    }
+    const awake = !!this.tomeReadBy;
+    for (const p of this.players.values()) {
+      if (p.captured || p.capturing) continue;
+      if (this.time - p.lastHurtAt > HP.REGEN_DELAY && p.hp < HP.REGEN_CAP) p.hp = Math.min(HP.REGEN_CAP, p.hp + HP.REGEN * dt);
+      if (awake) this.addUlt(p, ULT.PASSIVE * dt);
+      if (this.monster?.state === 'hunting' && this.monster.targetId === p.id) this.addUlt(p, ULT.CHASED * dt);
+    }
+  }
+
+  /** Debug U: fill your Ultimate. */
+  debugUlt(id) {
+    const p = this.players.get(id);
+    if (p) p.ult = ULT.MAX;
   }
 
   onPing(id) {
@@ -558,7 +656,8 @@ export class Game {
         m.hidden = false;
         m.setState('stalking');
         m.hunt(p, 'debug');
-        m.lungeReadyAt = 0;
+        m.attackReadyAt = 0;
+        m.forceLunge = true; // the heavy lunge: a guaranteed capture
         break;
       }
       case 'auto':

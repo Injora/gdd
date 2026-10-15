@@ -34,7 +34,7 @@ server.js                 HTTP + Socket.io bootstrap (exports createGameServer f
 server/
   LobbyManager.js         covens: create/join codes, wizard picks, bots, ready, start
   Game.js                 one running match: authoritative state, 20 Hz tick, interactions
-  SpellSystem.js          casts, cooldowns, targeting, projectiles, puddles, barricades, shields
+  SpellSystem.js          35-spell grimoire: casts, cooldowns, ult charge, projectiles, zones, entities, buffs
   MonsterBody.js          shared body + status effects for every hostile
   Monster.js              the Malphas Amalgam: dormant/haunt/stalk/hunt/search/retreat/guard AI
   TrainingHusk.js         debug dummy: patrol, shamble, telegraphed swipe, crumble/re-form
@@ -63,7 +63,8 @@ client/
   js/entities/WizardAvatar.js         remote teammate model + wand spotlight + cast recoil
   js/entities/MonsterAvatar.js        husk model, status panel, damage numbers, reveal overlay
   js/entities/AmalgamAvatar.js        the Amalgam: procedural model, 13 Hz stop-motion, door neck-snap
-  js/fx/SpellFX.js        all spell VFX, particles, pooled spell lights, hex shield shader
+  js/fx/SpellFX.js        original 7 spells' VFX, particles, pooled spell lights, hex shield shader
+  js/fx/GrimoireFX.js     21 new spells + 7 Ultimates, dragons, Tree of Life, flood, auras, monster attack/CC VFX
   js/fx/PostFX.js         composer: grain, vignette, chromatic aberration, warp, desat, red, fade
   js/audio/AudioEngine.js procedural Web Audio: drone, sub-bass, heartbeat, HRTF cues, shriek, SFX
   js/debug/DebugMap.js    top-down map (M), click-to-teleport in solo debug
@@ -71,6 +72,7 @@ test/
   mapgen.test.js          determinism + 60-seed validity/reachability
   spells.test.js          cooldowns ×7, every status, barricade collision/pathing, knockback clamp, shields, gate
   monster.test.js         AI states, haunting, noise, stare, capture → Cell, rescue, game over, bot rescue, debug
+  grimoire.test.js        35 spells, each mechanic, all Ultimates, ult charge, HP pipeline, Lumos, tougher Amalgam
   server.test.js          full lobby → tome → 6 hearts → convergence → stairs over sockets
 scripts/
   verify-browser.mjs      headless Chrome: 7 spells, haunting, capture, Cell, bot rescue, hunt, audio, FPS
@@ -105,22 +107,23 @@ scripts/
 | S→C | `lobby:state` | members, host, `startBlocker` reason |
 | S→C | `game:start` | `{ selfId, seed, map (public), players, phase, destroyed, propState, tome }` |
 | C→S | `p:state` | `{ tseq, x, z, yaw, pitch, cr, sp, li, mv }` @ 20 Hz |
-| C→S | `p:interact` | `{ propId }` |
+| C→S | `p:interact` | `{ propId }` or `{ entityId }` (eat from the Tree of Life) |
 | C→S | `p:cancel` | — (released E) |
-| C→S | `p:cast` | `{ yaw, pitch }` (origin is always the server's copy of the caster) |
+| C→S | `p:cast` | `{ yaw, pitch, slot: 0–3 \| 'ult' }` (origin is always the server's copy of the caster) |
 | C→S | `p:ping` | call for help (3s cooldown) |
 | C→S | `game:restart` (host) | `{ mode: 'phase' \| 'lobby' }` after a game over |
 | S→C | `game:end` | the game closed; back to the coven screen |
-| S→C | `game:cooldown` | `{ ok, ability, readyIn, duration?, reason? }`, reply to the caster |
+| S→C | `game:cooldown` | `{ ok, slot, ability, readyIn, duration?, reason? }`, reply to the caster (`reason`: cooldown / charge / no-target) |
 | C→S | `debug:teleport` | `{ x, z, floor, yaw }` |
 | C→S | `debug:husk` | spawn/remove the Training Husk ~4u ahead |
 | C→S | `debug:mode` | P: cycle Husk → Haunt → Stalk → Hunt → Capture test → Auto |
 | C→S | `debug:capture` | K: capture yourself; if held, break the lock |
+| C→S | `debug:ult` | U: fill your Ultimate charge |
 | C→S | `debug:wizard` | `{ wizardId }` hot-swap (the previous holder takes yours) |
-| S→C | `game:snap` | `{ t, phase, players: [{ id, x, z, f, yaw, pitch, cr, sp, li, mv, ch, sh, cap, cg }], monsters: [{ id, kind, x, z, f, yaw, hp, maxHp, st[], mv, act, dead, state?, hid?, tg? }] }` @ 20 Hz |
+| S→C | `game:snap` | `{ t, phase, players: [{ id, x, z, f, yaw, pitch, cr, sp, li (Lumos), mv, ch, sh, cap, cg, hp, u (ult %), bf[] (buffs) }], monsters: [{ id, kind, x, z, f, yaw, hp, maxHp, st[], mv, act, dead, state?, hid?, tg? }], prj: [{ id, k, f, x, z, vx, vz }], ents: [{ id, k, f, x, z, yaw, n?/m? }], fl (flood s left), dw (dawn s left) }` @ 20 Hz |
 | S→C | `game:channel` | `{ propId \| null, duration, done? }` |
 | S→C | `game:teleport` | `{ x, z, floor, yaw, tseq }` |
-| S→C | `game:event` | `whisper`, `journal`, `tome`, `heart`, `phase`, `left`, `roster`, `gate`, `cast`, `impact`, `barrier:end`, `monster:damage`, `monster:scream`, `husk:spawn/despawn/crumble/revive/hit/blocked/miss`, `monster:awaken/haunt/vanish/hunt/banished/blocked`, `capture`, `captured`, `freed`, `gameover`, `restart`, `ping`, `debug:mode` |
+| S→C | `game:event` | `whisper`, `journal`, `tome`, `heart`, `phase`, `left`, `roster`, `gate`, `cast`, `impact`, `barrier:end`, `monster:damage`, `monster:scream`, `husk:spawn/despawn/crumble/revive/hit/blocked/miss`, `monster:awaken/haunt/vanish/hunt/banished/blocked`, `capture`, `captured`, `freed`, `gameover`, `restart`, `ping`, `debug:mode`, `spell:hit`, `zone:trigger`, `entity:end`, `tree:eat`, `player:hit`, `player:immune`, `monster:attack`, `monster:phantoms`, `barrier:hit`, `flood:end`, `dawn:end` |
 
 `debug:*` commands are honoured only in covens created with **Solo test** or from a `?debug=1` page (`lobby.debug`).
 
@@ -142,6 +145,37 @@ SpellSystem.update(dt): projectiles (substepped, impact on monster/solid) → `i
 - **Barricades** go through `addBarrier`/`removeBarrier` in `shared/collision.js`. They add full-tile colliders *and* bump `floor.dyn[]`, which `isPassable` treats as blocked, so players, bots and monsters collide with them and A* routes around them. Clients apply the same barrier from the `cast` event, so their local collision matches the server's.
 - **Shields:** `p.shieldUntil` on each player, mirrored to clients as `sh` in snapshots, which drive the dome visuals.
 - **Bots** call the same `SpellSystem.cast()`. They engage a monster within 16u when their spell is nearly ready.
+
+### The grimoire (Step 4.5)
+
+- **Data:** each wizard in `shared/wizards.js` has `spells[4]` + `ultimate`, with a `bot` usage hint and an element `source`. `ability` aliases slot 1.
+- **Cast pipeline:** `SpellSystem.cast(p, yaw, pitch, slot)`.
+  - Handlers return `false` to refuse a targeted Ultimate with no target; nothing is spent.
+  - On success the cooldown is committed (or the charge spent), then `cast` is broadcast plus a 14u noise.
+  - `credit()` gives +8% ult charge once per cast that lands.
+- **Live state:**
+  - `projectiles`: optionally `homing`, which steers toward the monster or along its A* path around corners, and/or `pierce`.
+  - `zones`: puddle, burnline, debris, gravity, briars, riptide trap, patronus heal, null.
+  - `entities`: fire/wind dragons that path through corridors, the Tree with `fruits`.
+  - `scheduled`: multi-hit casts such as fists, blades and swords.
+  - `p.buffs`: shadow, phoenix, cradle (absorb hp), granite, tailwind, union.
+  - Game-wide `flood` / `dawn`.
+- **New `MonsterBody` statuses:** root, pin, lift, frozen, confuse (self-damage), pull, reach scale, calm, and `sweep()` for the wind dragon's carry. `canAct()` / `canMove()` gate the AI. Its stagger "death" is deferred while frozen or confused.
+- **Player HP:** `Game.damagePlayer(p, amount, attacker, kind)` resolves in this order:
+  1. Devil Union: no effect, and the attacker recoils.
+  2. Void shield: blocked.
+  3. Heavy lunge: captured.
+  4. ≤ 40 HP (unless it's a splash): captured.
+  5. Granite −60%.
+  6. Cradle absorbs.
+  7. HP; at 0, captured.
+
+  `updateVitals()` handles regeneration (to 60 after 8s), ult charge (passive and while chased), and flood/dawn expiry.
+- **Client:**
+  - **Visuals:** `GrimoireFX` renders casts from events, interpolates `prj` and `ents` from snapshots, and draws buff auras (wings, spheres, plates, embers), monster CC (chains, golden coil, briars, spear), attack VFX and phantoms.
+  - **Controller buffs:** the controller takes `speedMul`, `noStamina` and `ignoreProps`.
+  - **Server speed check:** validation widens with active speed buffs.
+  - **Lumos:** retunes the single shadowed wand spotlight (angle 0.44→0.85, range 28, intensity ×2.4), so no lights are added.
 
 ### The Amalgam (Step 4)
 
@@ -213,7 +247,7 @@ SpellSystem.update(dt): projectiles (substepped, impact on monster/solid) → `i
 - Per floor: one `InstancedMesh` each for walls (only wall tiles next to floor), room floors, corridor carpet, ceilings, door headers and posts. Roughly 20 draw calls for the level before props.
 - Props are small primitive groups (built in `props.js`) with shared materials. Curio props get a `userData.fx(t, ctx)` animator. The tell is only shown once `revealHearts()` has been called with that prop's id.
 - **Post-processing:** RenderPass → OutputPass (tone mapping + sRGB) → one horror ShaderPass. With vsync off in headless Chrome the hunt stays above ~330 fps on the dev machine.
-- **Light budget is fixed:** 1 hemisphere, 1 local wand spot (shadowed) + 1 fill point, 3 pooled teammate spots, up to 3 static candle points, 1 burst flash, 3 pooled spell lights (fireball, scorch, Sacred flash). `SpellFX.prewarm()` compiles every spell material at load, so a spell's first cast doesn't hitch. Lights are never added or removed during play (avoiding shader recompiles), and inactive ones sit at intensity 0. Floors not in view are hidden.
+- **Light budget is fixed:** 1 hemisphere, 1 local wand spot (shadowed) + 1 fill point, 3 pooled teammate spots, up to 3 static candle points, 1 burst flash, 5 pooled spell lights (dragons, the Tree, auras, beacons and more) (fireball, scorch, Sacred flash). `SpellFX.prewarm()` compiles every spell material at load, so a spell's first cast doesn't hitch. Lights are never added or removed during play (avoiding shader recompiles), and inactive ones sit at intensity 0. Floors not in view are hidden.
 - Tone mapping is ACES Filmic, fog is black `FogExp2(0.075)`. Measured at about 120 fps in Chrome on the dev machine (DPR capped at 1.75). With vsync off in headless Chrome (Apple M4, 1280×720), the frame rate stays between about 250 and 670 fps while spell effects play (`npm run verify:browser`).
 
 ---

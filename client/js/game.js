@@ -4,14 +4,15 @@
 import * as THREE from 'three';
 import { createCollisionWorld, addBarrier, removeBarrier, lineOfSight } from '/shared/collision.js';
 import { roomAt } from '/shared/mapgen.js';
-import { PHASE, INTERACT_RANGE, NET_SEND_RATE, FLOOR_Y, STAMINA } from '/shared/constants.js';
-import { WIZARDS, WIZARD_BY_ID } from '/shared/wizards.js';
+import { PHASE, INTERACT_RANGE, NET_SEND_RATE, FLOOR_Y, STAMINA, HP, LUMOS } from '/shared/constants.js';
+import { WIZARDS, WIZARD_BY_ID, ABILITY_BY_ID } from '/shared/wizards.js';
 import { PROP_LABELS } from '/shared/propdefs.js';
 import { buildMansion } from './world/MansionBuilder.js';
 import { FirstPersonController } from './player/FirstPersonController.js';
 import { WizardAvatar } from './entities/WizardAvatar.js';
 import { MonsterAvatar } from './entities/MonsterAvatar.js';
 import { SpellFX } from './fx/SpellFX.js';
+import { GrimoireFX } from './fx/GrimoireFX.js';
 import { PostFX } from './fx/PostFX.js';
 import { AudioEngine } from './audio/AudioEngine.js';
 import { AmalgamAvatar } from './entities/AmalgamAvatar.js';
@@ -19,6 +20,9 @@ import { HUD } from './ui/hud.js';
 import { DebugMap } from './debug/DebugMap.js';
 
 const REMOTE_LIGHTS = 3;
+const LUMOS_COLOR = new THREE.Color(0xfff3dc);
+const NIGHT_SKY = new THREE.Color(0x1a1e33), NIGHT_GROUND = new THREE.Color(0x070404);
+const DAWN_SKY = new THREE.Color(0xffe2a8), DAWN_GROUND = new THREE.Color(0x6a4a20);
 const WAND_INTENSITY = 70;
 const $ = (id) => document.getElementById(id);
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
@@ -47,14 +51,20 @@ export class GameClient {
     this.avatars = new Map();
     this.channel = null;
     this.target = null;
-    this.lightOn = true;
+    this.lumos = false; // F: Lumos (bright torch) / Nox (plain wand glow)
     this.tseq = 0;
     this.sendAt = 0;
     this.shake = 0;
     this.time = 0;
     this.activeFloor = -1;
     this.monsters = new Map();
-    this.cooldown = { readyAt: 0, duration: 1 };
+    this.slotCd = [0, 1, 2, 3].map(() => ({ readyAt: 0, duration: 1 }));
+    this.selected = 0;
+    this.ultCharge = 0;
+    this.hp = HP.MAX;
+    this.buffs = [];
+    this.ents = [];
+    this.dawnK = 0;
     this.recoil = 0;
     this.audio = new AudioEngine();
     this.terror = 0; // 0..1: staring at the Amalgam up close
@@ -76,6 +86,12 @@ export class GameClient {
       screen: (kind, strength) => this.hud.screen(kind, strength),
       shake: (amount) => { this.shake = Math.max(this.shake, amount); },
     });
+    this.grimoire = new GrimoireFX(this.fx, {
+      localId: this.selfId,
+      screen: (kind, strength) => this.hud.screen(kind, strength),
+      shake: (amount) => { this.shake = Math.max(this.shake, amount); },
+      avatarOf: (id) => this.avatars.get(id),
+    });
     this.fx.prewarm(this.renderer, this.camera);
     this.post = new PostFX(this.renderer, this.scene, this.camera);
     this.renderer.info.autoReset = false; // the composer renders several passes per frame
@@ -93,8 +109,9 @@ export class GameClient {
     this.hud = new HUD();
     this.hud.show();
     this.hud.setPhase(this.phase);
-    this.hud.light(true);
-    this.hud.setSpell(this.wizard);
+    this.hud.lumos(false);
+    this.hud.setWizard(this.wizard);
+    this.hud.hp(HP.MAX);
     if (init.tome) this.applyTome(init.tome, true);
     for (const id of this.destroyed) {
       this.mansion.destroyHeart(id, true);
@@ -146,7 +163,8 @@ export class GameClient {
     scene.add(this.camera);
 
     // Barely-there moonlight so silhouettes exist outside the wand cone.
-    scene.add(new THREE.HemisphereLight(0x1a1e33, 0x070404, 0.35));
+    this.hemi = new THREE.HemisphereLight(0x1a1e33, 0x070404, 0.35);
+    scene.add(this.hemi);
 
     this.mansion = buildMansion(this.map);
     scene.add(this.mansion.group);
@@ -240,6 +258,18 @@ export class GameClient {
     }
     for (const id of [...this.avatars.keys()]) if (!seen.has(id)) this.removeAvatar(id);
 
+    const me = s.players.find((p) => p.id === this.selfId);
+    if (me) {
+      this.hp = me.hp ?? this.hp;
+      this.ultCharge = me.u ?? 0;
+      this.buffs = me.bf ?? [];
+    }
+    this.grimoire.syncProjectiles(s.prj ?? []);
+    this.ents = s.ents ?? [];
+    this.grimoire.syncEntities(this.ents);
+    this.flooded = (s.fl ?? 0) > 0;
+    this.dawnActive = (s.dw ?? 0) > 0;
+
     const seenMonsters = new Set();
     for (const m of s.monsters ?? []) {
       seenMonsters.add(m.id);
@@ -271,26 +301,44 @@ export class GameClient {
 
   onCooldown(d) {
     const now = performance.now();
-    if (d.ok) {
-      this.cooldown = { readyAt: now + d.readyIn * 1000, duration: d.duration };
-    } else {
-      if (d.reason === 'cooldown') this.cooldown.readyAt = now + d.readyIn * 1000;
-      this.hud.denied();
+    if (d.slot === 'ult') {
+      if (!d.ok) {
+        this.hud.denied('ult');
+        if (d.reason === 'no-target') this.hud.whisper('Your Ultimate finds nothing to strike.');
+      }
+      return;
+    }
+    const cd = this.slotCd[d.slot ?? 0];
+    if (d.ok) Object.assign(cd, { readyAt: now + d.readyIn * 1000, duration: d.duration });
+    else {
+      if (d.reason === 'cooldown') cd.readyAt = now + d.readyIn * 1000;
+      this.hud.denied(d.slot);
     }
   }
 
-  cast() {
+  /** Cast hotbar slot 0–3, or 'ult'. */
+  cast(slot = this.selected) {
     if (this.hud.journalOpen || this.jumpscare || this.gameIsOver) return;
     const now = performance.now();
-    if (now < this.cooldown.readyAt) {
-      this.hud.denied();
+    const c = this.controller;
+    if (slot === 'ult') {
+      if (this.ultCharge < 100) return this.hud.denied('ult');
+      this.net.emit('p:cast', { yaw: c.yaw, pitch: c.pitch, slot: 'ult' });
+      this.recoil = 1.4;
       return;
     }
-    const c = this.controller;
-    this.net.emit('p:cast', { yaw: c.yaw, pitch: c.pitch });
-    // Optimistic: the server's game:cooldown reply re-syncs the dial.
-    this.cooldown = { readyAt: now + this.wizard.ability.cooldown * 1000, duration: this.wizard.ability.cooldown };
+    const cd = this.slotCd[slot];
+    if (now < cd.readyAt) return this.hud.denied(slot);
+    this.net.emit('p:cast', { yaw: c.yaw, pitch: c.pitch, slot });
+    // Optimistic: the server's game:cooldown reply re-syncs the slot.
+    const spell = this.wizard.spells[slot];
+    Object.assign(cd, { readyAt: now + spell.cooldown * 1000, duration: spell.cooldown });
     this.recoil = 1;
+  }
+
+  select(slot) {
+    this.selected = slot;
+    this.hud.select(slot);
   }
 
   setRoster(players) {
@@ -303,8 +351,8 @@ export class GameClient {
         const tint = new THREE.Color(this.wizard.lightTint);
         this.wandLight.color.copy(tint);
         this.fillLight.color.copy(tint);
-        this.hud.setSpell(this.wizard);
-        this.cooldown = { readyAt: 0, duration: 1 };
+        this.hud.setWizard(this.wizard);
+        for (const cd of this.slotCd) Object.assign(cd, { readyAt: 0, duration: 1 });
         this.hud.whisper(`You now walk as ${this.wizard.name}, ${this.wizard.title}.`);
       } else {
         this.removeAvatar(m.id); // re-created with the new wizard on the next snapshot
@@ -365,12 +413,69 @@ export class GameClient {
         if (e.caster !== this.selfId) this.avatars.get(e.caster)?.castPulse();
         if (e.wall) addBarrier(this.world, e.floor, e.id, e.wall.tiles);
         this.fx.onCast(e, this.localPos());
+        this.grimoire.onCast(e, this.localPos());
         this.audio.spell(e.ability, wpos(e.floor, e.x, e.z));
+        this.audio.grimoire(e.ability, wpos(e.floor, e.x, e.z));
+        if (e.ult) {
+          const who = e.caster === this.selfId ? 'You unleash' : `${this.roster.find((m) => m.id === e.caster)?.name ?? 'A wizard'} unleashes`;
+          this.hud.banner(ABILITY_BY_ID[e.ability].name.toUpperCase(), `${who} an Ultimate.`, 3200);
+        }
         if (e.ability === 'psychic_torment' && e.caster === this.selfId) this.chromaPulse = 1;
         break;
       case 'impact':
-        this.fx.onImpact(e);
-        this.audio.fireImpact(wpos(e.floor, e.x, e.z));
+        if (e.ability === 'ignis_blast') {
+          this.fx.onImpact(e);
+          this.audio.fireImpact(wpos(e.floor, e.x, e.z));
+        } else {
+          this.grimoire.onImpact(e);
+          this.audio.boom(wpos(e.floor, e.x, e.z), e.kind === 'dragon' ? 50 : 110, e.kind === 'dragon' ? 1.4 : 0.4, e.kind === 'dragon' ? 1.4 : 0.6);
+        }
+        break;
+      case 'spell:hit':
+        this.grimoire.explosion(e.floor, e.x, e.z, 0.8, ABILITY_BY_ID[e.ability]?.source === 'earth' ? new THREE.Color(0x7fd36a) : new THREE.Color(0xff6a10));
+        break;
+      case 'zone:trigger':
+        this.grimoire.onZoneTrigger(e);
+        this.audio.whoosh(wpos(e.floor, e.x, e.z), 200, 1800, 1.2, { type: 'lowpass', gain: 1 });
+        break;
+      case 'entity:end':
+        this.grimoire.onEntityEnd(e);
+        break;
+      case 'tree:eat':
+        this.grimoire.onTreeEat(e);
+        if (e.by === this.selfId) {
+          this.terror = 0;
+          this.audio.fruit();
+          this.hud.whisper('The fruit is warm and sweet. Your fear drains away.');
+        }
+        break;
+      case 'player:hit':
+        if (e.id === this.selfId) {
+          this.hp = e.hp;
+          this.hud.screen('hurt', Math.min(1, 0.4 + e.amount / 40));
+          this.shake = Math.max(this.shake, 0.3 + e.amount / 60);
+          this.audio.hurt(e.amount);
+          if (e.absorbed) this.hud.whisper(`The water swallows the blow (${e.absorbed} absorbed).`, 1800);
+        }
+        break;
+      case 'player:immune': {
+        const p = this.positions.get(e.id);
+        if (p) this.fx.glow.burst(40, p.x, FLOOR_Y[p.f] + 1.2, p.z, { speed: 4, life: 0.6, color: new THREE.Color(0xc0102a), drag: 2.5 });
+        break;
+      }
+      case 'monster:attack': {
+        const av = this.monsters.get(e.id);
+        const tp = e.targetId ? (e.targetId === this.selfId ? { x: this.controller.x, z: this.controller.z } : this.positions.get(e.targetId)) : null;
+        this.grimoire.monsterAttack(e, av, tp);
+        if (e.stage === 'strike') this.audio.monsterAttack(e.kind, wpos(e.floor, e.x, e.z, 1.5));
+        break;
+      }
+      case 'monster:phantoms':
+        this.grimoire.phantoms(e, (spot, floor) => this.makePhantom(spot, floor));
+        if (e.floor === this.controller.floor) this.audio.whisper(Math.random() < 0.5 ? -1 : 1);
+        break;
+      case 'barrier:hit':
+        this.shake = Math.max(this.shake, 0.2);
         break;
       case 'barrier:end':
         removeBarrier(this.world, e.id);
@@ -526,12 +631,20 @@ export class GameClient {
       switch (e.code) {
         case 'KeyE':
           if (this.target && !this.hud.journalOpen) {
-            this.net.emit('p:interact', { propId: this.target.id });
+            if (this.target.entity) this.net.emit('p:interact', { entityId: this.target.id });
+            else this.net.emit('p:interact', { propId: this.target.id });
           }
           break;
         case 'KeyF':
-          this.lightOn = !this.lightOn;
-          this.hud.light(this.lightOn);
+          this.lumos = !this.lumos;
+          this.hud.lumos(this.lumos);
+          this.audio.lumos(this.lumos);
+          break;
+        case 'KeyR':
+          this.cast('ult');
+          break;
+        case 'KeyU':
+          if (this.debug) this.net.emit('debug:ult');
           break;
         case 'KeyJ':
           this.openJournal(!this.hud.journalOpen);
@@ -543,7 +656,7 @@ export class GameClient {
           if (this.debug) this.debugMap.toggle();
           break;
         case 'KeyQ':
-          this.cast();
+          this.cast(this.selected);
           break;
         case 'KeyP':
           if (this.debug) this.net.emit('debug:mode');
@@ -555,13 +668,18 @@ export class GameClient {
           this.net.emit('p:ping');
           break;
         default:
-          if (this.debug && /^Digit[1-7]$/.test(e.code)) {
-            this.net.emit('debug:wizard', { wizardId: WIZARDS[Number(e.code.slice(5)) - 1].id });
+          if (/^Digit[1-7]$/.test(e.code) && e.shiftKey) {
+            // Debug: Shift+1–7 hot-swaps your wizard.
+            if (this.debug) this.net.emit('debug:wizard', { wizardId: WIZARDS[Number(e.code.slice(5)) - 1].id });
+          } else if (/^Digit[1-4]$/.test(e.code)) {
+            const slot = Number(e.code.slice(5)) - 1;
+            this.select(slot);
+            this.cast(slot);
           }
       }
     };
     this._onMouseDown = (e) => {
-      if (e.button === 0 && this.controller.locked) this.cast();
+      if (e.button === 0 && this.controller.locked) this.cast(this.selected);
     };
     this._onKeyUp = (e) => {
       if (e.code === 'KeyE' && this.channel) this.net.emit('p:cancel');
@@ -629,10 +747,19 @@ export class GameClient {
       const score = d * (2 - dot);
       if (!best || score < best.score) best = { p, score };
     }
+    // The Tree of Life
+    for (const e of this.ents) {
+      if (e.k !== 'tree' || e.f !== c.floor || !(e.n > 0)) continue;
+      const d = Math.hypot(e.x - c.x, e.z - c.z);
+      if (d > 3.1) continue;
+      const score = d;
+      if (!best || score < best.score) best = { p: { entity: true, id: e.id, kind: 'tree', n: e.n }, score };
+    }
     return best?.p ?? null;
   }
 
   promptFor(p) {
+    if (p.entity) return [`Eat a golden fruit (${p.n} left)`, false];
     switch (p.interact) {
       case 'tome': return this.tomeRead ? ['Open your journal', false] : ['Read the Forbidden Tome', true];
       case 'curio':
@@ -689,11 +816,16 @@ export class GameClient {
       }
       if (now < this.lightCutUntil) wandK = 0.02;
     }
-    this.mansion.setDread(dread);
-    this.wandLight.intensity = this.lightOn ? WAND_INTENSITY * wandK * channelBoost : 0;
-    this.fillLight.intensity = this.lightOn ? 1.4 * wandK : 0.25;
+    // Lumos warns you: within 12u of a hunting Amalgam it strobes violently.
+    if (this.lumos && amNear && am.snap.state === 'hunting' && amDist < 12) wandK *= Math.random() < 0.35 ? 0.05 : 0.6 + Math.random() * 0.6;
+    const nulled = this.grimoire.inNullZone(c.floor, c.x, c.z);
+    if (nulled) wandK = flicker; // Null Zone: the lights hold steady
+    this.mansion.setDread(nulled || this.dawnK > 0.5 ? 0 : dread);
+    this.applyLumos(wandK, channelBoost);
     if (this.jumpscare) this.fillLight.intensity = 5; // its face, lit from the front
-    this.wandTipMat.color.set(this.wizard.color).multiplyScalar(this.lightOn ? 1 : 0.2);
+    this.wandTipMat.color.set(this.wizard.color).multiplyScalar(this.lumos ? 1.6 : 1);
+    this.applyBuffs(c, dt);
+    this.applyEnvironment(dt);
     // Cast recoil: the wand kicks up and back, the tip and light flare in the element colour.
     this.recoil = Math.max(0, this.recoil - dt * 4);
     const r = this.recoil * this.recoil;
@@ -709,7 +841,8 @@ export class GameClient {
     for (const av of this.avatars.values()) av.update(dt, this.time, this.camera, c.floor);
     for (const m of this.monsters.values()) m.update(dt, this.time, c.floor);
     am?.setHeartsLit(6 - this.destroyed.size);
-    this.updateHorror(dt, now, c, am, amNear, amDist, dread);
+    this.updateHorror(dt, now, c, am, amNear, amDist, nulled || this.dawnK > 0.5 ? 0 : dread, nulled);
+    for (const m of this.monsters.values()) this.grimoire.monsterStatus(m, m.snap.st);
     this.updatePings(dt);
 
     // Void shields: one dome per shielded wizard, following them.
@@ -718,9 +851,14 @@ export class GameClient {
       const av = this.avatars.get(id);
       const x = self ? c.x : av?.x ?? p.x, z = self ? c.z : av?.z ?? p.z, f = self ? c.floor : p.f;
       this.fx.shield(id, !!p.sh && f === c.floor, x, FLOOR_Y[f], z);
+      this.grimoire.aura(id, f === c.floor ? p.bf ?? [] : [], x, FLOOR_Y[f], z, self, dt);
     }
     this.fx.update(dt, this.time);
-    this.hud.cooldown(Math.max(0, (this.cooldown.readyAt - now) / 1000), this.cooldown.duration);
+    this.grimoire.update(dt, this.time, c.floor, this.localPos());
+    this.hud.cooldowns(this.slotCd.map((cd) => ({ remaining: Math.max(0, (cd.readyAt - now) / 1000), duration: cd.duration })));
+    this.hud.ult(this.ultCharge);
+    this.hud.hp(this.hp);
+    this.hud.buffs(this.buffs);
 
     // Interaction
     this.target = this.hud.journalOpen ? null : this.findTarget();
@@ -747,7 +885,7 @@ export class GameClient {
         pitch: Math.round(c.pitch * 1000) / 1000,
         cr: c.crouch,
         sp: c.sprinting && c.moving,
-        li: this.lightOn,
+        li: this.lumos,
         mv: c.moving,
       });
     }
@@ -774,15 +912,15 @@ export class GameClient {
 
   // ---- horror layer --------------------------------------------------------------
 
-  updateHorror(dt, now, c, am, amNear, amDist, dread) {
-    // Terror: staring at it up close warps the view.
+  updateHorror(dt, now, c, am, amNear, amDist, dread, nulled = false) {
+    // Terror: staring at it up close warps the view (a Null Zone shields you).
     let staring = false;
     if (amNear && amDist < 12) {
       const fx = -Math.sin(c.yaw), fz = -Math.cos(c.yaw);
       const dx = am.x - c.x, dz = am.z - c.z;
       staring = (dx * fx + dz * fz) / Math.max(amDist, 1e-3) > 0.9 && lineOfSight(this.map, c.floor, c.x, c.z, am.x, am.z);
     }
-    this.terror = clamp01(this.terror + (staring ? dt * 0.45 : -dt * 0.3));
+    this.terror = nulled ? 0 : clamp01(this.terror + (staring ? dt * 0.45 : -dt * 0.3));
     this.chromaPulse = Math.max(0, this.chromaPulse - dt * 1.6);
     this.redPulse = Math.max(0, this.redPulse - dt * 0.7);
     const lunging = amNear && amDist < 6 && (am.snap.act === 'windup' || am.snap.act === 'lunge');
@@ -827,6 +965,56 @@ export class GameClient {
       const gate = this.map.props[this.map.ids.gate];
       this.audio.lockScrape(wpos(gate.floor, gate.x, gate.z));
     }
+  }
+
+  /** Nox: the plain narrow wand glow. Lumos: a bright, wide crystalline torch. */
+  applyLumos(wandK, channelBoost) {
+    const L = this.wandLight;
+    const on = this.lumos;
+    const k = Math.min(1, this.lumosK = (this.lumosK ?? 0) + ((on ? 1 : 0) - (this.lumosK ?? 0)) * 0.2);
+    L.angle = 0.44 + (LUMOS.angle - 0.44) * k;
+    L.distance = 30 - (30 - LUMOS.range) * k;
+    L.penumbra = 0.6 + 0.2 * k;
+    L.color.set(this.wizard.lightTint).lerp(LUMOS_COLOR, k);
+    L.intensity = (WAND_INTENSITY + (170 - WAND_INTENSITY) * k) * wandK * channelBoost;
+    this.fillLight.intensity = (1.4 + 3 * k) * wandK;
+    this.fillLight.distance = 5 + 5 * k;
+  }
+
+  /** Spell buffs on yourself: speed, phasing, tireless sprinting. */
+  applyBuffs(c) {
+    const b = this.buffs;
+    c.speedMul = 1 + (b.includes('shadow') ? 0.4 : 0) + (b.includes('tailwind') ? 0.45 : 0) + (b.includes('phoenix') && c.sprinting ? 0.3 : 0);
+    c.ignoreProps = b.includes('shadow');
+    c.noStamina = b.includes('tailwind');
+  }
+
+  /** Dawn of the Sacred Order (golden cathedral light) and the Abyssal Deluge. */
+  applyEnvironment(dt) {
+    this.dawnK += ((this.dawnActive ? 1 : 0) - this.dawnK) * Math.min(1, dt * 1.2);
+    const k = this.dawnK;
+    this.hemi.intensity = 0.35 + k * 2.6;
+    this.hemi.color.copy(NIGHT_SKY).lerp(DAWN_SKY, k);
+    this.hemi.groundColor.copy(NIGHT_GROUND).lerp(DAWN_GROUND, k);
+    this.scene.fog.density = 0.075 - k * 0.063;
+    this.renderer.toneMappingExposure = 1.15 + k * 0.2;
+    if (this.flooded !== this._wasFlooded) {
+      this._wasFlooded = this.flooded;
+      this.grimoire.setFlood(this.flooded, this.map);
+      this.audio.setFlooded(this.flooded);
+    }
+  }
+
+  makePhantom(spot, floor) {
+    const av = new AmalgamAvatar({ id: 'phantom', x: spot.x, z: spot.z, f: floor, yaw: spot.yaw, st: [], state: 'stalking', act: 'peek', mv: false, hid: false, hp: 0, maxHp: 0 },
+      { map: this.map, fx: this.fx, debug: false });
+    av.ghostify();
+    this.scene.add(av.group);
+    return {
+      setOpacity: (v) => av.setOpacity(v),
+      update: (dt, t) => av.update(dt, t, this.controller.floor),
+      dispose: () => { this.scene.remove(av.group); av.dispose(); },
+    };
   }
 
   startJumpscare(e) {

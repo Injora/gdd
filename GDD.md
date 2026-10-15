@@ -1,5 +1,5 @@
 # SIX HEARTS: THE FORBIDDEN CONVERGENCE
-### Game Design Document · v0.4 (prototype)
+### Game Design Document · v0.5 (prototype)
 
 > *Seven wizards. One mansion. Six hearts that must stop beating.*
 
@@ -30,7 +30,7 @@ The Monster never kills. It **takes** wizards to a cell in the basement. The hor
 | | |
 |---|---|
 | Players | 3–4 (lobby of up to 4; **bots** fill seats for testing; host may enable **solo debug** to start with fewer than 3) |
-| Session length | 25–40 minutes |
+| Session length | Open-ended: no timer. It ends on victory (the Portal sealed) or when everyone is held. Typically 30–60 minutes. |
 | Platform | Desktop browser (Chrome/Edge/Firefox/Safari), keyboard + mouse |
 | Camera | First person, pointer-locked |
 
@@ -83,25 +83,58 @@ The Monster never kills. It **takes** wizards to a cell in the basement. The hor
 
 ---
 
-## 4. The Seven Wizards
+## 4. The Seven Wizards: a 35-spell Grimoire
 
-| # | Wizard | Element | Title | Ability | Effect | CD |
-|---|---|---|---|---|---|---|
-| 1 | **Injorath Blackthorn** | Black | Heir of the Forbidden Arts | **Psychic Torment** | 0 dmg. Violet/crimson distortion wave (22u, aim cone). Monster is **Tormented 2s** (chase interrupted, writhes in place), **shrieks** (scream hook), and is **visible through walls for 6s** to everyone (depth-test-free silhouette + wireframe). Caster gets a chromatic screen-edge pulse. | 16s |
-| 2 | **Parthius Pyreborne** | Fire | Infernal Prodigy | **Ignis Blast** | Projectile (18 u/s, 30u) carrying a moving light through dark corridors. **4 dmg**, then **burning: 1 dmg/s for 3s and −15% speed**. Leaves a **glowing scorch mark (with light) for 4s**. Explodes on walls. | 5s |
-| 3 | **Himandriel Tidecrest** | Water | Lord of the Tidal Arts | **Tidal Surge** | Translucent wave across the floor (10u cone). **3 dmg**, **−40% speed for 4s**. Leaves a **slick puddle (r 3) for 4s**: anything inside is slowed 40% and **turns 50% slower**. | 9s |
-| 4 | **Sushantus Thornwick** | Earth | Warden of the Ancient Grounds | **Terra Spike** | A line of erupting stone spikes, **3 dmg** within 6u. Raises a **3-tile jagged barricade 2 tiles ahead for 5s**. It blocks players, bots and the Monster, and updates pathfinding, so it can seal a corridor or doorway. It never closes on anyone standing in its tiles. | 12s |
-| 5 | **Kartavian Windermere** | Wind | Tempest Sovereign | **Gale Force** | Swirling wind-tunnel ribbons (9u cone). 0 dmg, **knockback 5u** straight away from the caster over 0.3s, plus a 0.4s stagger. The push goes through collision, so **walls and props stop it** and it can never leave the map. | 8s |
-| 6 | **Soham Everlight** | White | Luminary of the Sacred Order | **Sacred Bind** | Golden beam and blinding burst (12u). **Stun + blind 3.5s** (target lost, golden sigil rings orbit it). **Passive:** breaks the Ritual Cell lock **2× faster** (1.5s instead of 3s). | 20s |
-| 7 | **Himanshu Nullgrave** | Anti-magic | The Unspellable | **Aegis of the Void** | Iridescent black-and-silver hexagonal dome on the caster and **every ally within 3u** for **3s**. Monster attacks and lunges against them **fail**: the attacker rebounds (Blocked plus a stagger). | 18s |
+Every wizard has **four spells on the hotbar (1–4)** and an **Ultimate (R)**. The numbers live in `shared/wizards.js` and are the single source of truth for the server, the bots and the HUD.
 
-Numbers live in `shared/wizards.js` and are the single source of truth for both the server and the HUD.
+**Casting:**
+- **1–4** casts that slot and selects it; **Left Mouse / Q** casts the selected slot.
+- The server checks cooldown, range, aim cone and line of sight, then broadcasts the cast so every client renders it.
+- Projectiles that home in or curve around corners move on the server, and clients follow their snapshot positions.
+- **R** fires the Ultimate at **100% charge**. A targeted Ultimate with nothing to hit is refused, and the charge is not spent.
 
-**Casting:** Left Mouse or Q fires your wizard's spell toward where you're looking. The server checks the cooldown, range, aim cone and line of sight, then broadcasts the cast so every client renders the effect. Your wand kicks back and flares in your element's colour. The HUD dial counts down your cooldown and shows your ability, title and element.
+| Wizard | 1 | 2 | 3 | 4 | R · Ultimate |
+|---|---|---|---|---|---|
+| **Injorath Blackthorn** · Black · *Heir of the Forbidden Arts* | **Psychic Torment**: chase broken 2s, shriek, visible through walls 6s (16s) | **Dimension Slash**: void crescent; 5 dmg, heavy stagger, **reach −40% for 6s** (7s) | **Black Hole Singularity**: gravity well drags the Monster in for 3s, 1.5 dmg/s (14s) | **Shadow Step**: 2.5s of smoke: +40% speed, **invisible to the Monster**, through furniture (16s) | **Abyssal Mind Fracture**: chains + crimson sigils lock its mind **10s**. It can't move and tears at itself (4 dmg/s), shrieking. It can't flee until released. |
+| **Parthius Pyreborne** · Fire · *Infernal Prodigy* | **Ignis Blast**: fireball, 4 dmg + burn, scorch light 4s (5s) | **Calidus Brachium**: 3 flame fists, 2 dmg + knockback each (8s) | **Sol Linea**: white-hot beam (6 dmg) + **burning floor line 5s** (11s) | **Phoenix Cinder Aura**: 6s ember cloak: +30% sprint, bright light, burns on contact (18s) | **Fiendfyre Great Dragon**: an articulated fire serpent (head, jaws, wings, ember body) hunts the Monster through the corridors and detonates: **35 dmg** + burn. |
+| **Himandriel Tidecrest** · Water · *Lord of the Tidal Arts* | **Tidal Surge**: wave, 3 dmg, slow 40% 4s, slick puddle (9s) | **Valkyrie Water Spear**: piercing spiral lance, 5 dmg, **pinned 1.5s** (9s) | **Sea Dragon's Cradle**: water spheres on allies within 4u **absorb 40 dmg** for 10s (20s) | **Riptide Vortex**: rune trap (30s). Stepped on, a geyser lifts it 2.5s (15s) | **Abyssal Deluge**: animated water floods **the whole mansion for 25s**. The Monster moves at **35%** everywhere. |
+| **Sushantus Thornwick** · Earth · *Warden of the Ancient Grounds* | **Terra Spike**: spikes 3 dmg + 3-tile barricade 5s (12s) | **Devil's Snare Briars**: thorned vines, **rooted 2.5s** (12s) | **Golem Boulder Toss**: 6 dmg, shatters into a **slowing debris field** (10s) | **Granite Skin**: allies within 4u take **−60% damage** for 6s (18s) | **Yggdrasil, Tree of Life**: a glowing tree grows from the floor with **one golden fruit per wizard**. **E** eats one: **+60 HP** and all terror cleared. |
+| **Kartavian Windermere** · Wind · *Tempest Sovereign* | **Gale Force**: knockback 5u (8s) | **Crescent Kamaitachi**: 3 wind blades that **home in, even around corners** (7s) | **Zephyr Tailwind**: allies within 5u +45% speed, tireless sprint, 6s (16s) | **Vacuum Tempest**: imploding vortex, **lifted 1.5s** (12s) | **Sylph's Great Wind Dragon**: a tornado serpent seizes the Monster and **sweeps it to the farthest room on the floor** (2s stagger on landing). |
+| **Soham Everlight** · White · *Luminary of the Sacred Order* | **Sacred Bind**: stun + blind 3.5s. Passive: 2× lock breaking (20s) | **Arrows of Judgment**: 5 homing swords of light (9s) | **Patronus Beacon**: a radiant spirit stag for 10s, **heals 4 HP/s** within 6u (22s) | **Flash Step**: blink 6u; the afterimage blinds 1.2s (10s) | **Dawn of the Sacred Order**: golden cathedral light floods the mansion (fog lifts) and the Monster is **frozen in golden chains for 30s**. |
+| **Himanshu Nullgrave** · Anti-magic · *The Unspellable* | **Aegis of the Void**: attacks fail vs allies within 3u for 3s (18s) | **Black Slash**: cancels its windup, **strips enrage 8s** (9s) | **Null Zone**: 6s field: no light flicker, no terror (18s) | **Bull Thrust**: dash 5u, knockback 3u, **taunts it onto you** (12s) | **Devil Union: Absolute Nullification**: black-and-crimson wings on every wizard for **30s**. Monster attacks, lunges and captures **have no effect**, and it recoils. |
 
-**Role notes:** Black and White are the "save a friend" tools. Fire lights the way and keeps chip damage flowing for Phase III. Earth controls space. Wind is the panic button. Anti-magic makes a rescue run possible. Water sets up every combo.
+**Ultimate charge (0–100%):**
+- **+8%** for landing a normal spell (once per cast).
+- **+2%/s** while the Amalgam hunts you.
+- **+25% team-wide** per destroyed Heart.
+- **+20%** for freeing prisoners.
+- **+0.4%/s** passively once the Tome is read.
 
-**Combos (Phase III / stretch for Phase II):** Water → Earth = *Mire* (double the slow duration). Fire → Wind = *Firestorm* (knockback plus a burning trail). White → Black = *Revelation* (stun plus a reveal that lasts the whole stun).
+**Combined elements:** three *different* elements landing on the Amalgam within 5s banish it (a coven tactic; one wizard alone can't).
+
+---
+
+## 4b. Lumos, Health & the Endless Night
+
+- **Lumos / Nox (F):**
+  - **Nox** is the default: a narrow, dim wand glow.
+  - **Lumos** is a bright, wide crystalline torch (28u, about 50° cone) that makes rooms readable.
+  - **Trade-off:** with Lumos lit, the Amalgam **sees you 50% further away** (16u → 24u; crouched 8u → 12u).
+  - During a hunt within 12u, Lumos strobes violently as a warning.
+- **Health (100 HP):**
+  - **Claw Slash:** 30.
+  - **Dark Shockwave:** 15 to everyone within 3.5u.
+  - **Shadow Tendril:** 20 at up to 7u, from 2+ Hearts.
+- **Capture:**
+  - A hit on a wizard **at or below 40 HP drags them to the Cell**, and so does the **heavy, telegraphed Lunge** at any HP.
+  - The shockwave splash only captures someone it knocks to 0.
+  - **Prisoners stabilise at 50 HP.**
+- **Recovery:** HP regenerates slowly (1/s) after 8s without damage, **only up to 60**. Above that you need magic: the Patronus, the Tree of Life, Cradle absorbs and Granite skin.
+- **No timer:** a session lasts until the coven seals the Hell Portal (victory) or everyone is held at once (game over, Retry keeps your progress).
+- **A tougher Keeper:**
+  - Hunt speed **4.5 → 5.4 u/s** at five Hearts, and aggression rises with every Heart.
+  - **At 2+ Hearts:** the Shadow Tendril.
+  - **At 4+ Hearts:** it **smashes Earth barricades in two hits** and conjures **phantom decoys**.
 
 ---
 
@@ -134,7 +167,7 @@ The last lord's Keeper: too tall for the doorways, gaunt and lopsided (one arm f
 - **Retreating:** claws its way up into the ceiling.
 
 ### Senses
-- **Sight:** a ~125° cone with line of sight. A lit wand is visible at 22u, a dark one at 10u, a crouched, dark wizard at 6u. While hunting it tracks its prey in every direction (30u).
+- **Sight:** a ~125° cone with line of sight. A wizard is visible at 16u (8u crouched), and **×1.5 with Lumos lit**. Shadow-stepped wizards are invisible. While hunting it tracks its prey in every direction (30u).
 - **Noise:** carries to a radius. Sprinting carries 10u, any spellcast 14u, a decoy heirloom 8u (sends it to search there). A **dying Heart is felt anywhere** and sends it to hunt the destroyer.
 - **Being stared at:** a lit wand held on it for **1.5s** (within 14u, inside about 15°) makes it **duck out of sight** (55%) or **charge** (45%). With no cover nearby it charges.
 
@@ -143,9 +176,9 @@ The last lord's Keeper: too tall for the doorways, gaunt and lopsided (one arm f
 |---|---|
 | **Dormant** (before the Tome) | Not in the world. Every 35–75s (first time at 20–40s) it **haunts** a wizard: a silhouette 14–24u away at a corner or doorway, in view but out of the light. Its eyes glint through the fog. When a wand beam lands on it, it lingers about 0.3s (a lit glimpse) and then vanishes. It also fades on its own after 6s. It cannot be targeted. |
 | **Stalking** | Picks spots 12–22u from the nearest free wizard, preferring tiles no one can see, out of wand light, at doorways and corners. **Peeks** for 1.5–3s at those spots. Charges if a wizard comes within 8u in its view, and occasionally (30% every 7s while it sees prey) on its own. |
-| **Hunting** | Sprints at **4.4 u/s + 0.25 per destroyed Heart** (wizards sprint at 5.6 but tire). Within 2.4u: a 0.3s windup, then a lunge at 8 u/s. A catch within 1.4u **captures**; a Void shield **blocks** it (rebound plus stagger). After 3.5s without sight, or 40s of hunting, it switches to Searching. |
+| **Hunting** | Sprints at **4.5 u/s + 0.18 per destroyed Heart** (5.4 at five; wizards sprint at 5.6 but tire). Close in (2.6u):<br>• **Claw Slash** (0.35s windup, 30 HP)<br>• **Dark Shockwave** (0.6s, 15 HP to everyone within 3.5u, favoured against groups)<br>• the **heavy Lunge** (22%, 0.7s telegraph, always captures)<br>• the **Grab** (any wizard at ≤ 40 HP).<br>From 2+ Hearts it adds the **Shadow Tendril** at 3–7u (20 HP). From 4+ it **smashes barricades**. Void shields block every attack, and Devil Union nullifies them. After 3.5s without sight, or 40s of hunting, it switches to Searching. |
 | **Searching** | Goes to the last known position, **listens** for 2.5s, sweeps up to 3 nearby rooms, then returns to Stalking after 16s. Sight or noise restarts the hunt. |
-| **Retreating** | Flees and climbs into the ceiling (1s), then stays hidden **12–18s** and reappears out of sight. Triggered by: a capture; its **40 stagger HP** running out; or **three different spells within 5s** (combined elements). Psychic Torment and Sacred Bind also break an active chase (switching it to Searching). |
+| **Retreating** | Flees and climbs into the ceiling (1s), then stays hidden **12–18s** and reappears out of sight. Triggered by: a capture; its **60 stagger HP** running out; or **three different elements within 5s** (combined elements). Psychic Torment and Sacred Bind also break an active chase (switching it to Searching). |
 | **Guarding** | While anyone is held, stalking goals favour the basement (65% from upstairs, 85% once down there). It prowls near the stair and Crypt but **never within 6u of the gate**, and still ventures upstairs to stalk. |
 
 ---
@@ -215,21 +248,25 @@ The last lord's Keeper: too tall for the doorways, gaunt and lopsided (one arm f
 | W A S D / arrows | Move |
 | Shift | Sprint: loud, uses stamina (drains in about 4s, recovers in about 7s) |
 | C (toggle) / Ctrl (hold) | Crouch: slow and quiet |
-| Left Mouse / Q | Cast your wizard's spell |
-| E (hold) | Interact: read, destroy, examine, use stairs, break the lock |
-| F | Wand light on or off. Darkness hides you from the Monster but blinds you too. |
+| 1 – 4 | Cast spell 1–4 (and select it) |
+| Left Mouse / Q | Cast the selected spell |
+| R | Ultimate (needs 100% charge) |
+| E (hold) | Interact: read, destroy, examine, use stairs, break the lock, eat from the Tree of Life |
+| F | Lumos / Nox: a bright, wide torch, but you're seen 50% further away |
 | J | Journal (the Tome's text and clues) |
 | G | Call for help: ping your location to the coven |
 | 1–7 (Phase III) | Archon element radial |
 | M (debug) | Top-down debug map. Click it to teleport. |
 | P (debug) | Cycle the monster: Husk → Haunt → Stalk → Hunt → Capture test → Auto |
 | K (debug) | Capture yourself instantly; if you're already held, break the lock |
-| 1–7 (debug) | Hot-swap your wizard (whoever held it gets yours) |
+| Shift + 1–7 (debug) | Hot-swap your wizard (whoever held it gets yours) |
+| U (debug) | Fill your Ultimate charge |
 
 ---
 
 ## 10. Debug & testing affordances
 - **Solo test** button: creates a coven with solo debug enabled and two bot teammates.
+- **Bots use the whole grimoire:** each spell's `bot` hint (target, ally, self, escape, zone, heal) decides when it fits. They fire Ultimates at 100% against the real Amalgam (or to heal), and eat Tree of Life fruit when hurt.
 - **Bots** rescue first: when anyone is held, they run to the Cell (taking the stairs) and break the lock. Against the Amalgam they cast only when it threatens someone, which means it is hunting or within 8u. A bot's name follows its wizard when swapped.
 - **Bots (movement):** server-side teammates that follow the nearest human using A*, take the stairs when you change floor, sprint to catch up, and scan the dark when idle. A human picking a bot's wizard makes the bot switch. When a monster is within 16u and their spell is nearly ready, they **move into range and cast it**. Aegis bots shield when the monster closes on someone near them.
 - **Test Monster Husk** (P, debug only): a slow, harmless husk with 100 HP that patrols, shambles after the nearest wizard it can see, and telegraphs a claw swipe (0.7s windup, every 3s). A floating panel shows HP and every status (Stunned, Tormented, Slowed, Burning, Knocked Back, Blocked, Visible Through Walls), along with damage numbers. It crumbles at 0 HP and re-forms after 3s. It uses the same `MonsterBody` as the Step 4 Monster, so every spell verified on it works on the real thing.
@@ -246,4 +283,5 @@ The last lord's Keeper: too tall for the doorways, gaunt and lopsided (one arm f
 | 2 | Mansion generator, rendering, movement, lobby, bots, Tome/Hearts/stairs interactions | ✅ Done |
 | 3 | Seven spells (server-side), cooldown HUD, procedural VFX, Earth barricades in collision and pathfinding, gate unlocking, Training Husk, bot casting, debug wizard swap | ✅ Done |
 | 4 | Malphas Amalgam (model, stop-motion, AI states, haunting, noise, stare), procedural audio, post-processing, Lights Out, terror, capture/rescue/ping/game over, bot rescue | ✅ Done |
+| 4.5 | Lumos, 35-spell grimoire + Ultimates and charge, player HP, tougher Amalgam (attacks, tendrils, smashing, phantoms), bots using the grimoire | ✅ Done |
 | 5 | Forbidden Spell, the Archon, Hell Portal, Epilogue | ⏳ Next |

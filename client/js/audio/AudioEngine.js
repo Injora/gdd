@@ -561,6 +561,173 @@ export class AudioEngine {
     }
   }
 
+  // ---- building blocks for the grimoire -----------------------------------------------
+
+  whoosh(pos, f0, f1, dur, { q = 1.5, gain = 0.8, reverb = 0.35, type = 'bandpass' } = {}) {
+    const t = this.now();
+    const o = this.out({ pos, reverb, gain, ref: 3 });
+    const f = this.filter(type, f0, q);
+    f.frequency.exponentialRampToValueAtTime(Math.max(40, f1), t + dur);
+    this.noiseSrc(t, dur).connect(f).connect(this.env(t, dur * 0.25, dur * 0.75, 1, 'lin')).connect(o);
+  }
+
+  boom(pos, f = 80, dur = 0.6, gain = 1) {
+    const t = this.now();
+    const o = this.out({ pos, reverb: 0.5, gain, ref: 3 });
+    const s = this.osc('sine', f, t, dur);
+    s.frequency.exponentialRampToValueAtTime(f * 0.35, t + dur * 0.9);
+    s.connect(this.env(t, 0.003, dur, 1)).connect(o);
+    this.noiseSrc(t, dur).connect(this.filter('lowpass', f * 10)).connect(this.env(t, 0.003, dur * 0.9, 0.8)).connect(o);
+  }
+
+  chime(pos, freqs, dur = 1.4, gain = 0.25, type = 'sine') {
+    const t = this.now();
+    const o = this.out({ pos, reverb: 0.6, gain, ref: 3 });
+    freqs.forEach((f, i) => this.osc(type, f * rand(0.998, 1.002), t + i * 0.015, dur).connect(this.env(t + i * 0.015, 0.005, dur, 1)).connect(o));
+  }
+
+  crackle(pos, dur = 0.5, n = 10, gain = 0.6) {
+    const t = this.now();
+    const o = this.out({ pos, reverb: 0.2, gain, ref: 2 });
+    for (let i = 0; i < n; i++) {
+      const tt = t + rand(0, dur);
+      this.noiseSrc(tt, 0.02).connect(this.filter('highpass', rand(2000, 5000))).connect(this.env(tt, 0.001, 0.015, rand(0.3, 1))).connect(o);
+    }
+  }
+
+  rumble(pos, dur = 1.2, gain = 1) {
+    const t = this.now();
+    const o = this.out({ pos, reverb: 0.4, gain, ref: 4 });
+    this.noiseSrc(t, dur).connect(this.filter('lowpass', 150)).connect(this.env(t, 0.05, dur, 1.2)).connect(o);
+    this.osc('sine', 42, t, dur).connect(this.env(t, 0.05, dur, 0.9)).connect(o);
+  }
+
+  roar(pos, fire) {
+    const t = this.now();
+    const o = this.out({ pos, reverb: 0.7, gain: 1, ref: 6, rolloff: 0.6 });
+    const lp = this.filter('lowpass', fire ? 900 : 2200, 3);
+    lp.frequency.linearRampToValueAtTime(fire ? 2600 : 4000, t + 0.5);
+    lp.frequency.exponentialRampToValueAtTime(300, t + 2.2);
+    lp.connect(this.distortion(fire ? 40 : 8)).connect(this.env(t, 0.15, 2.1, 1)).connect(o);
+    const saw = this.osc('sawtooth', fire ? 85 : 140, t, 2.4);
+    saw.frequency.linearRampToValueAtTime(fire ? 60 : 210, t + 2.2);
+    const trem = this.osc('sine', fire ? 23 : 9, t, 2.4);
+    const tg = this.ctx.createGain();
+    tg.gain.value = fire ? 18 : 60;
+    trem.connect(tg).connect(saw.frequency);
+    saw.connect(lp);
+    this.noiseSrc(t, 2.4).connect(lp);
+  }
+
+  /** Spells beyond the original seven + every Ultimate. */
+  grimoire(ability, pos) {
+    switch (ability) {
+      case 'dimension_slash': this.whoosh(pos, 3000, 200, 0.4, { q: 4, gain: 0.9 }); this.chime(pos, [233, 247], 0.6, 0.2, 'sawtooth'); break;
+      case 'black_hole': this.whoosh(pos, 120, 2400, 1.6, { type: 'lowpass', gain: 1, reverb: 0.7 }); this.boom(pos, 45, 2.5, 0.9); break;
+      case 'shadow_step': this.whoosh(pos, 2000, 200, 0.6, { q: 0.7, gain: 0.6 }); break;
+      case 'abyssal_mind_fracture': this.rumble(pos, 1.5, 1); this.chime(pos, [55, 58.3, 77.8, 110.4], 3, 0.4, 'sawtooth'); break;
+      case 'calidus_brachium': for (let i = 0; i < 3; i++) setTimeout(() => { this.boom(pos, 120, 0.35, 0.8); this.crackle(pos, 0.3, 8); }, i * 200); break;
+      case 'sol_linea': this.whoosh(pos, 600, 4000, 0.5, { q: 3, gain: 1 }); this.chime(pos, [1046.5, 1568], 0.8, 0.2, 'sawtooth'); this.crackle(pos, 1.5, 30, 0.5); break;
+      case 'phoenix_aura': this.whoosh(pos, 300, 2000, 0.9, { gain: 0.8 }); this.crackle(pos, 1, 20); break;
+      case 'fiendfyre_dragon': this.roar(pos, true); this.crackle(pos, 2, 50, 0.8); break;
+      case 'water_spear': this.whoosh(pos, 1200, 6000, 0.3, { q: 6, gain: 0.8 }); break;
+      case 'sea_cradle': this.whoosh(pos, 400, 1400, 1, { type: 'lowpass', gain: 0.7 }); this.chime(pos, [392, 523, 659], 1.2, 0.15); break;
+      case 'riptide_vortex': this.chime(pos, [587, 880, 1174], 0.9, 0.18); break;
+      case 'abyssal_deluge': this.rumble(pos, 3, 1.2); this.whoosh(pos, 200, 1500, 3, { type: 'lowpass', gain: 1.2, reverb: 0.8 }); break;
+      case 'devils_snare': this.crackle(pos, 0.8, 40, 0.9); this.rumble(pos, 0.6, 0.6); break;
+      case 'golem_boulder': this.rumble(pos, 0.5, 0.8); this.whoosh(pos, 300, 120, 0.5, { gain: 0.6 }); break;
+      case 'granite_skin': this.crackle(pos, 0.6, 25, 0.8); this.boom(pos, 70, 0.4, 0.6); break;
+      case 'yggdrasil': this.rumble(pos, 2.5, 1); this.chime(pos, [261.6, 329.6, 392, 523.3, 659.3], 3.5, 0.3); break;
+      case 'kamaitachi': for (let i = 0; i < 3; i++) setTimeout(() => this.whoosh(pos, 4000, 800, 0.25, { q: 5, gain: 0.7 }), i * 150); break;
+      case 'zephyr_tailwind': this.whoosh(pos, 500, 2500, 1.2, { q: 1, gain: 0.8 }); break;
+      case 'vacuum_tempest': this.whoosh(pos, 3000, 150, 1.2, { q: 2, gain: 1 }); this.boom(pos, 60, 0.8, 0.6); break;
+      case 'sylph_dragon': this.roar(pos, false); this.whoosh(pos, 300, 3000, 2.5, { q: 0.8, gain: 1 }); break;
+      case 'arrows_of_judgment': for (let i = 0; i < 5; i++) setTimeout(() => this.chime(pos, [1318.5 + i * 100, 1760 + i * 120], 0.4, 0.15), 350 + i * 150); break;
+      case 'patronus_beacon': this.chime(pos, [523.3, 659.3, 784, 1046.5, 1318.5], 2.5, 0.25); break;
+      case 'flash_step': this.whoosh(pos, 6000, 1500, 0.2, { q: 2, gain: 0.7 }); this.chime(pos, [1760, 2637], 0.5, 0.15); break;
+      case 'dawn_sacred_order': this.choir(); break;
+      case 'black_slash': this.whoosh(pos, 1500, 300, 0.4, { q: 3, gain: 1 }); this.boom(pos, 90, 0.3, 0.6); break;
+      case 'null_zone': this.chime(pos, [110, 116.5], 2, 0.3, 'triangle'); break;
+      case 'bull_thrust': this.whoosh(pos, 400, 100, 0.4, { type: 'lowpass', gain: 1 }); this.boom(pos, 80, 0.5, 1); break;
+      case 'devil_union': this.chime(null, [55, 82.4, 110, 164.8], 3, 0.5, 'sawtooth'); this.whoosh(null, 100, 1500, 2, { type: 'lowpass', gain: 1, reverb: 0.8 }); break;
+    }
+  }
+
+  /** Dawn: a swelling major choir (formant-filtered saws). */
+  choir() {
+    if (!this.running) return;
+    const t = this.now();
+    const o = this.out({ reverb: 0.9, gain: 0.35 });
+    for (const f of [261.6, 329.6, 392, 523.3, 659.3]) {
+      const v = this.osc('sawtooth', f, t, 6);
+      const vib = this.osc('sine', 5 + Math.random(), t, 6);
+      const vg = this.ctx.createGain();
+      vg.gain.value = f * 0.006;
+      vib.connect(vg).connect(v.frequency);
+      const formant = this.filter('bandpass', 900, 3);
+      v.connect(formant).connect(this.env(t, 1.6, 4.2, 0.6, 'lin')).connect(o);
+    }
+  }
+
+  lumos(on) {
+    if (!this.running) return;
+    if (on) {
+      this.chime(null, [1568, 2093, 3136], 0.7, 0.12);
+      this.whoosh(null, 800, 5000, 0.25, { q: 1, gain: 0.25, reverb: 0.1 });
+    } else this.whoosh(null, 3000, 400, 0.25, { q: 1, gain: 0.2, reverb: 0.1 });
+  }
+
+  monsterAttack(kind, pos) {
+    if (!this.running) return;
+    switch (kind) {
+      case 'claw': this.whoosh(pos, 2500, 500, 0.25, { q: 3, gain: 1 }); this.crackle(pos, 0.1, 5, 1); break;
+      case 'shockwave': this.boom(pos, 55, 1.2, 1.3); this.rumble(pos, 1, 0.8); break;
+      case 'tendril': this.whoosh(pos, 900, 200, 0.35, { q: 6, gain: 1 }); break;
+      case 'smash': this.boom(pos, 70, 0.7, 1.1); this.crackle(pos, 0.4, 25, 1); break;
+    }
+  }
+
+  hurt(amount) {
+    if (!this.running) return;
+    const t = this.now();
+    const o = this.out({ reverb: 0.1, gain: Math.min(1, 0.4 + amount / 40) });
+    const s = this.osc('sine', 70, t, 0.4);
+    s.frequency.exponentialRampToValueAtTime(35, t + 0.35);
+    s.connect(this.env(t, 0.003, 0.35, 1)).connect(o);
+    this.noiseSrc(t, 0.2).connect(this.filter('bandpass', 700, 1)).connect(this.env(t, 0.002, 0.15, 0.7)).connect(o);
+  }
+
+  fruit() { if (this.running) this.chime(null, [784, 987.8, 1174.7, 1568], 1.2, 0.25); }
+
+  /** Water lapping while the mansion is flooded. */
+  setFlooded(on) {
+    if (!this.running) return;
+    if (on && !this.floodNodes) {
+      const src = this.ctx.createBufferSource();
+      src.buffer = this.noise;
+      src.loop = true;
+      const f = this.filter('lowpass', 500, 1);
+      const g = this.ctx.createGain();
+      g.gain.value = 0;
+      const lfo = this.ctx.createOscillator();
+      lfo.frequency.value = 0.4;
+      const lg = this.ctx.createGain();
+      lg.gain.value = 0.05;
+      lfo.connect(lg).connect(g.gain);
+      src.connect(f).connect(g).connect(this.master);
+      src.start();
+      lfo.start();
+      g.gain.setTargetAtTime(0.12, this.now(), 1);
+      this.floodNodes = { src, g, lfo };
+    } else if (!on && this.floodNodes) {
+      const { src, g, lfo } = this.floodNodes;
+      g.gain.setTargetAtTime(0, this.now(), 0.8);
+      src.stop(this.now() + 3);
+      lfo.stop(this.now() + 3);
+      this.floodNodes = null;
+    }
+  }
+
   fireImpact(pos) {
     if (!this.running) return;
     const t = this.now();

@@ -10,6 +10,15 @@ import { FLOOR_Y } from '/shared/constants.js';
 
 export const STATUS_LABELS = {
   stun: ['STUNNED', '#ffd76a'],
+  frozen: ['FROZEN IN CHAINS', '#ffe08a'],
+  confused: ['MIND FRACTURED', '#ff3a5a'],
+  root: ['ROOTED', '#7fd36a'],
+  pinned: ['PINNED', '#5ac8ff'],
+  pull: ['PULLED', '#a060ff'],
+  lift: ['LIFTED', '#9ef0e0'],
+  carried: ['SWEPT AWAY', '#9ef0e0'],
+  reach: ['REACH SHORTENED', '#c070ff'],
+  calm: ['ENRAGE STRIPPED', '#d8e0ea'],
   torment: ['TORMENTED', '#c070ff'],
   slow: ['SLOWED', '#6ad0ff'],
   burn: ['BURNING', '#ff8a3a'],
@@ -273,10 +282,12 @@ export class MonsterAvatar {
     this.z += (s.z - this.z) * k;
     this.yaw = angleLerp(this.yaw, s.yaw, k);
     this.group.visible = s.f === visibleFloor;
-    this.group.position.set(this.x, FLOOR_Y[s.f], this.z);
-    this.group.rotation.y = this.yaw;
+    const lifted = this.has('lift') || this.has('carried');
+    this.liftK = (this.liftK ?? 0) + ((lifted ? 1 : 0) - (this.liftK ?? 0)) * Math.min(1, dt * 6);
+    this.group.position.set(this.x, FLOOR_Y[s.f] + this.liftK * 1.2, this.z);
+    this.group.rotation.y = this.yaw + (lifted ? t * 6 : 0);
 
-    const stunned = this.has('stun');
+    const stunned = this.has('stun') || this.has('frozen');
     const tormented = this.has('torment');
     const knocked = this.has('knock');
     const burning = this.has('burn');

@@ -334,8 +334,8 @@ test('bots cast their own spell at a nearby husk', () => {
   g2.husk = new TrainingHusk(g2, tileCenter(row.x + 5), tileCenter(row.y), 0);
   run(g2, 0.2);
   const cast = g2.events.find((e) => e.data?.type === 'cast' && e.data.caster === 'b1');
-  assert.ok(cast, 'bot cast Tidal Surge');
-  assert.equal(cast.data.ability, 'tidal_surge');
+  assert.ok(cast, 'bot cast a spell');
+  assert.ok(WIZARD_BY_ID.himandriel.spells.some((sp) => sp.id === cast.data.ability), `a Water spell (${cast.data.ability})`);
 });
 
 test('bots close into spell range before casting (short-range Earth bot)', () => {
@@ -354,6 +354,5 @@ test('bots close into spell range before casting (short-range Earth bot)', () =>
   run(g, 5);
   const cast = events.find((e) => e?.type === 'cast' && e.caster === 'b1');
   assert.ok(cast, 'bot walked into range and cast');
-  assert.equal(cast.ability, 'terra_spike');
-  assert.equal(cast.hit, 'husk');
+  assert.ok(WIZARD_BY_ID.sushantus.spells.some((sp) => sp.id === cast.ability), `an Earth spell (${cast.ability})`);
 });

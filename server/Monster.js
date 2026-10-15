@@ -21,19 +21,19 @@
 import { MonsterBody } from './MonsterBody.js';
 import { findPath, pathToWorld } from '../shared/pathfinding.js';
 import { lineOfSight, moveCircle } from '../shared/collision.js';
-import { PHASE, TILE_WALL, TILE_DOOR, tileCenter, worldToTile } from '../shared/constants.js';
+import { PHASE, TILE_WALL, TILE_DOOR, HP, LUMOS, tileCenter, worldToTile } from '../shared/constants.js';
 
 export const AI = {
   STALK_SPEED: 2.3,
   SEARCH_SPEED: 3.0,
-  HUNT_SPEED: 4.4, // players sprint at 5.6 but run out of stamina
-  ENRAGE_PER_HEART: 0.25,
+  HUNT_SPEED: 4.5, // players sprint at 5.6 but run out of stamina
+  ENRAGE_PER_HEART: 0.18, // 5.4 u/s at five Hearts
+  AGGRO_PER_HEART: 0.08,
   STALK_MIN: 12,
   STALK_MAX: 22,
   TOO_CLOSE: 8,
-  SIGHT_LIT: 22,
-  SIGHT_DARK: 10,
-  SIGHT_SNEAK: 6,
+  SIGHT: 16, // a wizard with a plain wand glow (Lumos ×1.5)
+  SIGHT_SNEAK: 8, // crouched
   FOV_COS: Math.cos(1.1),
   STARE_TIME: 1.5,
   STARE_RANGE: 14,
@@ -51,7 +51,27 @@ export const AI = {
   RETREAT_MIN: 12,
   RETREAT_MAX: 18,
   RETREAT_FLEE: 1.0,
-  STAGGER_HP: 40,
+  STAGGER_HP: 60,
+  // Attacks (all damage is to wizards' HP; see Game.damagePlayer)
+  CLAW_RANGE: 2.6,
+  CLAW_WINDUP: 0.35,
+  CLAW_DAMAGE: 30,
+  RECOVER: 0.8,
+  GRAB_WINDUP: 0.3, // on a wizard at ≤ 40 HP: the grab that captures
+  LUNGE_CHANCE: 0.22, // the heavy, telegraphed lunge: always captures
+  SHOCK_WINDUP: 0.6,
+  SHOCK_RADIUS: 3.5,
+  SHOCK_DAMAGE: 15,
+  SHOCK_COOLDOWN: 4,
+  TENDRIL_HEARTS: 2,
+  TENDRIL_RANGE: 7,
+  TENDRIL_WINDUP: 0.5,
+  TENDRIL_DAMAGE: 20,
+  TENDRIL_COOLDOWN: 4,
+  SMASH_HEARTS: 4,
+  SMASH_WINDUP: 0.5,
+  PHANTOM_HEARTS: 4,
+  PHANTOM_LIFE: 4,
   COMBO_WINDOW: 5,
   COMBO_COUNT: 3,
   HAUNT_FIRST: 20,
@@ -100,6 +120,13 @@ export class Monster extends MonsterBody {
     this.retreatHideAt = 0;
     this.until = 0;
     this.tiles = this.buildTileIndex();
+    this.attack = null;
+    this.attackReadyAt = 0;
+    this.shockReadyAt = 0;
+    this.tendrilReadyAt = 0;
+    this.phantomAt = 0;
+    this.tauntUntil = 0;
+    this.pendingBanish = false;
   }
 
   get targetable() {
@@ -142,11 +169,17 @@ export class Monster extends MonsterBody {
     return [...this.game.players.values()].filter((p) => !p.captured && !p.capturing);
   }
 
+  /** Shadow Step makes a wizard invisible to it. */
+  isInvisible(p) { return this.game.spells.hasBuff(p, 'shadow'); }
+
+  /** Wizards it can actually perceive. */
+  prey() { return this.freePlayers().filter((p) => !this.isInvisible(p)); }
+
   dist(a) { return Math.hypot(a.x - this.x, a.z - this.z); }
 
   nearestFree() {
     let best = null;
-    for (const p of this.freePlayers()) {
+    for (const p of this.prey()) {
       const score = this.dist(p) + (p.floor === this.floor ? 0 : 60);
       if (!best || score < best.score) best = { p, score };
     }
@@ -157,9 +190,9 @@ export class Monster extends MonsterBody {
 
   /** Could the Amalgam see player p right now (stalking senses: view cone, lit wands carry further)? */
   canSee(p) {
-    if (this.hidden || p.floor !== this.floor) return false;
+    if (this.hidden || p.floor !== this.floor || this.isInvisible(p)) return false;
     const d = this.dist(p);
-    const range = p.light ? AI.SIGHT_LIT : p.crouch ? AI.SIGHT_SNEAK : AI.SIGHT_DARK;
+    const range = (p.crouch ? AI.SIGHT_SNEAK : AI.SIGHT) * (p.light ? LUMOS.detection : 1);
     if (d > range) return false;
     if (d > 4) {
       const fx = -Math.sin(this.yaw), fz = -Math.cos(this.yaw);
@@ -168,10 +201,12 @@ export class Monster extends MonsterBody {
     return this.los(this, p, this.floor);
   }
 
-  /** Is (x, z) inside any free player's wand cone? */
-  inLight(pt, floor, range = 15, cos = 0.8) {
+  /** Is (x, z) inside any free wizard's beam? A plain wand glow reaches 16u; Lumos 28u and wider. */
+  inLight(pt, floor) {
     return this.freePlayers().some((p) => {
-      if (!p.light || p.floor !== floor) return false;
+      if (p.floor !== floor) return false;
+      const range = p.light ? LUMOS.range : 16;
+      const cos = p.light ? Math.cos(LUMOS.angle * 0.7) : AI.HAUNT_LIT_COS;
       const dx = pt.x - p.x, dz = pt.z - p.z, d = Math.hypot(dx, dz);
       if (d > range || d < 1e-3) return false;
       return (dx * -Math.sin(p.yaw) + dz * -Math.cos(p.yaw)) / d > cos && this.los(p, pt, floor);
@@ -217,7 +252,38 @@ export class Monster extends MonsterBody {
     this.yaw += Math.max(-max, Math.min(max, d));
   }
 
-  huntSpeed() { return AI.HUNT_SPEED + AI.ENRAGE_PER_HEART * this.game.destroyed.size; }
+  /** Hunting speed: enrages with every destroyed Heart (Black Slash strips it). */
+  huntSpeed() {
+    const hearts = Math.min(5, this.game.destroyed.size);
+    return AI.HUNT_SPEED + (this.isCalm() ? 0 : AI.ENRAGE_PER_HEART * hearts);
+  }
+
+  aggressionNow() {
+    if (this.aggression === 0 || this.isCalm()) return this.aggression;
+    return this.aggression + AI.AGGRO_PER_HEART * this.game.destroyed.size;
+  }
+
+  /** Shadow Step: the hunted wizard vanished. */
+  loseTarget(p) {
+    if (this.state === 'hunting' && this.targetId === p.id) this.search(this.lastKnown);
+  }
+
+  /** Bull Thrust: it turns on the wizard who struck it. */
+  taunt(p, seconds) {
+    if (['dormant', 'haunt', 'retreating'].includes(this.state) || this.hidden) return;
+    if (this.state !== 'hunting' || this.targetId !== p.id) {
+      this.setState('hunting');
+      this.targetId = p.id;
+      this.lastSeenAt = this.t;
+      this.game.emitAll({ type: 'monster:hunt', targetId: p.id, reason: 'taunt' });
+    }
+    this.lastKnown = { x: p.x, z: p.z, floor: p.floor };
+    this.tauntUntil = this.t + seconds;
+  }
+
+  onDropped() {
+    if (this.state === 'hunting') this.search({ x: this.x, z: this.z, floor: this.floor });
+  }
 
   /**
    * Walk toward a goal on any floor (taking the servants' stair when needed).
@@ -263,7 +329,8 @@ export class Monster extends MonsterBody {
   }
 
   hunt(p, reason) {
-    if (!p || p.captured || p.capturing || this.hidden) return;
+    if (!p || p.captured || p.capturing || this.hidden || this.isInvisible(p)) return;
+    if (this.t < this.tauntUntil && this.targetId !== p.id) return; // taunted: fixated
     if (['dormant', 'haunt', 'retreating'].includes(this.state)) return;
     if (this.state === 'hunting' && this.targetId === p.id) return;
     this.setState('hunting');
@@ -335,11 +402,11 @@ export class Monster extends MonsterBody {
 
   updateStares(dt) {
     if (this.hidden || !['stalking', 'searching'].includes(this.state)) return;
-    for (const p of this.freePlayers()) {
+    for (const p of this.prey()) {
       let staring = false;
-      if (p.light && p.floor === this.floor) {
+      if (p.floor === this.floor) {
         const dx = this.x - p.x, dz = this.z - p.z, d = Math.hypot(dx, dz);
-        if (d < AI.STARE_RANGE && d > 1e-3) {
+        if (d < AI.STARE_RANGE * (p.light ? LUMOS.detection : 1) && d > 1e-3) {
           const dot = (dx * -Math.sin(p.yaw) + dz * -Math.cos(p.yaw)) / d;
           staring = dot > AI.STARE_COS && this.los(p, this, this.floor);
         }
@@ -393,8 +460,16 @@ export class Monster extends MonsterBody {
   slow(f, d) { super.slow(f, d); if (d > 1) this.noteHit('water'); }
   burn(...args) { super.burn(...args); this.noteHit('fire'); }
 
-  /** Stagger HP ran out: it doesn't die, it flees. */
+  /**
+   * Stagger HP ran out: it doesn't die, it flees. While chained (Dawn) or
+   * mind-fractured it can't flee, so the banish waits until it's released.
+   */
   die() {
+    if (this.isConfused() || this.isFrozen()) {
+      this.hp = 1;
+      this.pendingBanish = true;
+      return;
+    }
     this.hp = this.maxHp;
     this.banish('stagger');
   }
@@ -408,9 +483,15 @@ export class Monster extends MonsterBody {
     this.moving = false;
     if (this.game.phase === PHASE.GAMEOVER) return;
     if (this.state === 'dormant' && this.game.phase !== PHASE.TOME && !this.debugHeld) this.awaken();
+    if (this.pendingBanish && !this.isConfused() && !this.isFrozen()) {
+      this.pendingBanish = false;
+      this.hp = this.maxHp;
+      this.banish('stagger');
+    }
     this.updateStares(dt);
     if (!this.canAct() && this.state !== 'retreating' && this.state !== 'dormant') {
-      this.action = null;
+      this.action = this.isConfused() ? 'confused' : null;
+      this.attack = null;
       return;
     }
     switch (this.state) {
@@ -432,13 +513,25 @@ export class Monster extends MonsterBody {
     const players = this.freePlayers();
     const p = victim ?? players[Math.floor(Math.random() * players.length)];
     if (!p) return;
-    // Somewhere 14–24 units off, in view but out of the light; corners and doorways first.
-    const candidates = this.tiles[p.floor].filter((tile) => {
+    // Somewhere 14–24 units off, in view but out of everyone's light; corners and
+    // doorways first. With every wand glowing that can leave nothing, so relax:
+    // any such tile, then 10–28 units out of just the victim's own beam.
+    const inBeamOf = (q, tile) => {
+      const dx = tile.x - q.x, dz = tile.z - q.z, d = Math.hypot(dx, dz);
+      const range = q.light ? LUMOS.range : 16;
+      return d <= range && (dx * -Math.sin(q.yaw) + dz * -Math.cos(q.yaw)) / Math.max(d, 1e-3) > AI.HAUNT_LIT_COS;
+    };
+    const ring = (min, max) => this.tiles[p.floor].filter((tile) => {
       const d = Math.hypot(tile.x - p.x, tile.z - p.z);
-      return d >= 14 && d <= 24 && this.los(p, tile, p.floor) && !this.inLight(tile, p.floor, 26, AI.HAUNT_LIT_COS);
+      return d >= min && d <= max && this.los(p, tile, p.floor);
     });
-    const peeks = candidates.filter((tile) => tile.door || tile.corner);
-    const pool = peeks.length ? peeks : candidates;
+    const near = ring(14, 24).filter((tile) => !this.inLight(tile, p.floor));
+    const tiers = [
+      near.filter((tile) => tile.door || tile.corner),
+      near,
+      ring(10, 28).filter((tile) => !inBeamOf(p, tile)),
+    ];
+    const pool = tiers.find((tier) => tier.length) ?? [];
     const best = pool.length ? pool[Math.floor(Math.random() * pool.length)] : null;
     if (!best) {
       this.nextHauntAt = this.t + 10;
@@ -499,15 +592,33 @@ export class Monster extends MonsterBody {
     return { ...best.tile, peek: best.tile.door || best.tile.corner };
   }
 
+  /** Brief phantom Amalgams in the corners of your eye (4+ Hearts). */
+  spawnPhantoms(prey) {
+    const spots = [];
+    for (const tile of this.tiles[prey.floor]) {
+      if (spots.length >= 2) break;
+      if (Math.random() > 0.05) continue;
+      const d = Math.hypot(tile.x - prey.x, tile.z - prey.z);
+      if (d < 10 || d > 18 || !this.los(prey, tile, prey.floor)) continue;
+      spots.push({ x: tile.x, z: tile.z, yaw: Math.atan2(-(prey.x - tile.x), -(prey.z - tile.z)) });
+    }
+    if (spots.length) this.game.emitAll({ type: 'monster:phantoms', floor: prey.floor, spots, life: AI.PHANTOM_LIFE });
+  }
+
   updateStalking(dt) {
     const prey = this.nearestFree();
     if (!prey) return;
     const t = this.t;
+    if (this.game.destroyed.size >= AI.PHANTOM_HEARTS && t >= this.phantomAt) {
+      const first = this.phantomAt === 0;
+      this.phantomAt = t + rand(16, 26);
+      if (!first) this.spawnPhantoms(prey);
+    }
     if (this.canSee(prey)) {
       if (this.dist(prey) < AI.TOO_CLOSE) return this.hunt(prey, 'close');
       if (t >= this.aggroAt) {
         this.aggroAt = t + AI.AGGRO_INTERVAL;
-        if (Math.random() < this.aggression) return this.hunt(prey, 'aggression');
+        if (Math.random() < this.aggressionNow()) return this.hunt(prey, 'aggression');
       }
     }
     if (t < this.peekUntil) {
@@ -532,61 +643,131 @@ export class Monster extends MonsterBody {
   updateHunting(dt) {
     const t = this.t;
     const p = this.game.players.get(this.targetId);
-    if (!p || p.captured || p.capturing) return this.search(this.lastKnown);
-
-    if (this.action === 'windup') {
-      this.faceToward(p, dt, 12);
-      if (t >= this.lungeAt) {
-        this.action = 'lunge';
-        this.lungeEnd = t + AI.LUNGE_DASH;
-        const d = Math.max(1e-3, this.dist(p));
-        this.lungeDir = { x: (p.x - this.x) / d, z: (p.z - this.z) / d };
-      }
-      return;
-    }
-    if (this.action === 'lunge') {
-      const r = moveCircle(this.game.world, this.floor, this.x, this.z,
-        this.lungeDir.x * AI.LUNGE_SPEED * dt, this.lungeDir.z * AI.LUNGE_SPEED * dt, this.radius);
-      this.x = r.x;
-      this.z = r.z;
-      this.moving = true;
-      if (p.floor === this.floor && this.dist(p) < AI.CATCH_RANGE + this.radius) return this.resolveLunge(p);
-      if (t >= this.lungeEnd) {
-        this.action = null;
-        this.lungeReadyAt = t + AI.LUNGE_COOLDOWN;
-      }
-      return;
-    }
+    if (!p || p.captured || p.capturing || this.isInvisible(p)) return this.search(this.lastKnown);
+    if (this.attack) return this.updateAttack(p, dt);
 
     // Hunting senses: it tracks its prey in every direction.
     const sees = p.floor === this.floor && this.dist(p) < 30 && this.los(this, p, this.floor);
     if (sees) {
       this.lastKnown = { x: p.x, z: p.z, floor: p.floor };
       this.lastSeenAt = t;
-    } else if (t - this.lastSeenAt > AI.LOSE_SIGHT) {
+    } else if (t - this.lastSeenAt > AI.LOSE_SIGHT && t >= this.tauntUntil) {
       return this.search(this.lastKnown);
     }
     if (t - this.stateAt > AI.HUNT_MAX) return this.search(this.lastKnown);
 
-    if (sees && this.dist(p) < AI.LUNGE_RANGE && t >= this.lungeReadyAt) {
-      this.action = 'windup';
-      this.lungeAt = t + AI.LUNGE_WINDUP;
-      return;
+    const d = this.dist(p);
+    const hearts = this.game.destroyed.size;
+    if (sees && t >= this.attackReadyAt) {
+      if (d < AI.CLAW_RANGE * this.reachScale()) return this.startAttack(this.chooseMelee(p), p);
+      if (hearts >= AI.TENDRIL_HEARTS && d >= 3 && d <= AI.TENDRIL_RANGE * this.reachScale() && t >= this.tendrilReadyAt) {
+        return this.startAttack('tendril', p);
+      }
+    }
+    // Tears through Earth barricades (4+ Hearts).
+    if (hearts >= AI.SMASH_HEARTS && t >= this.attackReadyAt) {
+      const b = this.game.spells.barrierNear(this.floor, this.x, this.z, 2.4);
+      if (b) return this.startAttack('smash', p, { barrierId: b.id });
     }
     // Chase where it saw them last; through the stairs if they changed floor.
     const goal = sees ? p : (p.floor !== this.floor && t - this.lastSeenAt < 1 ? { x: p.x, z: p.z, floor: p.floor } : this.lastKnown);
     this.travelTo(goal, this.huntSpeed(), dt);
   }
 
-  resolveLunge(p) {
-    this.action = null;
-    this.lungeReadyAt = this.t + AI.LUNGE_COOLDOWN;
-    if (this.game.spells.isShielded(p)) {
-      this.block();
-      this.game.emitAll({ type: 'monster:blocked', id: this.id, targetId: p.id });
+  /** Pick a close-range attack. */
+  chooseMelee(p) {
+    if (this.forceLunge) {
+      this.forceLunge = false;
+      return 'lunge';
+    }
+    if (p.hp <= HP.CAPTURE_AT) return 'grab';
+    if (Math.random() < AI.LUNGE_CHANCE) return 'lunge';
+    const crowd = this.prey().filter((o) => o.floor === this.floor && this.dist(o) <= AI.SHOCK_RADIUS).length;
+    if (this.t >= this.shockReadyAt && (crowd >= 2 || Math.random() < 0.3)) return 'shockwave';
+    return 'claw';
+  }
+
+  startAttack(kind, p, extra = {}) {
+    const windup = {
+      claw: AI.CLAW_WINDUP, grab: AI.GRAB_WINDUP, lunge: AI.LUNGE_WINDUP,
+      shockwave: AI.SHOCK_WINDUP, tendril: AI.TENDRIL_WINDUP, smash: AI.SMASH_WINDUP,
+    }[kind];
+    this.attack = { kind, strikeAt: this.t + windup, ...extra };
+    // Lunges/grabs telegraph with the classic windup pose.
+    this.action = kind === 'lunge' || kind === 'grab' ? 'windup' : kind;
+    this.game.emitAll({ type: 'monster:attack', kind, stage: 'windup', id: this.id, targetId: p.id, floor: this.floor, x: r2(this.x), z: r2(this.z), windup });
+  }
+
+  updateAttack(p, dt) {
+    const t = this.t;
+    const a = this.attack;
+    if (a.kind === 'dash') {
+      const r = moveCircle(this.game.world, this.floor, this.x, this.z, a.dir.x * AI.LUNGE_SPEED * dt, a.dir.z * AI.LUNGE_SPEED * dt, this.radius);
+      this.x = r.x;
+      this.z = r.z;
+      this.moving = true;
+      if (p.floor === this.floor && this.dist(p) < AI.CATCH_RANGE + this.radius) {
+        this.attack = null;
+        this.action = null;
+        this.attackReadyAt = t + AI.LUNGE_COOLDOWN;
+        return this.landed(this.game.damagePlayer(p, AI.CLAW_DAMAGE, this, a.grab));
+      }
+      if (t >= a.end) {
+        this.attack = null;
+        this.action = null;
+        this.attackReadyAt = t + AI.LUNGE_COOLDOWN;
+      }
       return;
     }
-    if (this.game.capture(p, this)) this.banish('capture');
+    this.faceToward(p, dt, 12);
+    if (t < a.strikeAt) return;
+
+    this.attack = null;
+    this.action = null;
+    this.attackReadyAt = t + AI.RECOVER;
+    const reach = AI.CLAW_RANGE * this.reachScale() + 0.5;
+    switch (a.kind) {
+      case 'grab':
+      case 'lunge': {
+        const d = Math.max(1e-3, this.dist(p));
+        this.attack = { kind: 'dash', grab: a.kind, end: t + AI.LUNGE_DASH, dir: { x: (p.x - this.x) / d, z: (p.z - this.z) / d } };
+        this.action = 'lunge';
+        return;
+      }
+      case 'claw': {
+        const hit = p.floor === this.floor && this.dist(p) <= reach;
+        this.game.emitAll({ type: 'monster:attack', kind: 'claw', stage: 'strike', id: this.id, targetId: p.id, hit, floor: this.floor, x: r2(this.x), z: r2(this.z) });
+        if (hit) return this.landed(this.game.damagePlayer(p, AI.CLAW_DAMAGE, this, 'claw'));
+        return;
+      }
+      case 'shockwave': {
+        this.shockReadyAt = t + AI.SHOCK_COOLDOWN;
+        this.game.emitAll({ type: 'monster:attack', kind: 'shockwave', stage: 'strike', id: this.id, floor: this.floor, x: r2(this.x), z: r2(this.z), r: AI.SHOCK_RADIUS });
+        let captured = false;
+        for (const o of this.prey()) {
+          if (o.floor !== this.floor || this.dist(o) > AI.SHOCK_RADIUS) continue;
+          if (this.game.damagePlayer(o, AI.SHOCK_DAMAGE, this, 'shockwave') === 'captured') captured = true;
+        }
+        if (captured) this.banish('capture');
+        return;
+      }
+      case 'tendril': {
+        this.tendrilReadyAt = t + AI.TENDRIL_COOLDOWN;
+        const hit = p.floor === this.floor && this.dist(p) <= AI.TENDRIL_RANGE * this.reachScale() + 0.5 && this.los(this, p, this.floor);
+        this.game.emitAll({ type: 'monster:attack', kind: 'tendril', stage: 'strike', id: this.id, targetId: p.id, hit, floor: this.floor, x: r2(this.x), z: r2(this.z), tx: r2(p.x), tz: r2(p.z) });
+        if (hit) return this.landed(this.game.damagePlayer(p, AI.TENDRIL_DAMAGE, this, 'tendril'));
+        return;
+      }
+      case 'smash':
+        this.game.emitAll({ type: 'monster:attack', kind: 'smash', stage: 'strike', id: this.id, floor: this.floor, x: r2(this.x), z: r2(this.z), barrierId: a.barrierId });
+        this.game.spells.hitBarrier(a.barrierId);
+        return;
+    }
+  }
+
+  /** After an attack resolves on a wizard. */
+  landed(result) {
+    if (result === 'captured') this.banish('capture');
   }
 
   updateSearching(dt) {

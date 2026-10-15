@@ -54,3 +54,16 @@ export const worldToTile = (w) => Math.floor(w / TILE);
 export const yawFromDir = (dx, dz) => Math.atan2(-dx, -dz);
 /** Rotation for a prop whose model faces +z, so that it faces (dx, dz). */
 export const propRotFromDir = (dx, dz) => Math.atan2(dx, dz);
+
+/** Player health. */
+export const HP = {
+  MAX: 100,
+  CAPTURE_AT: 40, // a Monster hit on a wizard at or below this is a capture
+  CELL: 50, // prisoners stabilise at this
+  REGEN: 1, // per second, after REGEN_DELAY seconds without damage...
+  REGEN_DELAY: 8,
+  REGEN_CAP: 60, // ...up to this (only magic heals higher)
+};
+
+/** Lumos (F): a bright wide torch, at the cost of being seen 50% further away. */
+export const LUMOS = { range: 28, angle: 0.85, detection: 1.5 };
