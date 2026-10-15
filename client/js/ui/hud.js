@@ -103,7 +103,8 @@ export class HUD {
         const w = WIZARD_BY_ID[m.wizardId];
         const p = positions.get(m.id);
         const where = p ? roomName(p) : 'gone';
-        return `<li style="--wiz:${w?.color ?? '#555'}"><span class="dot"></span>${esc(m.name)} <span class="where">${esc(where)}</span></li>`;
+        const held = p?.cap ? ' <span class="held">HELD</span>' : p?.cg ? ' <span class="held">TAKEN</span>' : '';
+        return `<li style="--wiz:${w?.color ?? '#555'}"><span class="dot"></span>${esc(m.name)}${held} <span class="where">${esc(where)}</span></li>`;
       })
       .join('');
     if (html !== this._teamHtml) {
@@ -191,6 +192,13 @@ export class HUD {
     const el = $('hud-caption');
     el.textContent = text;
     this.flash(el, 'show', ms);
+  }
+
+  gameOver(show, isHost) {
+    $('gameover').classList.toggle('hidden', !show);
+    $('btn-retry').disabled = !isHost;
+    $('btn-to-lobby').disabled = !isHost;
+    $('gameover-wait').textContent = isHost ? '' : 'Waiting for the host to choose\u2026';
   }
 
   toggleJournal(open = !this.journalOpen) {

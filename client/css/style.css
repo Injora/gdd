@@ -477,6 +477,26 @@ input:focus { border-color: var(--gold); }
   100% { opacity: 0; }
 }
 
+/* Game over */
+.gameover {
+  background: radial-gradient(ellipse at center, rgba(70, 0, 6, 0.85), rgba(0, 0, 0, 0.97) 70%);
+  z-index: 30;
+}
+.gameover-inner { text-align: center; max-width: 640px; animation: gameover-in 2.4s ease-out; }
+.gameover h1 {
+  font-family: var(--display);
+  font-weight: 900;
+  letter-spacing: 0.22em;
+  font-size: clamp(1.6rem, 5vw, 3.2rem);
+  color: var(--blood-bright);
+  text-shadow: 0 0 40px rgba(212, 34, 44, 0.8);
+  margin: 0 0 12px;
+}
+.gameover p { font-style: italic; margin: 0 0 24px; }
+.gameover-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+@keyframes gameover-in { from { opacity: 0; transform: scale(1.06); } to { opacity: 1; transform: none; } }
+.hud-team .held { color: var(--blood-bright); font-family: var(--display); font-size: 0.7rem; letter-spacing: 0.15em; }
+
 /* ---------- Overlays ---------- */
 
 .overlay {

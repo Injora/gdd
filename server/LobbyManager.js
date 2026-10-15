@@ -4,6 +4,7 @@
 import { WIZARDS, WIZARD_BY_ID } from '../shared/wizards.js';
 import { MIN_PLAYERS, MAX_PLAYERS } from '../shared/constants.js';
 import { Game } from './Game.js';
+import { botName } from './names.js';
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 let botCounter = 0;
@@ -80,6 +81,10 @@ export class LobbyManager {
 
   handleConnection(socket) {
     const reply = (cb, payload) => typeof cb === 'function' && cb(payload);
+    const hostInGame = (fn) => (data) => {
+      const lobby = this.lobbyOf(socket);
+      if (lobby?.game && lobby.hostId === socket.id) fn(lobby, data ?? {});
+    };
     const hostOnly = (fn) => (data, cb) => {
       const lobby = this.lobbyOf(socket);
       if (!lobby || lobby.hostId !== socket.id || lobby.game) return reply(cb, { ok: false, error: 'Only the host can do that.' });
@@ -130,7 +135,7 @@ export class LobbyManager {
         holder.wizardId = null;
         me.wizardId = wizard.id;
         holder.wizardId = lobby.freeWizards()[0]?.id ?? null;
-        holder.name = this.botName(holder.wizardId);
+        holder.name = botName(holder.wizardId);
       } else {
         me.wizardId = wizard.id;
       }
@@ -178,6 +183,13 @@ export class LobbyManager {
     socket.on('p:interact', (data) => this.lobbyOf(socket)?.game?.onInteract(socket.id, data?.propId));
     socket.on('p:cancel', () => this.lobbyOf(socket)?.game?.onCancel(socket.id));
     socket.on('p:cast', (data) => this.lobbyOf(socket)?.game?.onCast(socket.id, data));
+    socket.on('p:ping', () => this.lobbyOf(socket)?.game?.onPing(socket.id));
+
+    // After a game over the host chooses: retry the phase, or back to the coven.
+    socket.on('game:restart', hostInGame((lobby, data) => {
+      if (data.mode === 'lobby') lobby.game.end();
+      else lobby.game.restartPhase();
+    }));
 
     // Debug overrides, only in covens created as solo tests or with ?debug=1.
     const debugGame = () => {
@@ -186,6 +198,8 @@ export class LobbyManager {
     };
     socket.on('debug:teleport', (data) => debugGame()?.debugTeleport(socket.id, data));
     socket.on('debug:husk', () => debugGame()?.debugHusk(socket.id));
+    socket.on('debug:mode', () => debugGame()?.debugMode(socket.id));
+    socket.on('debug:capture', () => debugGame()?.debugCapture(socket.id));
     socket.on('debug:wizard', (data) => debugGame()?.debugWizard(socket.id, data?.wizardId));
 
     socket.on('disconnect', () => this.leave(socket));
@@ -216,17 +230,12 @@ export class LobbyManager {
     if (!lobby.game) this.broadcast(lobby);
   }
 
-  botName(wizardId) {
-    const first = WIZARD_BY_ID[wizardId]?.name.split(' ')[0] ?? 'Shade';
-    return `${first} (bot)`;
-  }
-
   addBot(lobby) {
     const wizard = lobby.freeWizards()[0];
     if (!wizard || lobby.members.length >= MAX_PLAYERS) return;
     lobby.members.push({
       id: `bot-${++botCounter}`,
-      name: this.botName(wizard.id),
+      name: botName(wizard.id),
       wizardId: wizard.id,
       ready: true,
       isBot: true,
@@ -237,6 +246,7 @@ export class LobbyManager {
     lobby.game = new Game(this.io, lobby, () => {
       lobby.game = null;
       for (const m of lobby.members) m.ready = m.isBot;
+      this.io.to(lobby.room).emit('game:end');
       this.broadcast(lobby);
     });
     lobby.game.start();

@@ -1,5 +1,5 @@
 # SIX HEARTS: THE FORBIDDEN CONVERGENCE
-### Game Design Document · v0.3 (prototype)
+### Game Design Document · v0.4 (prototype)
 
 > *Seven wizards. One mansion. Six hearts that must stop beating.*
 
@@ -55,10 +55,13 @@ The Monster never kills. It **takes** wizards to a cell in the basement. The hor
 - Room names fade in as you enter a room, so players can match hints to places.
 - Destroying a Heart takes **2.5 seconds of channelling**. Destroyed Hearts burst into embers and are crossed out in the journal and on the HUD.
 - Examining a **decoy** gives a whisper. (Step 4: it also makes **noise**, which draws the Monster.)
-- **Capture (Step 4):** a Monster catch never kills. The victim is teleported into the **Basement Ritual Cell** behind an iron gate.
-  - A free teammate must reach the gate and **channel for 3 seconds** (Soham: 1.5s) to break the ritual lock. *Implemented in Step 3:* the gate swings open for 6 seconds, then re-seals, but never onto someone standing in it. Freeing prisoners arrives with captures in Step 4.
-  - Caught players can still talk (proximity voice comes later) and watch through the bars.
-  - **If every living wizard is in the Cell at the same time, it is Game Over.**
+- **Capture:** a lunge that lands never kills.
+  - The victim gets a 0.85s close-up of its screaming face, then a fade to black, and wakes in the **Basement Ritual Cell**. The gate re-seals.
+  - Prisoners can walk the Cell and watch through the bars.
+  - They can **call for help** with **G**: a marker visible through walls plus a spatial wail.
+  - They can **cast through the bars**; projectiles fly between them.
+  - A free teammate (human or bot) must reach the gate and **channel for 3s** (Soham: 1.5s) to break the lock. The gate opens for 6s and everyone held is freed. It never slams shut on someone standing in it.
+  - **If every wizard is held at the same time, it is Game Over: "The Ritual Consumes You".** The host chooses **Retry**, which restarts the current phase from the Foyer with your progress (Tome and Hearts) kept, or **Return to the coven**.
 - Destroying a Heart enrages the Monster and forces it into a **Hunt** toward the Heart's room.
 
 ### Phase III — The Forbidden Spell & Soul Merge (Step 5)
@@ -119,33 +122,31 @@ Numbers live in `shared/wizards.js` and are the single source of truth for both 
 
 ---
 
-## 6. The Monster: "The Keeper" (Step 4)
+## 6. The Monster: the Malphas Amalgam
 
-A tall, emaciated thing in the last lord's funeral clothes. It moves wrong.
+The last lord's Keeper: too tall for the doorways, gaunt and lopsided (one arm far longer than the other), in a tattered burial shroud. Its ribcage is open, and six heart-nodes pulse inside it. **One goes dark each time a mansion Heart is destroyed.** Its head is a pale, crooked skull with an unhinged jaw, pinpoint eyes, and hair hanging in curtains.
+
+### Uncanny motion (client)
+- **Stop-motion body:** limbs and head are re-posed at a quantised ~13 Hz while its position glides smoothly. It moves like a stop-motion nightmare.
+- **Doorway neck-snap:** at doorways it snaps its head 90° sideways and hunches its shoulders to fit through.
+- **Convulsions:** when Stunned (White) or Tormented (Black) it twitches its head, jaw and limbs violently. When idle it twitches occasionally.
+- **Hunting gait:** pitched forward with arms trailing behind. Peeking: leaning out sideways with a hand on the door frame.
+- **Retreating:** claws its way up into the ceiling.
 
 ### Senses
-- **Sight:** a cone, blocked by walls. A lit wand is visible from much farther away than a dark one.
-- **Hearing:** noise events with a loudness and position. Sprinting is loud, walking is medium, crouching is near-silent. Also loud: examining a decoy, destroying a Heart (very loud), casting.
-- **Menace gauge:** the Alien: Isolation approach. A hidden "director" keeps the Monster near the coven without cheating outright, and backs it off after a capture or a long chase.
+- **Sight:** a ~125° cone with line of sight. A lit wand is visible at 22u, a dark one at 10u, a crouched, dark wizard at 6u. While hunting it tracks its prey in every direction (30u).
+- **Noise:** carries to a radius. Sprinting carries 10u, any spellcast 14u, a decoy heirloom 8u (sends it to search there). A **dying Heart is felt anywhere** and sends it to hunt the destroyer.
+- **Being stared at:** a lit wand held on it for **1.5s** (within 14u, inside about 15°) makes it **duck out of sight** (55%) or **charge** (45%). With no cover nearby it charges.
 
-### States
-1. **Dormant** (Phase I).
-2. **Stalking:** paths to positions *just outside* players' light cones, preferring doorways and corners (peek behind a frame, withdraw). Plays footsteps behind the player. Never attacks from this state.
-3. **Hunting:** triggered by a loud noise, a sighting, or a Heart being destroyed. It sprints with jittery, stuttering animation (frame skips, limb snapping) and lunges at close range.
-4. **Searching:** goes to the last known position and sweeps nearby rooms.
-5. **Stunned / Retreating:** a reaction state for each counter-spell:
-   - *Wind:* physically flung 5 units, staggers.
-   - *White:* frozen and blinded for 3.5s.
-   - *Black:* clutches its head, shrieks, drops its target for 2s, visible through walls.
-   - *Anti-magic:* lunge rebounds off the shield, brief stagger.
-   - *Earth wall:* re-paths around it, or waits.
-   - *Water:* 40% slower.
-6. **Carrying:** after a catch, a short fade to black, then the victim wakes in the Cell. The Monster retreats for a while.
-
-### Presence cues (anything within 15 units)
-- Lights and the wand flicker or brown out.
-- The proximity heartbeat speeds up (60 to 160 bpm).
-- Film grain and vignette tighten. Ambience ducks.
+### States (server, `server/Monster.js`)
+| State | Behaviour |
+|---|---|
+| **Dormant** (before the Tome) | Not in the world. Every 35–75s (first time at 20–40s) it **haunts** a wizard: a silhouette 14–24u away at a corner or doorway, in view but out of the light. Its eyes glint through the fog. When a wand beam lands on it, it lingers about 0.3s (a lit glimpse) and then vanishes. It also fades on its own after 6s. It cannot be targeted. |
+| **Stalking** | Picks spots 12–22u from the nearest free wizard, preferring tiles no one can see, out of wand light, at doorways and corners. **Peeks** for 1.5–3s at those spots. Charges if a wizard comes within 8u in its view, and occasionally (30% every 7s while it sees prey) on its own. |
+| **Hunting** | Sprints at **4.4 u/s + 0.25 per destroyed Heart** (wizards sprint at 5.6 but tire). Within 2.4u: a 0.3s windup, then a lunge at 8 u/s. A catch within 1.4u **captures**; a Void shield **blocks** it (rebound plus stagger). After 3.5s without sight, or 40s of hunting, it switches to Searching. |
+| **Searching** | Goes to the last known position, **listens** for 2.5s, sweeps up to 3 nearby rooms, then returns to Stalking after 16s. Sight or noise restarts the hunt. |
+| **Retreating** | Flees and climbs into the ceiling (1s), then stays hidden **12–18s** and reappears out of sight. Triggered by: a capture; its **40 stagger HP** running out; or **three different spells within 5s** (combined elements). Psychic Torment and Sacred Bind also break an active chase (switching it to Searching). |
+| **Guarding** | While anyone is held, stalking goals favour the basement (65% from upstairs, 85% once down there). It prowls near the stair and Crypt but **never within 6u of the gate**, and still ventures upstairs to stalk. |
 
 ---
 
@@ -153,19 +154,34 @@ A tall, emaciated thing in the last lord's funeral clothes. It moves wrong.
 
 ### Visual
 - `FogExp2` black fog and a near-zero hemisphere fill. The wand spotlight is about 25° with soft edges and casts shadows from a hand offset, so shadows swing as you move.
-- **(Step 4)** Post-processing: film grain, vignette, chromatic aberration on scares, desaturation when caught, a lens-dirt bloom on fire.
+- **Post-processing** (`client/js/fx/PostFX.js`):
+  - film grain;
+  - a vignette that tightens as the Amalgam nears or stamina runs low;
+  - chromatic aberration on Black casts, lunges and the jumpscare;
+  - a lens warp and wider FOV from **terror**;
+  - desaturation while held in the Cell;
+  - a red flash and fade to black on capture.
+- **Lights Out:** within 15u of the Amalgam, wand lights and candles gutter and drop out. While it hunts nearby, your wand **cuts out for 0.3s** at random, causing panic flashes.
+- **Terror:** looking straight at it within 12u (with line of sight) builds terror, which warps the FOV and thickens the grain until you look away.
 - Procedural textures only: damask wallpaper with water damage, wainscot, planks, carpet runners, flagstones, oil portraits with hollow eyes, and a seven-pointed ritual circle.
-- Room titles fade in with letter-spacing, like a P.T.-style hallway card.
 
-### Audio (Step 4, Web Audio API, fully procedural)
-- **Ambient drone:** detuned low oscillators, filtered noise "air", and a slow LFO.
-- **Footsteps behind the player:** positional (PannerNode, HRTF) noise bursts with a lowpass. Sometimes they belong to the Monster and sometimes to nothing.
-- **Proximity heartbeat:** a two-thump envelope whose rate maps to Monster distance.
-- **Black Magic shriek:** stacked sawtooth formants, a pitch-bending waveshaper, and ring modulation.
-- **Heart tells:** a positional heartbeat, audible within about 4 units of an undestroyed Heart.
-- **Music box lullaby:** a sine-and-bell synth. Its minor version plays in Phase II and its major version in Phase IV.
-
----
+### Audio (Web Audio API, fully procedural: `client/js/audio/AudioEngine.js`)
+- **Ambience:** detuned low oscillators, filtered draughts, and a generated stone-house reverb.
+- **Proximity:**
+  - a **40–60 Hz sub-bass thrum** and a muffled **heartbeat (58→168 bpm)** that grow as the Amalgam closes from 18u to 3u;
+  - the heartbeat never drops below a racing pulse while you are being hunted.
+- **Spatial Amalgam cues (HRTF):** wet clicking footfalls with a bone click, and dragging claws.
+- **Hallucinations** while it stalks within 26u:
+  - formant-shifting **whispers** just behind your left or right ear;
+  - **three rapid ceiling knocks** overhead.
+- **Black Magic shriek:** an FM sawtooth screech, a dissonant square with vibrato, and bandpass-swept noise, distorted and fed into a long reverb tail. It also plays on awakening and (lower) on banishment.
+- **One-shots:**
+  - a distinct sound for each of the seven spells, plus fireball impacts;
+  - the gate clank and lock-grinding;
+  - the **Tome awakening gong** and the hunt stinger;
+  - the capture jumpscare, Heart destruction, and ping calls;
+  - your own footsteps on wood and stone.
+- **Heart tells:** once the Tome names them, undestroyed Hearts beat faintly within 7u.
 
 ## 8. The Mansion
 
@@ -203,16 +219,19 @@ A tall, emaciated thing in the last lord's funeral clothes. It moves wrong.
 | E (hold) | Interact: read, destroy, examine, use stairs, break the lock |
 | F | Wand light on or off. Darkness hides you from the Monster but blinds you too. |
 | J | Journal (the Tome's text and clues) |
+| G | Call for help: ping your location to the coven |
 | 1–7 (Phase III) | Archon element radial |
 | M (debug) | Top-down debug map. Click it to teleport. |
-| P (debug) | Spawn or remove the Test Monster Husk |
+| P (debug) | Cycle the monster: Husk → Haunt → Stalk → Hunt → Capture test → Auto |
+| K (debug) | Capture yourself instantly; if you're already held, break the lock |
 | 1–7 (debug) | Hot-swap your wizard (whoever held it gets yours) |
 
 ---
 
 ## 10. Debug & testing affordances
 - **Solo test** button: creates a coven with solo debug enabled and two bot teammates.
-- **Bots:** server-side teammates that follow the nearest human using A*, take the stairs when you change floor, sprint to catch up, and scan the dark when idle. A human picking a bot's wizard makes the bot switch. When a monster is within 16u and their spell is nearly ready, they **move into range and cast it**. Aegis bots shield when the monster closes on someone near them.
+- **Bots** rescue first: when anyone is held, they run to the Cell (taking the stairs) and break the lock. Against the Amalgam they cast only when it threatens someone, which means it is hunting or within 8u. A bot's name follows its wizard when swapped.
+- **Bots (movement):** server-side teammates that follow the nearest human using A*, take the stairs when you change floor, sprint to catch up, and scan the dark when idle. A human picking a bot's wizard makes the bot switch. When a monster is within 16u and their spell is nearly ready, they **move into range and cast it**. Aegis bots shield when the monster closes on someone near them.
 - **Test Monster Husk** (P, debug only): a slow, harmless husk with 100 HP that patrols, shambles after the nearest wizard it can see, and telegraphs a claw swipe (0.7s windup, every 3s). A floating panel shows HP and every status (Stunned, Tormented, Slowed, Burning, Knocked Back, Blocked, Visible Through Walls), along with damage numbers. It crumbles at 0 HP and re-forms after 3s. It uses the same `MonsterBody` as the Step 4 Monster, so every spell verified on it works on the real thing.
 - `?debug=1` shows the FPS, draw call and position HUD, enables the M map, and exposes `window.__game`.
 - `?join=CODE` pre-fills the join code (useful for shareable links).
@@ -226,5 +245,5 @@ A tall, emaciated thing in the last lord's funeral clothes. It moves wrong.
 | 1 | Project, server, client shell, GDD/Architecture | ✅ Done |
 | 2 | Mansion generator, rendering, movement, lobby, bots, Tome/Hearts/stairs interactions | ✅ Done |
 | 3 | Seven spells (server-side), cooldown HUD, procedural VFX, Earth barricades in collision and pathfinding, gate unlocking, Training Husk, bot casting, debug wizard swap | ✅ Done |
-| 4 | Monster AI, post-processing, procedural audio, Cell capture and rescue | ⏳ Next |
-| 5 | Forbidden Spell, the Archon, Hell Portal, Epilogue | ⏳ |
+| 4 | Malphas Amalgam (model, stop-motion, AI states, haunting, noise, stare), procedural audio, post-processing, Lights Out, terror, capture/rescue/ping/game over, bot rescue | ✅ Done |
+| 5 | Forbidden Spell, the Archon, Hell Portal, Epilogue | ⏳ Next |

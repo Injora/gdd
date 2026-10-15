@@ -88,7 +88,7 @@ function pushOut(x, z, r, minX, maxX, minZ, maxZ) {
   return [x, maxZ + r];
 }
 
-function resolve(world, floor, x, z, r) {
+function resolve(world, floor, x, z, r, ignoreDynamic = false) {
   const fl = world.floors[floor];
   const f = fl.f;
   for (let iter = 0; iter < 3; iter++) {
@@ -104,7 +104,7 @@ function resolve(world, floor, x, z, r) {
         const boxes = fl.cells.get(ty * f.w + tx);
         if (!boxes) continue;
         for (const b of boxes) {
-          if (b.prop?.collider.dynamic && !world.isActive(b.prop)) continue;
+          if (b.prop?.collider.dynamic && (ignoreDynamic || !world.isActive(b.prop))) continue;
           const res = pushOut(x, z, r, b.minX, b.maxX, b.minZ, b.maxZ);
           if (res) { [x, z] = res; moved = true; }
         }
@@ -127,9 +127,12 @@ export function moveCircle(world, floor, x, z, dx, dz, r) {
   return { x, z };
 }
 
-/** True if a circle at (x, z) overlaps any solid geometry. */
-export function overlapsSolid(world, floor, x, z, r) {
-  const [nx, nz] = resolve(world, floor, x, z, r);
+/**
+ * True if a circle at (x, z) overlaps any solid geometry. With
+ * `ignoreDynamic`, gates are ignored (spells fly between the Cell's bars).
+ */
+export function overlapsSolid(world, floor, x, z, r, { ignoreDynamic = false } = {}) {
+  const [nx, nz] = resolve(world, floor, x, z, r, ignoreDynamic);
   return Math.abs(nx - x) > 1e-3 || Math.abs(nz - z) > 1e-3;
 }
 

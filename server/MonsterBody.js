@@ -24,6 +24,7 @@ export class MonsterBody {
     this.maxHp = maxHp;
     this.hp = maxHp;
     this.dead = false;
+    this.hidden = false; // not in the world at all (dormant, retreated)
     this.moving = false;
     this.action = null;
     this.st = {
@@ -46,6 +47,9 @@ export class MonsterBody {
   }
 
   get t() { return this.game.time; }
+
+  /** Can spells and projectiles hit it right now? */
+  get targetable() { return !this.dead && !this.hidden; }
 
   isStunned() { return this.t < this.st.stunUntil; }
   isTormented() { return this.t < this.st.tormentUntil; }

@@ -124,6 +124,7 @@ export function buildMansion(map) {
     }
   }
   let activeFloor = 0;
+  let dread = 0; // 0..1: the Amalgam is near (Lights Out flicker)
   const flash = new THREE.PointLight(0xff2010, 0, 12, 1.5);
   root.add(flash);
 
@@ -208,6 +209,8 @@ export function buildMansion(map) {
     floorGroups,
     propObjects,
 
+    setDread(k) { dread = k; },
+
     setActiveFloor(floor) {
       activeFloor = floor;
       floorGroups.forEach((g, i) => { g.visible = i === floor; });
@@ -251,7 +254,9 @@ export function buildMansion(map) {
       }
       for (const f of flickers) {
         const n = Math.sin(t * 9 + f.seed) * 0.5 + Math.sin(t * 23.7 + f.seed * 2) * 0.3 + Math.sin(t * 3.1) * 0.2;
-        f.light.intensity = f.floor === activeFloor ? f.base * (0.8 + n * 0.18) : 0;
+        // Near the Amalgam, candles gutter and drop out erratically.
+        const gutter = dread > 0 ? (Math.random() < dread * 0.2 ? 0.04 : 1 - dread * 0.5 * Math.random()) : 1;
+        f.light.intensity = f.floor === activeFloor ? f.base * (0.8 + n * 0.18) * gutter : 0;
       }
       for (let i = transients.length - 1; i >= 0; i--) {
         const fx = transients[i];

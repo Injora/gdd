@@ -2,9 +2,9 @@
 // interactions, and the network glue for a running match.
 
 import * as THREE from 'three';
-import { createCollisionWorld, addBarrier, removeBarrier } from '/shared/collision.js';
+import { createCollisionWorld, addBarrier, removeBarrier, lineOfSight } from '/shared/collision.js';
 import { roomAt } from '/shared/mapgen.js';
-import { PHASE, INTERACT_RANGE, NET_SEND_RATE, FLOOR_Y } from '/shared/constants.js';
+import { PHASE, INTERACT_RANGE, NET_SEND_RATE, FLOOR_Y, STAMINA } from '/shared/constants.js';
 import { WIZARDS, WIZARD_BY_ID } from '/shared/wizards.js';
 import { PROP_LABELS } from '/shared/propdefs.js';
 import { buildMansion } from './world/MansionBuilder.js';
@@ -12,12 +12,18 @@ import { FirstPersonController } from './player/FirstPersonController.js';
 import { WizardAvatar } from './entities/WizardAvatar.js';
 import { MonsterAvatar } from './entities/MonsterAvatar.js';
 import { SpellFX } from './fx/SpellFX.js';
+import { PostFX } from './fx/PostFX.js';
+import { AudioEngine } from './audio/AudioEngine.js';
+import { AmalgamAvatar } from './entities/AmalgamAvatar.js';
 import { HUD } from './ui/hud.js';
 import { DebugMap } from './debug/DebugMap.js';
 
 const REMOTE_LIGHTS = 3;
 const WAND_INTENSITY = 70;
 const $ = (id) => document.getElementById(id);
+const clamp01 = (v) => Math.max(0, Math.min(1, v));
+/** World-space point for audio: (x, z) on `floor`, `h` units above it. */
+const wpos = (floor, x, z, h = 1.5) => ({ x, y: FLOOR_Y[floor] + h, z });
 
 export class GameClient {
   constructor({ canvas, net, init, debug }) {
@@ -50,6 +56,18 @@ export class GameClient {
     this.monsters = new Map();
     this.cooldown = { readyAt: 0, duration: 1 };
     this.recoil = 0;
+    this.audio = new AudioEngine();
+    this.terror = 0; // 0..1: staring at the Amalgam up close
+    this.chromaPulse = 0;
+    this.redPulse = 0;
+    this.lightCutUntil = 0;
+    this.nextCutAt = 0;
+    this.jumpscare = null;
+    this.captured = false;
+    this.gameIsOver = false;
+    this.heartTellAt = 0;
+    this.scrapeAt = 0;
+    this.pings = [];
 
     this.initRenderer();
     this.initScene();
@@ -59,6 +77,8 @@ export class GameClient {
       shake: (amount) => { this.shake = Math.max(this.shake, amount); },
     });
     this.fx.prewarm(this.renderer, this.camera);
+    this.post = new PostFX(this.renderer, this.scene, this.camera);
+    this.renderer.info.autoReset = false; // the composer renders several passes per frame
     for (const b of init.barriers ?? []) {
       addBarrier(this.world, b.floor, b.id, b.tiles);
       this.fx.barricade(b.id, b.floor, b.tiles, b.remaining);
@@ -111,6 +131,7 @@ export class GameClient {
       this.camera.aspect = window.innerWidth / window.innerHeight;
       this.camera.updateProjectionMatrix();
       r.setSize(window.innerWidth, window.innerHeight);
+      this.post?.resize();
     };
     window.addEventListener('resize', this._onResize);
   }
@@ -224,7 +245,12 @@ export class GameClient {
       seenMonsters.add(m.id);
       let av = this.monsters.get(m.id);
       if (!av) {
-        av = new MonsterAvatar(m, this.fx);
+        av = m.kind === 'amalgam'
+          ? new AmalgamAvatar(m, {
+            map: this.map, fx: this.fx, debug: this.debug,
+            onStep: (a, hunting) => this.audio.monsterStep(wpos(a.floor, a.x, a.z, 0.2), hunting),
+          })
+          : new MonsterAvatar(m, this.fx);
         this.scene.add(av.group);
         this.monsters.set(m.id, av);
       }
@@ -254,7 +280,7 @@ export class GameClient {
   }
 
   cast() {
-    if (this.hud.journalOpen) return;
+    if (this.hud.journalOpen || this.jumpscare || this.gameIsOver) return;
     const now = performance.now();
     if (now < this.cooldown.readyAt) {
       this.hud.denied();
@@ -306,6 +332,7 @@ export class GameClient {
         break;
       case 'tome':
         this.applyTome(e.tome, false);
+        this.audio.gong();
         break;
       case 'heart':
         this.destroyed.add(e.propId);
@@ -313,6 +340,10 @@ export class GameClient {
         this.hud.heartDestroyed(e.propId);
         this.hud.banner(`${e.name.toUpperCase()} IS SILENT`, `${e.by} destroyed it. ${e.count} of 6.`);
         this.shake = 0.6;
+        {
+          const prop = this.map.props[e.propId];
+          this.audio.heartDestroyed(wpos(prop.floor, prop.x, prop.z));
+        }
         break;
       case 'phase':
         this.setPhase(e.phase);
@@ -334,9 +365,12 @@ export class GameClient {
         if (e.caster !== this.selfId) this.avatars.get(e.caster)?.castPulse();
         if (e.wall) addBarrier(this.world, e.floor, e.id, e.wall.tiles);
         this.fx.onCast(e, this.localPos());
+        this.audio.spell(e.ability, wpos(e.floor, e.x, e.z));
+        if (e.ability === 'psychic_torment' && e.caster === this.selfId) this.chromaPulse = 1;
         break;
       case 'impact':
         this.fx.onImpact(e);
+        this.audio.fireImpact(wpos(e.floor, e.x, e.z));
         break;
       case 'barrier:end':
         removeBarrier(this.world, e.id);
@@ -346,6 +380,10 @@ export class GameClient {
         this.propState[e.propId] = { open: e.open };
         this.mansion.setGateOpen(e.propId, e.open);
         if (e.open && e.by) this.hud.whisper(`${e.by} broke the ritual lock. The cell gate swings open.`);
+        {
+          const gate = this.map.props[e.propId];
+          this.audio.gate(wpos(gate.floor, gate.x, gate.z), e.open);
+        }
         break;
 
       // ---- monsters (Training Husk now, the Keeper in Step 4)
@@ -353,16 +391,88 @@ export class GameClient {
         this.monsters.get(e.id)?.showDamage(e.amount, e.source);
         break;
       case 'monster:scream': {
-        // Scream hook: Step 4 plays the procedural shriek here.
+        // Psychic Torment: the multi-layered shriek echoes through the mansion.
         const c = this.controller;
-        const d = e.floor === c.floor ? Math.hypot(e.x - c.x, e.z - c.z) : Infinity;
-        if (d < 40) {
-          this.hud.caption('[ a shriek of agony tears through the walls ]', 2600);
-          this.shake = Math.max(this.shake, 0.5 * (1 - d / 40));
-        }
+        const d = e.floor === c.floor ? Math.hypot(e.x - c.x, e.z - c.z) : 30;
+        this.audio.shriek(wpos(e.floor, e.x, e.z, 2.8));
+        this.shake = Math.max(this.shake, 0.6 * clamp01(1 - d / 40));
+        if (d < 15) this.chromaPulse = Math.max(this.chromaPulse, 0.7);
         this.onScream?.(e);
         break;
       }
+      case 'monster:awaken':
+        setTimeout(() => {
+          const am = this.monsters.get('amalgam');
+          if (am) this.audio.shriek(wpos(am.floor, am.x, am.z, 2.8), { volume: 0.8, length: 2.4, pitch: 0.8 });
+        }, 2600);
+        break;
+      case 'monster:hunt':
+        if (e.targetId === this.selfId) {
+          this.audio.huntStinger();
+          this.shake = Math.max(this.shake, 0.3);
+        }
+        break;
+      case 'monster:haunt':
+        if (e.targetId === this.selfId) setTimeout(() => this.audio.hauntSting(), 400);
+        break;
+      case 'monster:banished': {
+        const am = this.monsters.get('amalgam');
+        if (am && e.reason !== 'capture') this.audio.shriek(wpos(am.floor, am.x, am.z, 2.8), { volume: 0.6, length: 1.2, pitch: 0.7 });
+        if (e.reason === 'combo' || e.reason === 'stagger') this.hud.caption('[ the Amalgam reels and flees into the dark ]', 2500);
+        break;
+      }
+      case 'monster:blocked':
+        this.fx.shieldHit(e.targetId);
+        if (e.targetId === this.selfId) this.hud.screen('blocked', 1);
+        break;
+
+      // ---- capture / rescue / game over
+      case 'capture':
+        if (e.id === this.selfId) this.startJumpscare(e);
+        else {
+          this.hud.whisper(`${e.name} has been dragged into the dark!`);
+          this.audio.shriek(wpos(e.floor, e.mx, e.mz, 2.5), { volume: 0.5, length: 0.8, pitch: 1.3 });
+        }
+        break;
+      case 'captured':
+        if (e.id === this.selfId) {
+          this.captured = true;
+          setTimeout(() => this.hud.banner('HELD IN THE RITUAL CELL', 'Press G to call for help. Your spells still pass between the bars.', 6000), 700);
+        } else {
+          this.hud.whisper(`${e.name} is held in the Basement Ritual Cell. Break the lock!`);
+        }
+        break;
+      case 'freed':
+        if (e.ids.includes(this.selfId)) {
+          this.captured = false;
+          this.hud.banner('THE LOCK BREAKS', `${e.by} came for you. Run.`, 3500);
+        } else {
+          this.hud.whisper(`${e.names.join(' and ')} ${e.names.length > 1 ? 'are' : 'is'} free.`);
+        }
+        break;
+      case 'gameover':
+        this.gameIsOver = true;
+        this.controller.enabled = false;
+        document.exitPointerLock?.();
+        this.hidePause();
+        this.hud.gameOver(true, e.hostId === this.selfId);
+        this.audio.shriek(null, { volume: 0.9, length: 3, pitch: 0.6 });
+        break;
+      case 'restart':
+        this.gameIsOver = false;
+        this.captured = false;
+        this.jumpscare = null;
+        this.controller.enabled = true;
+        this.hud.gameOver(false);
+        this.hud.banner('THE RITUAL BEGINS AGAIN', 'The Amalgam gives you a few heartbeats\u2019 head start.', 4500);
+        this.showPause('Click to continue');
+        break;
+      case 'ping':
+        this.addPing(e);
+        break;
+      case 'debug:mode':
+        this.hud.caption(`DEBUG \u00b7 monster mode: ${e.mode.toUpperCase()}`, 2500);
+        break;
       case 'husk:spawn':
         this.hud.whisper('A Test Monster Husk claws its way up through the floorboards. [P] to dismiss.');
         break;
@@ -376,7 +486,7 @@ export class GameClient {
         if (e.targetId === this.selfId) {
           this.hud.screen('hit', 1);
           this.shake = Math.max(this.shake, 0.5);
-          this.hud.whisper('The husk\u2019s claws rake across you. (Captures arrive with the Monster in Step 4.)');
+          this.hud.whisper('The husk\u2019s claws rake across you.');
         }
         break;
       case 'husk:blocked':
@@ -436,7 +546,13 @@ export class GameClient {
           this.cast();
           break;
         case 'KeyP':
-          if (this.debug) this.net.emit('debug:husk');
+          if (this.debug) this.net.emit('debug:mode');
+          break;
+        case 'KeyK':
+          if (this.debug) this.net.emit('debug:capture');
+          break;
+        case 'KeyG':
+          this.net.emit('p:ping');
           break;
         default:
           if (this.debug && /^Digit[1-7]$/.test(e.code)) {
@@ -450,12 +566,18 @@ export class GameClient {
     this._onKeyUp = (e) => {
       if (e.code === 'KeyE' && this.channel) this.net.emit('p:cancel');
     };
+    $('btn-retry').onclick = () => this.net.emit('game:restart', { mode: 'phase' });
+    $('btn-to-lobby').onclick = () => this.net.emit('game:restart', { mode: 'lobby' });
+    this._unlockAudio = () => this.audio.unlock();
+    window.addEventListener('keydown', this._unlockAudio);
+    window.addEventListener('pointerdown', this._unlockAudio);
+    this.controller.onStep = (info) => this.audio.playerStep(this.controller.floor === 1, info.speed);
     this._onClick = () => {
       if (!this.hud.journalOpen) this.controller.lock();
     };
     this._onLockChange = () => {
       if (this.controller.locked) this.hidePause();
-      else if (!this.hud.journalOpen) this.showPause('Paused');
+      else if (!this.hud.journalOpen && !this.gameIsOver) this.showPause('Paused');
     };
     window.addEventListener('keydown', this._onKeyDown);
     window.addEventListener('keyup', this._onKeyUp);
@@ -534,7 +656,9 @@ export class GameClient {
     this.time += dt;
     const c = this.controller;
 
+    this.renderer.info.reset();
     c.update(dt);
+    this.updateJumpscare(now);
     if (c.floor !== this.activeFloor) {
       this.activeFloor = c.floor;
       this.mansion.setActiveFloor(c.floor);
@@ -551,8 +675,24 @@ export class GameClient {
     // Wand light: a living, slightly unsteady flame.
     const flicker = 0.92 + Math.sin(this.time * 7.3) * 0.04 + Math.sin(this.time * 17.1) * 0.03 + (Math.random() - 0.5) * 0.03;
     const channelBoost = this.channel ? 1.4 + Math.sin(this.time * 28) * 0.15 : 1;
-    this.wandLight.intensity = this.lightOn ? WAND_INTENSITY * flicker * channelBoost : 0;
-    this.fillLight.intensity = this.lightOn ? 1.4 * flicker : 0.25;
+    // Lights Out: near the Amalgam the wand gutters; while it hunts, it cuts out.
+    const am = this.monsters.get('amalgam');
+    const amNear = am && !am.snap.hid && am.snap.f === c.floor;
+    const amDist = amNear ? Math.hypot(am.x - c.x, am.z - c.z) : Infinity;
+    const dread = clamp01((15 - amDist) / 15);
+    let wandK = flicker;
+    if (dread > 0) wandK *= Math.random() < dread * 0.18 ? 0.08 : 1 - dread * 0.35 * Math.random();
+    if (amNear && am.snap.state === 'hunting' && amDist < 22) {
+      if (now >= this.nextCutAt) {
+        this.lightCutUntil = now + 300;
+        this.nextCutAt = now + 900 + Math.random() * 1700;
+      }
+      if (now < this.lightCutUntil) wandK = 0.02;
+    }
+    this.mansion.setDread(dread);
+    this.wandLight.intensity = this.lightOn ? WAND_INTENSITY * wandK * channelBoost : 0;
+    this.fillLight.intensity = this.lightOn ? 1.4 * wandK : 0.25;
+    if (this.jumpscare) this.fillLight.intensity = 5; // its face, lit from the front
     this.wandTipMat.color.set(this.wizard.color).multiplyScalar(this.lightOn ? 1 : 0.2);
     // Cast recoil: the wand kicks up and back, the tip and light flare in the element colour.
     this.recoil = Math.max(0, this.recoil - dt * 4);
@@ -568,6 +708,9 @@ export class GameClient {
 
     for (const av of this.avatars.values()) av.update(dt, this.time, this.camera, c.floor);
     for (const m of this.monsters.values()) m.update(dt, this.time, c.floor);
+    am?.setHeartsLit(6 - this.destroyed.size);
+    this.updateHorror(dt, now, c, am, amNear, amDist, dread);
+    this.updatePings(dt);
 
     // Void shields: one dome per shielded wizard, following them.
     for (const [id, p] of this.positions) {
@@ -618,7 +761,7 @@ export class GameClient {
       this.debugMap.draw(c.floor, players, this.roster, this.heartIds, this.destroyed);
     }
 
-    this.renderer.render(this.scene, this.camera);
+    this.post.render(this.time);
 
     if (this.debug && (this._statsAt ?? 0) <= this.time) {
       this._statsAt = this.time + 0.25;
@@ -629,8 +772,155 @@ export class GameClient {
     }
   }
 
+  // ---- horror layer --------------------------------------------------------------
+
+  updateHorror(dt, now, c, am, amNear, amDist, dread) {
+    // Terror: staring at it up close warps the view.
+    let staring = false;
+    if (amNear && amDist < 12) {
+      const fx = -Math.sin(c.yaw), fz = -Math.cos(c.yaw);
+      const dx = am.x - c.x, dz = am.z - c.z;
+      staring = (dx * fx + dz * fz) / Math.max(amDist, 1e-3) > 0.9 && lineOfSight(this.map, c.floor, c.x, c.z, am.x, am.z);
+    }
+    this.terror = clamp01(this.terror + (staring ? dt * 0.45 : -dt * 0.3));
+    this.chromaPulse = Math.max(0, this.chromaPulse - dt * 1.6);
+    this.redPulse = Math.max(0, this.redPulse - dt * 0.7);
+    const lunging = amNear && amDist < 6 && (am.snap.act === 'windup' || am.snap.act === 'lunge');
+
+    const js = this.jumpscare ? (now - this.jumpscare.start) / 1000 : -1;
+    const fov = 72 + this.terror * 9 + (js >= 0 && js < 0.85 ? 18 : 0);
+    if (Math.abs(this.camera.fov - fov) > 0.05) {
+      this.camera.fov += (fov - this.camera.fov) * Math.min(1, dt * 8);
+      this.camera.updateProjectionMatrix();
+    }
+    const tired = 1 - c.stamina / STAMINA.max;
+    this.post.set({
+      grain: 0.05 + this.terror * 0.18 + dread * 0.06 + (this.captured ? 0.05 : 0),
+      vignette: clamp01(0.2 + dread * 0.45 + tired * 0.35 + this.terror * 0.2 + (this.captured ? 0.2 : 0)),
+      chroma: 0.0012 + this.terror * 0.007 + this.chromaPulse * 0.012 + (lunging ? 0.012 : 0),
+      warp: this.terror * 0.6,
+      desat: this.captured ? 0.55 : this.terror * 0.25,
+      red: this.redPulse * 0.8,
+      black: js > 0.7 ? clamp01((js - 0.7) / 0.25) : 0,
+    }, dt);
+
+    this.audio.update(dt, { x: this.camera.position.x, y: this.camera.position.y, z: this.camera.position.z, fx: -Math.sin(c.yaw), fz: -Math.cos(c.yaw) }, {
+      dist: amDist,
+      hunting: amNear && am.snap.state === 'hunting' && am.snap.tg === this.selfId,
+      stalking: amNear && am.snap.state === 'stalking',
+    });
+
+    // Disguised Hearts beat faintly when you're close (once the Tome has named them).
+    if (this.time >= this.heartTellAt) {
+      this.heartTellAt = this.time + 1.3;
+      for (const id of this.heartIds) {
+        if (this.destroyed.has(id)) continue;
+        const prop = this.map.props[id];
+        if (prop.floor !== c.floor) continue;
+        const d = Math.hypot(prop.x - c.x, prop.z - c.z);
+        if (d < 7) this.audio.heartTell(wpos(prop.floor, prop.x, prop.z, 1.4), (1 - d / 7) * 0.8);
+      }
+    }
+    // Grinding metal while you work the Cell's lock.
+    if (this.channel && this.channel.propId === this.map.ids.gate && this.time >= this.scrapeAt) {
+      this.scrapeAt = this.time + 0.35;
+      const gate = this.map.props[this.map.ids.gate];
+      this.audio.lockScrape(wpos(gate.floor, gate.x, gate.z));
+    }
+  }
+
+  startJumpscare(e) {
+    this.jumpscare = { start: performance.now(), ...e };
+    this.controller.enabled = false;
+    this.channel = null;
+    this.hud.progress(null);
+    this.audio.jumpscare();
+    this.redPulse = 1;
+    this.chromaPulse = 1.5;
+    this.shake = 1;
+    const am = this.monsters.get('amalgam');
+    if (am) {
+      am.x = e.mx;
+      am.z = e.mz;
+      am.yaw = e.myaw;
+      am.force('scream', 1.0);
+    }
+  }
+
+  /** 0.85 s locked onto its face, fade to black, wake up in the Cell. */
+  updateJumpscare(now) {
+    const js = this.jumpscare;
+    if (!js) return;
+    const k = (now - js.start) / 1000;
+    const am = this.monsters.get('amalgam');
+    if (am && k < 0.85) {
+      const face = am.face(this._face ??= new THREE.Vector3());
+      const fx = -Math.sin(js.myaw), fz = -Math.cos(js.myaw);
+      // Lunging into the lens: starts at arm's length, ends inches away.
+      const dist = 0.75 - Math.min(1, k / 0.6) * 0.38;
+      const jolt = (1 - k) * 0.05;
+      this.camera.position.set(face.x + fx * dist + (Math.random() - 0.5) * jolt, face.y - 0.06 + (Math.random() - 0.5) * jolt, face.z + fz * dist);
+      this.camera.lookAt(face);
+      // Light the face from the front (the wand light points the wrong way here).
+      this.fillLight.position.set(0, 0.15, -0.05);
+      this.fillLight.intensity = 5;
+    }
+    if ((k > 1.2 && this.captured) || k > 3) {
+      this.jumpscare = null;
+      this.fillLight.position.set(0.1, -0.05, -1.2);
+      this.controller.enabled = !this.gameIsOver;
+    }
+  }
+
+  addPing(e) {
+    const c = document.createElement('canvas');
+    c.width = 256;
+    c.height = 96;
+    const ctx = c.getContext('2d');
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 54px Cinzel, Georgia, serif';
+    ctx.fillStyle = e.captured ? '#ff3a3a' : '#ffd76a';
+    ctx.shadowColor = '#000';
+    ctx.shadowBlur = 10;
+    ctx.fillText('!', 128, 52);
+    ctx.font = '22px Georgia, serif';
+    ctx.fillText(e.name, 128, 86);
+    const tex = new THREE.CanvasTexture(c);
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+    sprite.scale.set(1.6, 0.6, 1);
+    sprite.position.set(e.x, FLOOR_Y[e.floor] + 2.4, e.z);
+    sprite.renderOrder = 1001;
+    this.scene.add(sprite);
+    this.pings.push({ sprite, tex, age: 0, floor: e.floor });
+    this.audio.ping(wpos(e.floor, e.x, e.z, 1.6));
+    if (e.id !== this.selfId) {
+      const where = roomAt(this.map, e.floor, e.x, e.z)?.name ?? (e.floor === 1 ? 'the basement' : 'a hallway');
+      this.hud.whisper(e.captured ? `${e.name} cries out from the Ritual Cell!` : `${e.name} calls from ${where}.`);
+    }
+  }
+
+  updatePings(dt) {
+    for (let i = this.pings.length - 1; i >= 0; i--) {
+      const p = this.pings[i];
+      p.age += dt;
+      p.sprite.visible = p.floor === this.controller.floor;
+      p.sprite.material.opacity = clamp01(1 - (p.age - 4) / 2) * (0.7 + Math.sin(p.age * 8) * 0.3);
+      if (p.age > 6) {
+        this.scene.remove(p.sprite);
+        p.tex.dispose();
+        p.sprite.material.dispose();
+        this.pings.splice(i, 1);
+      }
+    }
+  }
+
   dispose() {
     cancelAnimationFrame(this.raf);
+    window.removeEventListener('keydown', this._unlockAudio);
+    window.removeEventListener('pointerdown', this._unlockAudio);
+    this.audio.dispose();
+    this.post.dispose();
+    this.hud.gameOver(false);
     for (const [ev, fn] of Object.entries(this.handlers)) this.net.off(ev, fn);
     window.removeEventListener('keydown', this._onKeyDown);
     window.removeEventListener('keyup', this._onKeyUp);

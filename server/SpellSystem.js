@@ -60,6 +60,7 @@ export class SpellSystem {
     };
     this.handlers[ability.id].call(this, p, ability, dir, event);
     this.game.emitAll(event);
+    this.game.noise?.(p, 14, 'spell'); // magic is loud
     return { ok: true, event, cooldown };
   }
 
@@ -67,7 +68,7 @@ export class SpellSystem {
   coneTarget(p, a, dir) {
     let best = null;
     for (const m of this.game.monsters()) {
-      if (m.dead || m.floor !== p.floor) continue;
+      if (!m.targetable || m.floor !== p.floor) continue;
       const dx = m.x - p.x, dz = m.z - p.z;
       const d = Math.hypot(dx, dz);
       if (d > a.range + m.radius) continue;
@@ -230,14 +231,15 @@ export class SpellSystem {
         pr.x += sx;
         pr.z += sz;
         pr.traveled += Math.hypot(sx, sz);
-        const m = this.game.monsters().find((mm) => !mm.dead && mm.floor === pr.floor &&
+        const m = this.game.monsters().find((mm) => mm.targetable && mm.floor === pr.floor &&
           Math.hypot(mm.x - pr.x, mm.z - pr.z) < mm.radius + pr.a.projectileRadius);
         if (m) {
           m.damage(pr.a.damage, 'fire');
           m.burn(pr.a.burnDps, pr.a.burnDuration, pr.a.burnSlow);
           this.impact(pr, m.id);
           done = true;
-        } else if (pr.traveled >= pr.a.range || overlapsSolid(this.game.world, pr.floor, pr.x, pr.z, pr.a.projectileRadius)) {
+        } else if (pr.traveled >= pr.a.range ||
+          overlapsSolid(this.game.world, pr.floor, pr.x, pr.z, pr.a.projectileRadius, { ignoreDynamic: true })) {
           pr.x -= sx;
           pr.z -= sz;
           this.impact(pr, null);
@@ -252,7 +254,7 @@ export class SpellSystem {
       const z = this.zones[i];
       if (this.t >= z.until) { this.zones.splice(i, 1); continue; }
       for (const m of this.game.monsters()) {
-        if (m.dead || m.floor !== z.floor || Math.hypot(m.x - z.x, m.z - z.z) > z.r + m.radius * 0.5) continue;
+        if (!m.targetable || m.floor !== z.floor || Math.hypot(m.x - z.x, m.z - z.z) > z.r + m.radius * 0.5) continue;
         m.slow(z.a.slow, 0.25);
         m.wet(z.a.turnSlow, 0.25);
       }

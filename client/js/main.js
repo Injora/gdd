@@ -23,6 +23,13 @@ net.on('game:start', (init) => {
   });
 });
 
+// The host returned everyone to the coven after a game over.
+net.on('game:end', () => {
+  game?.dispose();
+  game = null;
+  lobby.showLobby();
+});
+
 net.on('disconnect', () => {
   if (game) {
     game.dispose();

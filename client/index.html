@@ -127,10 +127,24 @@
         <tr><td>E (hold)</td><td>Interact / destroy / read / break lock</td></tr>
         <tr><td>F</td><td>Wand light on / off</td></tr>
         <tr><td>J</td><td>Journal</td></tr>
+        <tr><td>G</td><td>Call for help (ping your location)</td></tr>
         <tr class="debug-only"><td>M</td><td>Debug map (click to teleport)</td></tr>
-        <tr class="debug-only"><td>P</td><td>Spawn / remove Test Monster Husk</td></tr>
+        <tr class="debug-only"><td>P</td><td>Cycle monster: Husk → Haunt → Stalk → Hunt → Capture → Auto</td></tr>
+        <tr class="debug-only"><td>K</td><td>Instant capture / break the lock</td></tr>
         <tr class="debug-only"><td>1 – 7</td><td>Hot-swap wizard</td></tr>
       </table>
+    </div>
+  </div>
+
+  <div id="gameover" class="overlay gameover hidden">
+    <div class="gameover-inner">
+      <h1>The Ritual Consumes You</h1>
+      <p>Every soul is held in the Cell. The Amalgam feeds.</p>
+      <div class="gameover-actions">
+        <button id="btn-retry" class="btn primary">Retry (restart phase)</button>
+        <button id="btn-to-lobby" class="btn ghost">Return to the coven</button>
+      </div>
+      <p id="gameover-wait" class="muted small-text"></p>
     </div>
   </div>
 

@@ -14,8 +14,13 @@ import { WIZARD_BY_ID } from '../shared/wizards.js';
 import { Bot } from './Bot.js';
 import { SpellSystem } from './SpellSystem.js';
 import { TrainingHusk } from './TrainingHusk.js';
+import { Monster } from './Monster.js';
+import { botName } from './names.js';
 
 const GATE_OPEN_TIME = 6;
+const CAPTURE_DELAY = 0.9; // the victim's jumpscare plays before the teleport
+const PING_COOLDOWN = 3;
+const DEBUG_MODES = ['husk', 'haunt', 'stalk', 'hunt', 'capture', 'auto'];
 
 const r2 = (v) => Math.round(v * 100) / 100;
 const r3 = (v) => Math.round(v * 1000) / 1000;
@@ -43,6 +48,8 @@ export class Game {
     this.cooldownScale = 1; // the Archon (Step 5) casts at ARCHON_COOLDOWN_SCALE
     this.spells = new SpellSystem(this);
     this.husk = null; // debug Training Husk
+    this.phaseBefore = null; // phase to restore on "Retry" after a game over
+    this.debugModeIdx = -1;
 
     this.players = new Map();
     this.bots = [];
@@ -67,10 +74,15 @@ export class Game {
         channel: null,
         cooldowns: {},
         shieldUntil: 0,
+        captured: false, // held in the Basement Ritual Cell
+        capturing: 0, // game time at which the jumpscare ends and the teleport happens
+        noiseAt: 0,
+        pingAt: 0,
       };
       this.players.set(m.id, p);
       if (m.isBot) this.bots.push(new Bot(this, p, this.bots.length));
     });
+    this.monster = new Monster(this);
   }
 
   // --- lifecycle -----------------------------------------------------------
@@ -133,9 +145,18 @@ export class Game {
     };
   }
 
-  /** Every hostile body spells can target (the Keeper joins in Step 4). */
+  /** Every hostile body in the game, visible or not. */
+  bodies() {
+    return [this.husk, this.monster].filter(Boolean);
+  }
+
+  /** Hostile bodies spells can currently hit. */
   monsters() {
-    return this.husk ? [this.husk] : [];
+    return this.bodies().filter((m) => m.targetable);
+  }
+
+  prisoners() {
+    return [...this.players.values()].filter((p) => p.captured);
   }
 
   snapshot() {
@@ -155,8 +176,10 @@ export class Game {
         mv: p.moving,
         ch: p.channel?.propId ?? null,
         sh: this.spells.isShielded(p),
+        cap: p.captured,
+        cg: !!p.capturing,
       })),
-      monsters: this.monsters().map((m) => m.snapshot()),
+      monsters: this.bodies().map((m) => m.snapshot()),
     };
   }
 
@@ -173,9 +196,10 @@ export class Game {
   step(dt) {
     this.time += dt;
     for (const bot of this.bots) if (this.players.has(bot.p.id)) bot.update(dt, this.time);
-    for (const m of this.monsters()) m.update(dt);
+    for (const m of this.bodies()) m.update(dt);
     this.spells.update(dt);
     for (const p of this.players.values()) if (p.channel) this.updateChannel(p);
+    this.updateCaptures();
     this.updateGate();
     this.io.to(this.room).emit('game:snap', this.snapshot());
   }
@@ -189,7 +213,7 @@ export class Game {
 
   onPlayerState(id, d) {
     const p = this.players.get(id);
-    if (!p || p.isBot || !d || d.tseq !== p.tseq) return; // stale state from before a teleport
+    if (!p || p.isBot || !d || d.tseq !== p.tseq || p.capturing) return; // stale, or frozen in a jumpscare
     const x = Number(d.x), z = Number(d.z);
     if (!Number.isFinite(x) || !Number.isFinite(z)) return;
 
@@ -209,6 +233,15 @@ export class Game {
     p.sprint = !!d.sp;
     p.light = !!d.li;
     p.moving = !!d.mv;
+    if (p.sprint && p.moving && this.time >= p.noiseAt) {
+      p.noiseAt = this.time + 0.5;
+      this.noise(p, 10, 'sprint');
+    }
+  }
+
+  /** Something loud happened at player p. `radius` = how far it carries. */
+  noise(p, radius, kind) {
+    for (const m of this.bodies()) m.hear?.(p, radius, kind);
   }
 
   teleport(p, x, z, floor, yaw) {
@@ -231,7 +264,7 @@ export class Game {
   onInteract(id, propId) {
     const p = this.players.get(id);
     const prop = this.props[propId];
-    if (!p || !prop?.interact || prop.floor !== p.floor) return;
+    if (!p || p.capturing || !prop?.interact || prop.floor !== p.floor) return;
     if (!this.inRange(p, prop, 0.75)) return this.whisper(p, 'You need to be closer.');
 
     switch (prop.interact) {
@@ -251,6 +284,7 @@ export class Game {
         } else {
           const line = DECOY_LINES[Math.floor(Math.random() * DECOY_LINES.length)];
           this.whisper(p, line.replace('{name}', `the ${PROP_LABELS[prop.kind] ?? prop.kind}`));
+          this.noise(p, 8, 'decoy'); // rattling heirlooms draws attention
         }
         break;
       }
@@ -304,15 +338,14 @@ export class Game {
 
   completeInteraction(p, prop) {
     if (prop.interact === 'gate') {
-      this.propState[prop.id] = { open: true };
-      this.gateCloseAt = this.time + GATE_OPEN_TIME;
-      this.emitAll({ type: 'gate', propId: prop.id, open: true, by: p.name });
+      this.openGate(p.name);
       return;
     }
     if (prop.interact === 'tome' && !this.tomeReadBy) {
       this.tomeReadBy = p.name;
       this.setPhase(PHASE.HEARTS);
       this.emitAll({ type: 'tome', by: p.name, tome: this.tomeInfo() });
+      this.monster.awaken();
       return;
     }
     const heart = this.heartByProp.get(prop.id);
@@ -328,6 +361,7 @@ export class Game {
         count: this.destroyed.size,
       });
       if (this.destroyed.size === HEART_COUNT) this.setPhase(PHASE.CONVERGENCE);
+      this.noise(p, Infinity, 'heart'); // the Amalgam feels every heart die
     }
   }
 
@@ -335,7 +369,7 @@ export class Game {
 
   onCast(id, d) {
     const p = this.players.get(id);
-    if (!p || p.isBot) return;
+    if (!p || p.isBot || p.capturing) return;
     if (p.channel) this.cancelChannel(p);
     const res = this.spells.cast(p, Number(d?.yaw), Number(d?.pitch));
     const ability = WIZARD_BY_ID[p.wizardId]?.ability;
@@ -374,8 +408,12 @@ export class Game {
     for (const o of [p, holder]) {
       if (!o) continue;
       o.cooldowns = {};
+      if (o.isBot) o.name = botName(o.wizardId);
       const m = this.lobby.members.find((mm) => mm.id === o.id);
-      if (m) m.wizardId = o.wizardId;
+      if (m) {
+        m.wizardId = o.wizardId;
+        m.name = o.name;
+      }
     }
     this.emitAll({ type: 'roster', players: this.roster() });
   }
@@ -391,6 +429,161 @@ export class Game {
     if (blocked) return; // never slam it shut on someone
     this.propState[gateId] = { open: false };
     this.emitAll({ type: 'gate', propId: gateId, open: false });
+  }
+
+  // --- capture, rescue, game over ------------------------------------------------
+
+  /** The Amalgam's lunge landed. Returns false if p can't be taken. */
+  capture(p, monster) {
+    if (!p || p.captured || p.capturing) return false;
+    p.capturing = this.time + CAPTURE_DELAY;
+    if (p.channel) this.cancelChannel(p);
+    this.emitAll({
+      type: 'capture', id: p.id, name: p.name,
+      floor: monster.floor, mx: r2(monster.x), mz: r2(monster.z), myaw: r3(monster.yaw),
+    });
+    return true;
+  }
+
+  updateCaptures() {
+    for (const p of this.players.values()) {
+      if (!p.capturing || this.time < p.capturing) continue;
+      p.capturing = 0;
+      p.captured = true;
+      this.closeGate();
+      const held = this.prisoners().length - 1;
+      const spot = this.map.cell.points[held % this.map.cell.points.length];
+      this.teleport(p, spot.x, spot.z, this.map.cell.floor, this.map.cell.yaw);
+      this.emitAll({ type: 'captured', id: p.id, name: p.name });
+      this.checkGameOver();
+    }
+  }
+
+  openGate(by) {
+    const gateId = this.map.ids.gate;
+    this.propState[gateId] = { open: true };
+    this.gateCloseAt = this.time + GATE_OPEN_TIME;
+    this.emitAll({ type: 'gate', propId: gateId, open: true, by });
+    const freed = this.prisoners();
+    for (const p of freed) p.captured = false;
+    if (freed.length) this.emitAll({ type: 'freed', ids: freed.map((p) => p.id), names: freed.map((p) => p.name), by });
+  }
+
+  closeGate() {
+    const gateId = this.map.ids.gate;
+    if (!this.propState[gateId]?.open) return;
+    this.propState[gateId] = { open: false };
+    this.emitAll({ type: 'gate', propId: gateId, open: false });
+  }
+
+  checkGameOver() {
+    if (this.phase === PHASE.GAMEOVER || this.players.size === 0) return;
+    const free = [...this.players.values()].filter((p) => !p.captured && !p.capturing);
+    if (free.length) return;
+    this.phaseBefore = this.phase;
+    this.setPhase(PHASE.GAMEOVER);
+    this.emitAll({ type: 'gameover', hostId: this.lobby.hostId });
+  }
+
+  /** "Retry": everyone back to the Foyer, the phase they died in resumes. */
+  restartPhase() {
+    if (this.phase !== PHASE.GAMEOVER) return;
+    let i = 0;
+    for (const p of this.players.values()) {
+      p.captured = false;
+      p.capturing = 0;
+      p.shieldUntil = 0;
+      const sp = this.map.spawn.points[i++ % this.map.spawn.points.length];
+      this.teleport(p, sp.x, sp.z, this.map.spawn.floor, this.map.spawn.yaw);
+    }
+    this.closeGate();
+    this.setPhase(this.phaseBefore ?? PHASE.HEARTS);
+    if (this.phase === PHASE.TOME) this.monster.resume();
+    else this.monster.hideFor(10);
+    this.emitAll({ type: 'restart' });
+  }
+
+  onPing(id) {
+    const p = this.players.get(id);
+    if (!p || this.time < p.pingAt) return;
+    p.pingAt = this.time + PING_COOLDOWN;
+    this.emitAll({ type: 'ping', id: p.id, name: p.name, floor: p.floor, x: r2(p.x), z: r2(p.z), captured: p.captured });
+  }
+
+  /** Debug P: cycle Husk → Haunt → Stalk → Hunt → Capture test → Auto. */
+  debugMode(id) {
+    const p = this.players.get(id);
+    if (!p) return;
+    this.debugModeIdx = (this.debugModeIdx + 1) % DEBUG_MODES.length;
+    const mode = DEBUG_MODES[this.debugModeIdx];
+    const m = this.monster;
+    if (this.husk && mode !== 'husk') {
+      this.husk = null;
+      this.emitAll({ type: 'husk:despawn' });
+    }
+    m.debugHeld = mode === 'husk' || mode === 'haunt';
+    switch (mode) {
+      case 'husk':
+        m.hidden = true;
+        m.setState('dormant');
+        m.nextHauntAt = Infinity;
+        if (!this.husk) this.debugHusk(id);
+        break;
+      case 'haunt':
+        m.hidden = true;
+        m.setState('dormant');
+        m.startHaunt(p);
+        break;
+      case 'stalk':
+        if (m.hidden || ['dormant', 'haunt', 'retreating'].includes(m.state)) m.place(m.hiddenSpot(p.floor, 14, 24));
+        m.hidden = false;
+        m.setState('stalking');
+        break;
+      case 'hunt':
+        if (m.hidden || ['dormant', 'haunt', 'retreating'].includes(m.state)) {
+          m.place(m.hiddenSpot(p.floor, 10, 18));
+          m.hidden = false;
+          m.setState('stalking');
+        }
+        m.hunt(p, 'debug');
+        break;
+      case 'capture': {
+        const fx = -Math.sin(p.yaw), fz = -Math.cos(p.yaw);
+        let at = { x: p.x, z: p.z };
+        for (let d = 3; d >= 1.2; d -= 0.3) {
+          if (!overlapsSolid(this.world, p.floor, p.x + fx * d, p.z + fz * d, m.radius)) { at = { x: p.x + fx * d, z: p.z + fz * d }; break; }
+        }
+        m.place({ ...at, floor: p.floor });
+        m.yaw = p.yaw + Math.PI;
+        m.hidden = false;
+        m.setState('stalking');
+        m.hunt(p, 'debug');
+        m.lungeReadyAt = 0;
+        break;
+      }
+      case 'auto':
+        m.debugHeld = false;
+        m.nextHauntAt = this.time + 30;
+        m.resume();
+        break;
+    }
+    this.emitAll({ type: 'debug:mode', mode });
+  }
+
+  /** Debug K: capture yourself instantly, or (if held) break the lock. */
+  debugCapture(id) {
+    const p = this.players.get(id);
+    if (!p) return;
+    if (p.captured) {
+      this.openGate(`${p.name} (debug)`);
+      return;
+    }
+    const m = this.monster;
+    m.place({ x: p.x - Math.sin(p.yaw) * 1.2, z: p.z - Math.cos(p.yaw) * 1.2, floor: p.floor });
+    m.yaw = p.yaw + Math.PI;
+    m.hidden = false;
+    if (m.state === 'dormant' || m.state === 'haunt') m.setState('stalking');
+    if (this.capture(p, m)) m.banish('capture');
   }
 
   setPhase(phase) {

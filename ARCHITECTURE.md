@@ -10,7 +10,7 @@ npm test             # map generator (60 seeds), spells/status effects, end-to-e
 npm run verify:browser   # headless Chrome: casts all 7 spells at the Husk, checks errors + FPS
 ```
 
-Open `http://localhost:3666/?debug=1` and click **Solo test** to play with two bots. In debug, **P** spawns the Test Monster Husk and **1–7** hot-swap your wizard. For real co-op, one player clicks **Summon a Coven** and the others **Join** with the 4-letter code. Use the LAN URL the server prints so other machines can connect.
+Open `http://localhost:3666/?debug=1` and click **Solo test** to play with two bots. In debug, **P** cycles the monster (Husk → Haunt → Stalk → Hunt → Capture test → Auto), **K** captures/frees you, and **1–7** hot-swap your wizard. For real co-op, one player clicks **Summon a Coven** and the others **Join** with the 4-letter code. Use the LAN URL the server prints so other machines can connect.
 
 ---
 
@@ -35,9 +35,11 @@ server/
   LobbyManager.js         covens: create/join codes, wizard picks, bots, ready, start
   Game.js                 one running match: authoritative state, 20 Hz tick, interactions
   SpellSystem.js          casts, cooldowns, targeting, projectiles, puddles, barricades, shields
-  MonsterBody.js          shared body + status effects for every hostile (Husk now, Keeper in Step 4)
+  MonsterBody.js          shared body + status effects for every hostile
+  Monster.js              the Malphas Amalgam: dormant/haunt/stalk/hunt/search/retreat/guard AI
   TrainingHusk.js         debug dummy: patrol, shamble, telegraphed swipe, crumble/re-form
-  Bot.js                  bot teammate brain (follow/engage, A*, stairs, spell casting)
+  Bot.js                  bot teammate brain (rescue, defend, engage, follow; A*, stairs)
+  names.js                bot display names
 shared/                   ← imported by BOTH server and browser; no Node/DOM APIs
   constants.js            tile size, speeds, ranges, phases, yaw convention
   wizards.js              the seven wizards + ability numbers (balance source of truth)
@@ -60,14 +62,18 @@ client/
   js/player/FirstPersonController.js  pointer-lock FPS movement
   js/entities/WizardAvatar.js         remote teammate model + wand spotlight + cast recoil
   js/entities/MonsterAvatar.js        husk model, status panel, damage numbers, reveal overlay
+  js/entities/AmalgamAvatar.js        the Amalgam: procedural model, 13 Hz stop-motion, door neck-snap
   js/fx/SpellFX.js        all spell VFX, particles, pooled spell lights, hex shield shader
+  js/fx/PostFX.js         composer: grain, vignette, chromatic aberration, warp, desat, red, fade
+  js/audio/AudioEngine.js procedural Web Audio: drone, sub-bass, heartbeat, HRTF cues, shriek, SFX
   js/debug/DebugMap.js    top-down map (M), click-to-teleport in solo debug
 test/
   mapgen.test.js          determinism + 60-seed validity/reachability
   spells.test.js          cooldowns ×7, every status, barricade collision/pathing, knockback clamp, shields, gate
+  monster.test.js         AI states, haunting, noise, stare, capture → Cell, rescue, game over, bot rescue, debug
   server.test.js          full lobby → tome → 6 hearts → convergence → stairs over sockets
 scripts/
-  verify-browser.mjs      headless Chrome run of all 7 spells (screenshots → verify-output/)
+  verify-browser.mjs      headless Chrome: 7 spells, haunting, capture, Cell, bot rescue, hunt, audio, FPS
 ```
 
 ---
@@ -102,14 +108,19 @@ scripts/
 | C→S | `p:interact` | `{ propId }` |
 | C→S | `p:cancel` | — (released E) |
 | C→S | `p:cast` | `{ yaw, pitch }` (origin is always the server's copy of the caster) |
+| C→S | `p:ping` | call for help (3s cooldown) |
+| C→S | `game:restart` (host) | `{ mode: 'phase' \| 'lobby' }` after a game over |
+| S→C | `game:end` | the game closed; back to the coven screen |
 | S→C | `game:cooldown` | `{ ok, ability, readyIn, duration?, reason? }`, reply to the caster |
 | C→S | `debug:teleport` | `{ x, z, floor, yaw }` |
 | C→S | `debug:husk` | spawn/remove the Training Husk ~4u ahead |
+| C→S | `debug:mode` | P: cycle Husk → Haunt → Stalk → Hunt → Capture test → Auto |
+| C→S | `debug:capture` | K: capture yourself; if held, break the lock |
 | C→S | `debug:wizard` | `{ wizardId }` hot-swap (the previous holder takes yours) |
-| S→C | `game:snap` | `{ t, phase, players: [{ id, x, z, f, yaw, pitch, cr, sp, li, mv, ch, sh }], monsters: [{ id, kind, x, z, f, yaw, hp, maxHp, st[], mv, act, dead }] }` @ 20 Hz |
+| S→C | `game:snap` | `{ t, phase, players: [{ id, x, z, f, yaw, pitch, cr, sp, li, mv, ch, sh, cap, cg }], monsters: [{ id, kind, x, z, f, yaw, hp, maxHp, st[], mv, act, dead, state?, hid?, tg? }] }` @ 20 Hz |
 | S→C | `game:channel` | `{ propId \| null, duration, done? }` |
 | S→C | `game:teleport` | `{ x, z, floor, yaw, tseq }` |
-| S→C | `game:event` | `whisper`, `journal`, `tome`, `heart`, `phase`, `left`, `roster`, `gate`, `cast`, `impact`, `barrier:end`, `monster:damage`, `monster:scream`, `husk:spawn/despawn/crumble/revive/hit/blocked/miss` |
+| S→C | `game:event` | `whisper`, `journal`, `tome`, `heart`, `phase`, `left`, `roster`, `gate`, `cast`, `impact`, `barrier:end`, `monster:damage`, `monster:scream`, `husk:spawn/despawn/crumble/revive/hit/blocked/miss`, `monster:awaken/haunt/vanish/hunt/banished/blocked`, `capture`, `captured`, `freed`, `gameover`, `restart`, `ping`, `debug:mode` |
 
 `debug:*` commands are honoured only in covens created with **Solo test** or from a `?debug=1` page (`lobby.debug`).
 
@@ -131,6 +142,28 @@ SpellSystem.update(dt): projectiles (substepped, impact on monster/solid) → `i
 - **Barricades** go through `addBarrier`/`removeBarrier` in `shared/collision.js`. They add full-tile colliders *and* bump `floor.dyn[]`, which `isPassable` treats as blocked, so players, bots and monsters collide with them and A* routes around them. Clients apply the same barrier from the `cast` event, so their local collision matches the server's.
 - **Shields:** `p.shieldUntil` on each player, mirrored to clients as `sh` in snapshots, which drive the dome visuals.
 - **Bots** call the same `SpellSystem.cast()`. They engage a monster within 16u when their spell is nearly ready.
+
+### The Amalgam (Step 4)
+
+- `server/Monster.js` extends `MonsterBody`, so every spell status works on it unchanged.
+- **State diagram:** see the header comment in `Monster.js`.
+- **Each tick:**
+  - `updateStatus` handles burn and knockback.
+  - Stare detection runs, then the update for the current state.
+  - `travelTo()` follows A* paths and takes the stairs when its goal is on the other floor.
+  - `Game.noise(p, radius, kind)` → `hear()` reacts to sprinting players (`p:state.sp`), every successful cast, decoys and Heart destruction (radius ∞).
+- **Combined elements:** every effect calls `noteHit(source)`. Three distinct sources within 5s → `banish('combo')`. Its 40 HP is a *stagger* pool: at 0 it banishes instead of dying.
+- **Capture pipeline:**
+  - `Game.capture(p, monster)` sets `p.capturing` and emits `capture`; the victim's client plays the jumpscare.
+  - After 0.9s `updateCaptures()` teleports the victim into `map.cell.points`, sets `p.captured` and closes the gate. Then `checkGameOver()`: all held → `GAMEOVER`.
+  - `openGate()` frees every prisoner.
+  - `restartPhase()` (host "Retry") resets everyone to the Foyer, restores the previous phase, and hides the Amalgam for 10s.
+- **Targeting:**
+  - `Game.bodies()` is every hostile.
+  - `Game.monsters()` filters to `targetable` ones, i.e. not hidden, dormant or haunting. Spells and bots only see those.
+- **Client:**
+  - **Horror layer:** `GameClient.updateHorror()` derives `dread` (distance ≤ 15u), `terror` (staring), light cuts and hunt state. These drive `PostFX.set()`, `MansionBuilder.setDread()`, the wand light and `AudioEngine.update()`.
+  - **Audio:** the `AudioContext` is created/resumed on the first key or pointer press.
 
 ### Channels (hold-to-interact)
 `p:interact` starts a channel on the server (`CHANNEL.tome = 2s`, `heart = 2.5s`, `gate = 3s`, divided by the wizard's `passive.gateUnlockSpeed`, so Soham takes 1.5s). Each tick the server cancels the channel if the player leaves range (+1 unit of slack) and completes it once the time is up. Clients only draw the progress bar.
@@ -179,6 +212,7 @@ SpellSystem.update(dt): projectiles (substepped, impact on monster/solid) → `i
 
 - Per floor: one `InstancedMesh` each for walls (only wall tiles next to floor), room floors, corridor carpet, ceilings, door headers and posts. Roughly 20 draw calls for the level before props.
 - Props are small primitive groups (built in `props.js`) with shared materials. Curio props get a `userData.fx(t, ctx)` animator. The tell is only shown once `revealHearts()` has been called with that prop's id.
+- **Post-processing:** RenderPass → OutputPass (tone mapping + sRGB) → one horror ShaderPass. With vsync off in headless Chrome the hunt stays above ~330 fps on the dev machine.
 - **Light budget is fixed:** 1 hemisphere, 1 local wand spot (shadowed) + 1 fill point, 3 pooled teammate spots, up to 3 static candle points, 1 burst flash, 3 pooled spell lights (fireball, scorch, Sacred flash). `SpellFX.prewarm()` compiles every spell material at load, so a spell's first cast doesn't hitch. Lights are never added or removed during play (avoiding shader recompiles), and inactive ones sit at intensity 0. Floors not in view are hidden.
 - Tone mapping is ACES Filmic, fog is black `FogExp2(0.075)`. Measured at about 120 fps in Chrome on the dev machine (DPR capped at 1.75). With vsync off in headless Chrome (Apple M4, 1280×720), the frame rate stays between about 250 and 670 fps while spell effects play (`npm run verify:browser`).
 
@@ -189,5 +223,5 @@ SpellSystem.update(dt): projectiles (substepped, impact on monster/solid) → `i
 | Step | Where it plugs in |
 |---|---|
 | **3 · Abilities** | ✅ Done. See *Spells* above. |
-| **4 · Monster** | Add `server/Monster.js` **extending `MonsterBody`** (state machine using `findPath`, `lineOfSight`, `stepToward`) and return it from `Game.monsters()`. Spells, the snapshot `monsters[]`, `MonsterAvatar` status visuals and the scream hook (`GameClient.onScream`) then work unchanged. Add noise events from `p:state` (`sp`), decoys and Heart destruction. Capture calls `teleport()` to `map.cell.points`, and the gate channel sets `propState[gate].open` (clients already animate it with `mansion.setGateOpen`). Add `client/js/audio/` (Web Audio graph) and `client/js/fx/PostFX.js` (grain, vignette, flicker). |
-| **5 · Archon** | A `PHASE.ARCHON` branch in `Game.tick`: merge players into one entity driven by host input, apply `ARCHON_COOLDOWN_SCALE`, and add a portal entity in `map.ids.altarRoom`. The epilogue is a client-side scene and does not need the mansion's horror lighting rig. |
+| **4 · Monster** | ✅ Done. See *The Amalgam* above. |
+| **5 · Archon** | The altar's `CONVERGENCE` branch in `Game.onInteract` starts the group channel. Then a `PHASE.ARCHON` branch in `Game.step`: merge players into one entity driven by host input, apply `ARCHON_COOLDOWN_SCALE`, and add a portal entity in `map.ids.altarRoom`. The epilogue is a client-side scene and does not need the mansion's horror lighting rig. |
