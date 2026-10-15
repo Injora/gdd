@@ -27,7 +27,6 @@ export const STATUS_LABELS = {
   reveal: ['VISIBLE THROUGH WALLS', '#c58cff'],
 };
 
-const DAMAGE_COLORS = { fire: '#ff8a3a', water: '#6ad0ff', earth: '#b8d070' };
 
 function sigilTexture() {
   const c = document.createElement('canvas');
@@ -87,7 +86,6 @@ export class MonsterAvatar {
     this.deathK = 0;
     this.blockFlash = 0;
     this.labelKey = '';
-    this.damageNumbers = [];
 
     this.skin = new THREE.MeshStandardMaterial({ color: 0x5e5a52, roughness: 0.9 });
     const rag = new THREE.MeshStandardMaterial({ color: 0x15110f, roughness: 1, side: THREE.DoubleSide });
@@ -256,22 +254,8 @@ export class MonsterAvatar {
     tex.needsUpdate = true;
   }
 
-  showDamage(amount, source) {
-    const d = textSprite(128, 64, 0.9);
-    const { ctx, tex } = d;
-    ctx.font = 'bold 44px Cinzel, Georgia, serif';
-    ctx.textAlign = 'center';
-    ctx.lineWidth = 6;
-    ctx.strokeStyle = '#000';
-    const text = `-${Math.round(amount)}`;
-    ctx.strokeText(text, 64, 46);
-    ctx.fillStyle = DAMAGE_COLORS[source] ?? '#ff4040';
-    ctx.fillText(text, 64, 46);
-    tex.needsUpdate = true;
-    d.sprite.position.set((Math.random() - 0.5) * 0.6, 2.5, (Math.random() - 0.5) * 0.6);
-    this.group.add(d.sprite);
-    this.damageNumbers.push({ ...d, age: 0 });
-  }
+  /** A hit: the number floats up from ui/DamageNumbers; the husk just takes it. */
+  showDamage() {}
 
   blocked() { this.blockFlash = 1; }
 
@@ -367,20 +351,6 @@ export class MonsterAvatar {
       if (tormented && Math.random() < 0.7) {
         this.fx.glow.emit(wx + (Math.random() - 0.5) * 0.4, wy + 2.2 + Math.random() * 0.3, wz + (Math.random() - 0.5) * 0.4,
           (Math.random() - 0.5) * 2, Math.random(), (Math.random() - 0.5) * 2, 0.5, VIOLET, 0, 2);
-      }
-    }
-
-    // Damage numbers
-    for (let i = this.damageNumbers.length - 1; i >= 0; i--) {
-      const d = this.damageNumbers[i];
-      d.age += dt;
-      d.sprite.position.y += dt * 0.9;
-      d.sprite.material.opacity = Math.max(0, 1 - d.age / 1.2);
-      if (d.age > 1.2) {
-        this.group.remove(d.sprite);
-        d.tex.dispose();
-        d.sprite.material.dispose();
-        this.damageNumbers.splice(i, 1);
       }
     }
   }

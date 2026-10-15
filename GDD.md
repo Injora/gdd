@@ -1,5 +1,5 @@
 # SEVEN HEARTS: THE FORBIDDEN CONVERGENCE
-### Game Design Document · v2.0 (prototype)
+### Game Design Document · v3.0 (prototype)
 
 > *Seven wizards. Seven Sins. Seven hearts that must stop beating.*
 
@@ -7,7 +7,7 @@
 
 ## 1. High concept
 
-A 3–4 player online co-op survival horror game played in first person in the browser. A coven of wizards enters a procedurally generated Gothic mansion in near-total darkness. They find and read a forbidden Tome, which wakes the mansion's Keeper (the Monster), an unkillable stalker that locks on to the first wizard it sees. Then, across two stories, they hunt down seven Hearts disguised as ordinary heirlooms, break the wards that seal each one, and slay the Demon of the Seven Deadly Sins that erupts from it, locked in a room with it. Finally they cast a spell that fuses their bodies into a single seven-element being, the **Archon**, to drag the Monster into Hell.
+A 3–4 player online co-op survival horror game played in first person in the browser. A coven of wizards enters a procedurally generated Gothic mansion in near-total darkness. They find and read a forbidden Tome, which wakes the mansion's Keeper (the Monster), an unkillable stalker that locks on to the first wizard it sees. Then, across two stories, they hunt down seven Hearts, one in each Sin's room, do the Sin's three-part task that seals each one, and slay the Demon of the Seven Deadly Sins that erupts from it, locked in a room with it. Finally they cast a spell that fuses their bodies into a single seven-element being, the **Archon**, to drag the Monster into Hell.
 
 The Monster never kills. It **takes** wizards to an iron cage under the basement. The horror comes from slowly losing teammates, and the hope comes from going back down into the dark to get them.
 
@@ -48,23 +48,30 @@ The Monster never kills. It **takes** wizards to an iron cage under the basement
 - **On completion:**
   - The phase advances to II for everyone.
   - The Monster awakens (Step 4: an awakening shriek, followed by its first hunt).
-  - Every player's **Journal** (J) fills with the Tome's text and **seven riddled clues**. The Tome names each Heart's disguise and hints at its room, but never says which object it is.
-  - A Heart only shows its **tell** (see §5) once its room's wards are broken.
+  - Every player's **Journal** (J) fills with the Tome's text and **seven clues**, one per Sin: a riddle, its room, and the task that seals it.
+  - The full map (M / Tab) shows every Heart's room, Sin and task progress, and tethers light up from each Heart to its task objects (see §5).
 
-### Phase II — The Seven Hearts, Their Wards, the Seven Deadly Sins & the Iron Cage
-- **Seven Hearts** hide across **Floor 1 and Floor 2** (3–4 on each; never in the basement). Each clue names a disguise and hints at a room ("*A pendulum that keeps a pulse instead of the hour. Seek it where the dead were dressed for dinner.*" points to the Beating Clock in the Banquet Hall). Room names fade in as you enter a room, and the minimap labels every room.
-- **Room wards (3-part tasks):** a Heart cannot simply be destroyed. Its room holds three ward props of one kind, and all three must be broken (hold E) before the Heart unseals:
-  - **Runic braziers:** light all three (1.4s each).
-  - **Rune mirrors:** turn each until it faces the Heart; every mirror needs 1–3 turns (0.6s each).
-  - **Clockwork pedestals:** wind all three (2.2s each).
-  - **Cursed chalices:** place a coin in each (1s each).
-  - With **Lumos** lit within about 9u, the ward runes glow faintly: Lumos is how you find them in the dark.
-  - Wards only wake once the Tome has been read. Examining the true Heart while it is sealed tells you so ("It beats behind a seal… 2 of 3 still hold it shut"); decoys just whisper (and make noise).
-- **Unsealed:** every client sees the Heart for what it is: its tell begins, and a red aura beats around it. A banner names the Sin waiting inside it.
+### Phase II — The Seven Hearts, Their Sin Tasks, the Seven Deadly Sins & the Iron Cage
+- **Seven Hearts**, one per Deadly Sin, each kept in **its Sin's own room** on Floor 1 or Floor 2 (never the basement). Once the Tome is read, **everyone knows where they are**: the full map (M / Tab) tints each Heart's room in its Sin's colour, names the Sin, and counts its task (0/3 – 3/3); pulsing **tethers** of the Sin's colour run from each Heart to the three things that seal it.
+- **The Sin tasks (3 steps each, hold E):** a Heart cannot simply be destroyed. Its room holds three thematic objects, and all three must be dealt with before the Heart unseals:
+
+  | Sin | Room | Task | Hold E |
+  |---|---|---|---|
+  | Pride | Grand Ballroom (F2) | Shatter the 3 Tall Gilded Ego Mirrors | *Shatter Vanity Mirror* (1.2s) |
+  | Greed | Master Study (F2) | Take a gold ingot from each of 3 display cases and **carry** it to Mammon's Scale | *Take Gold Ingot from Display Case* (0.6s) → *Weigh Ingot on Scale* (0.9s) |
+  | Lust | Rose Bedroom (F2) | Burn away the 3 Enchanted Crimson Silk Cocoons | *Burn Silk Veil with Wand* (1.5s) |
+  | Envy | Observatory (F2) | Deface the 3 Jealous Noble Portraits (their eyes follow you) | *Deface Watching Portrait* (1.2s) |
+  | Gluttony | Banquet Hall (F1) | **Carry** the 3 Rotting Feast Platters to the furnace | *Take Rotting Feast Platter* (0.6s) → *Dump Cursed Feast Platter* (0.9s) |
+  | Wrath | Armory Hall (F1) | Quench the 3 Red-Hot Crucible Greatswords | *Quench Molten Blade in Blood Trough* (1.6s) |
+  | Sloth | Nursery (F1) | Wind the 3 Heavy Pendulum Metronomes in the corners | *Wind Slumbering Mechanism* (2.0s) |
+
+  - **Carry tasks** (Greed, Gluttony): you hold one item at a time, visibly (in your off hand in first person, in your avatar's hand for the coven). Hands full, you can't take another; a taken case is empty for everyone. If you are captured while carrying, the item returns to where it came from.
+  - Tasks only wake once the Tome has been read. Examining a sealed Heart tells you its objective and progress.
+- **Unsealed:** a red aura beats around the Heart, its tethers fade, and a banner names the Sin waiting inside it.
 - **Breaking it open (hold E, 2.5s) starts a lockdown:**
-  1. **Room lockdown:** every doorway of that room is sealed by glowing **blood-rune barriers** (collision, pathfinding and visuals). No one inside can leave, nobody outside can come in, and **the Keeper cannot enter**: it is pushed out of the room if it was there, cannot attack or lock on to anyone behind the runes, and its lock on anyone inside is severed.
-  2. **A Sin erupts** from the Heart (a 2.2s rise): one of the **Seven Deadly Sins** (§5b), 130–160 HP.
-  3. **Slay it** with the 35-spell grimoire and the Ultimates. Its Heart shatters for good, every wizard gains **+25 Ult (the Heart) +20 (the Sin)**, and the runes fade.
+  1. **Room lockdown:** every doorway of that room is sealed by glowing **blood-rune barriers** (collision, pathfinding and visuals). No one inside can leave, nobody outside can come in, and **the Keeper cannot enter**: it is pushed out of the room if it was there, cannot attack or lock on to anyone behind the runes, and its lock on anyone inside is severed. The full map shows every active lockdown, throbbing red.
+  2. **A Sin erupts** from the Heart (a 2.2s rise): one of the **Seven Deadly Sins** (§5b), scaled to the size of the coven.
+  3. **Slay it** with the grimoire. It burns away in a dissolve, its Heart shatters for good, and the runes fade.
   - If everyone inside is taken, the Sin withdraws into its Heart (still unsealed) and the doors open for the next attempt.
 - **Capture:** a lunge that lands never kills.
   - **The Scary Capture Screen (1.5s):** the camera snaps into the Amalgam's unhinged, screaming skull; blood-red runes flash across the screen; it shakes violently; a multi-layered, distorted shriek. Then black.
@@ -85,7 +92,7 @@ The Monster never kills. It **takes** wizards to an iron cage under the basement
   - Everyone's **own four spells and Ultimate stay live** on supercharged cooldowns (`ARCHON_COOLDOWN_SCALE`, ×0.25).
   - **Keys 1–7 select one of the seven Elemental Masteries, and the trigger (Left Mouse) fires it.** They share one set of cooldowns because they belong to one body: ✹ Fire Dragon (25 dmg), ≈ Wind Dragon (shove; it pushes *into* the rift once it's open), ♒ Water Deluge (slow), ▲ Earth Pillars (ring of pillars, root), ☉ White Chains (freeze), ☾ Black Torment (interrupt), ⚔ Anti-Magic Slash (cone; the only thing that breaks a ward).
   - In first person a **heptagram crown** of seven orbs circles your sight. An orb shrinks while its Mastery cools down.
-  - Archon damage is shared by everyone. Devil Union makes it immune, Aegis blocks, Granite Skin hardens it, and the Patronus and the Tree of Life heal it. **At 0 HP it is Game Over**, and Retry re-merges and refights the boss.
+  - Archon damage is shared by everyone. Devil Union makes it immune, Aegis blocks, granite skin hardens it, and the Tree of Life heals it. **At 0 HP it is Game Over**, and Retry re-merges and refights the boss.
 - **The Unbound Malphas Amalgam** (300 HP, ×1.45 scale): the Chapel splits with glowing hellfire cracks and the Amalgam rises from them.
   - **Bullet-hell orb volleys:** a ring of 16 orbs plus three fast ones aimed at the Archon, every 4.5s. Raising a ward fires a 24-orb ring.
   - **Floor shockwaves:** a 1s telegraphed windup, then an expanding ring every 7s.
@@ -112,31 +119,30 @@ The Monster never kills. It **takes** wizards to an iron cage under the basement
 
 ## 4. The Seven Wizards: a 35-spell Grimoire
 
-Every wizard has **four spells on the hotbar (1–4)** and an **Ultimate (R)**. The numbers live in `shared/wizards.js` and are the single source of truth for the server, the bots and the HUD.
+Every wizard has **three attacks (1–3)**, **one mobility / utility spell (4)** and an **Ultimate (R)**. The numbers live in `shared/wizards.js` (each spell has `kind: 'attack' | 'utility'`) and are the single source of truth for the server, the bots and the HUD. Every attack deals damage: the Sins are fought with them; the Keeper only staggers.
 
 **Casting (Step 6): select, then fire.**
 - **1–4 and R only select** a slot: the hotbar highlights it and the wand tip shows an elemental preview aura (small and wizard-coloured for spells; big, gold and pulsing when a charged Ultimate is selected).
 - **Left Mouse** fires whatever is selected. **Q** is an alternate trigger (and lets headless tests without pointer lock fire too; `GameClient.castSelectedSpell()` does the same).
 - The server checks cooldown, range, aim cone and line of sight, then broadcasts the cast so every client renders it.
 - Projectiles that home in or curve around corners move on the server, and clients follow their snapshot positions.
-- With **R** selected, the trigger fires the Ultimate at **100% charge**. A targeted Ultimate with nothing to hit is refused, and the charge is not spent.
+- Heavy casts (Ultimates, big hits, dashes) punch the camera.
 
-| Wizard | 1 | 2 | 3 | 4 | R · Ultimate |
+| Wizard | 1 · attack | 2 · attack | 3 · attack | 4 · utility | R · Ultimate |
 |---|---|---|---|---|---|
-| **Injorath Blackthorn** · Black · *Heir of the Forbidden Arts* | **Psychic Torment**: chase broken 2s, shriek, visible through walls 6s (16s) | **Dimension Slash**: void crescent; 5 dmg, heavy stagger, **reach −40% for 6s** (7s) | **Black Hole Singularity**: gravity well drags the Monster in for 3s, 1.5 dmg/s (14s) | **Shadow Step**: 2.5s of smoke: +40% speed, **invisible to the Monster**, through furniture (16s) | **Abyssal Mind Fracture**: chains + crimson sigils lock its mind **10s**. It can't move and tears at itself (4 dmg/s), shrieking. It can't flee until released. |
-| **Parthius Pyreborne** · Fire · *Infernal Prodigy* | **Ignis Blast**: fireball, 4 dmg + burn, scorch light 4s (5s) | **Calidus Brachium**: 3 flame fists, 2 dmg + knockback each (8s) | **Sol Linea**: white-hot beam (6 dmg) + **burning floor line 5s** (11s) | **Phoenix Cinder Aura**: 6s ember cloak: +30% sprint, bright light, burns on contact (18s) | **Fiendfyre Great Dragon**: an articulated fire serpent (head, jaws, wings, ember body) hunts the Monster through the corridors and detonates: **35 dmg** + burn. |
-| **Himandriel Tidecrest** · Water · *Lord of the Tidal Arts* | **Tidal Surge**: wave, 3 dmg, slow 40% 4s, slick puddle (9s) | **Valkyrie Water Spear**: piercing spiral lance, 5 dmg, **pinned 1.5s** (9s) | **Sea Dragon's Cradle**: water spheres on allies within 4u **absorb 40 dmg** for 10s (20s) | **Riptide Vortex**: rune trap (30s). Stepped on, a geyser lifts it 2.5s (15s) | **Abyssal Deluge**: animated water floods **the whole mansion for 25s**. The Monster moves at **35%** everywhere. |
-| **Sushantus Thornwick** · Earth · *Warden of the Ancient Grounds* | **Terra Spike**: spikes 3 dmg + 3-tile barricade 5s (12s) | **Devil's Snare Briars**: thorned vines, **rooted 2.5s** (12s) | **Golem Boulder Toss**: 6 dmg, shatters into a **slowing debris field** (10s) | **Granite Skin**: allies within 4u take **−60% damage** for 6s (18s) | **Yggdrasil, Tree of Life**: a glowing tree grows from the floor with **one golden fruit per wizard**. **E** eats one: **+60 HP** and all terror cleared. |
-| **Kartavian Windermere** · Wind · *Tempest Sovereign* | **Gale Force**: knockback 5u (8s) | **Crescent Kamaitachi**: 3 wind blades that **home in, even around corners** (7s) | **Zephyr Tailwind**: allies within 5u +45% speed, tireless sprint, 6s (16s) | **Vacuum Tempest**: imploding vortex, **lifted 1.5s** (12s) | **Sylph's Great Wind Dragon**: a tornado serpent seizes the Monster and **sweeps it to the farthest room on the floor** (2s stagger on landing). |
-| **Soham Everlight** · White · *Luminary of the Sacred Order* | **Sacred Bind**: stun + blind 3.5s. Passive: 2× lock breaking (20s) | **Arrows of Judgment**: 5 homing swords of light (9s) | **Patronus Beacon**: a radiant spirit stag for 10s, **heals 4 HP/s** within 6u (22s) | **Flash Step**: blink 6u; the afterimage blinds 1.2s (10s) | **Dawn of the Sacred Order**: golden cathedral light floods the mansion (fog lifts) and the Monster is **frozen in golden chains for 30s**. |
-| **Himanshu Nullgrave** · Anti-magic · *The Unspellable* | **Aegis of the Void**: attacks fail vs allies within 3u for 3s (18s) | **Black Slash**: cancels its windup, **strips enrage 8s** (9s) | **Null Zone**: 6s field: no light flicker, no terror (18s) | **Bull Thrust**: dash 5u, knockback 3u, **taunts it onto you** (12s) | **Devil Union: Absolute Nullification**: black-and-crimson wings on every wizard for **30s**. Monster attacks, lunges and captures **have no effect**, and it recoils. |
+| **Injorath Blackthorn** · Black · *Heir of the Forbidden Arts* | **Dark Torment Bolt**: 11 dmg; it falters, visible through walls 6s (6s) | **Dimension Slash**: void crescent, 18 dmg, heavy stagger, **reach −40% for 6s** (8s) | **Black Hole Singularity**: drags it in for 3s, 7 dmg/s (13s) | **Shadow Step**: 2.5s of smoke: +40% speed, unseen, through furniture (14s) | **Abyssal Mind Fracture**: chains + crimson sigils lock its mind **10s**; it tears at itself. |
+| **Parthius Pyreborne** · Fire · *Infernal Prodigy* | **Ignis Blast**: fireball, 12 dmg + burn (5s) | **Calidus Brachium**: 3 flame fists, 7 dmg + knockback each (8s) | **Sol Linea**: white-hot beam, 20 dmg + **burning floor line 5s** (11s) | **Phoenix Cinder Dash**: burst 6u forward, then a 5s ember cloak (+30% sprint, burns on contact) (12s) | **Fiendfyre Great Dragon**: a fire serpent hunts the Monster down and detonates: **35 dmg** + burn. |
+| **Himandriel Tidecrest** · Water · *Lord of the Tidal Arts* | **Tidal Surge**: wave, 11 dmg, slow 40% 4s, slick puddle (7s) | **Valkyrie Water Spear**: piercing lance, 19 dmg, **pinned 1.5s** (9s) | **Riptide Geyser**: a water pillar under the target, 16 dmg within 2.5u, **lifted 1.5s** (12s) | **Sea Dragon's Slipstream**: hydro-jet 6u forward inside a bubble that **absorbs 35 dmg** for 6s (14s) | **Abyssal Deluge**: the whole mansion floods for 25s; the Monster moves at **35%**. |
+| **Sushantus Thornwick** · Earth · *Warden of the Ancient Grounds* | **Terra Spike**: stone spikes, 13 dmg (6s) | **Devil's Snare Briars**: **rooted 2.5s**, crushed for 6 dmg/s (11s) | **Golem Boulder Toss**: 22 dmg, shatters into a **slowing debris field** (10s) | **Earthen Rampart**: a 3-tile barricade (5s) + **granite skin** (−60% damage, 6s) for allies within 4u (16s) | **Yggdrasil, Tree of Life**: one golden fruit per wizard; **E** eats one: **+60 HP**, terror cleared. |
+| **Kartavian Windermere** · Wind · *Tempest Sovereign* | **Gale Force Cannon**: 11 dmg + 5u knockback (7s) | **Crescent Kamaitachi**: 3 blades that **home in, even around corners**, 6 dmg each (7s) | **Vacuum Tempest**: imploding vortex, 15 dmg, **lifted 1.5s** (11s) | **Zephyr Flash Glide**: dash 7u, then 4s of +45% speed, no stamina drain (10s) | **Sylph's Great Wind Dragon**: a tornado serpent sweeps the Monster to the farthest room of the floor. |
+| **Soham Everlight** · White · *Luminary of the Sacred Order* | **Sacred Judgment Ray**: 12 dmg + **stun 2.5s**. Passive: 2× lock breaking (9s) | **Arrows of Judgment**: 5 homing swords of light, 4 dmg each (8s) | **Solar Purging Nova**: 18 dmg to everything within 6u, pushed back (12s) | **Flash Step**: blink 6u; the afterimage blinds 1.2s (9s) | **Dawn of the Sacred Order**: golden light floods the mansion and the Monster is **frozen in chains for 30s**. |
+| **Himanshu Nullgrave** · Anti-magic · *The Unspellable* | **Black Divider Cleave**: mid-range cone, 20 dmg, **cuts its windup** (7s) | **Black Slash Wave**: ranged crescent, 13 dmg, **strips enrage** (a Sin's for 6s, the Keeper's for 8s) (9s) | **Nullifying Meteor Thrust**: lunge 5u, 17 dmg in its path, knockback 3u, **taunts** (11s) | **Aegis of the Void**: attacks fail vs allies within 3u for 3s (16s) | **Devil Union: Absolute Nullification**: wings on every wizard for **30s**; attacks, lunges and captures have **no effect**. |
 
-**Ultimate charge (0–100%):**
-- **+8%** for landing a normal spell (once per cast).
-- **+2%/s** while the Amalgam hunts you.
-- **+25% team-wide** per destroyed Heart.
-- **+20%** for freeing prisoners.
-- **+0.4%/s** passively once the Tome is read.
+**The Ultimate (Step 7): five minutes, once.**
+- It charges **strictly with match time**: 0 → 100% over **5:00**, for every wizard, Tome read or not. Nothing else charges it (no hits, Hearts, rescues or chases). Greed's molten gold can still burn charge away.
+- The R slot counts down **MM:SS**, then shows **READY**.
+- It can be cast **once per game**. Afterwards the slot is greyed out and reads **EXPENDED** for the rest of the match; the server refuses another (`expended`). A targeted Ultimate with nothing to hit is refused and nothing is spent.
+- Debug **U** readies it again (and un-spends it).
 
 **Combined elements:** three *different* elements landing on the Amalgam within 5s banish it (a coven tactic; one wizard alone can't).
 
@@ -157,7 +163,7 @@ Every wizard has **four spells on the hotbar (1–4)** and an **Ultimate (R)**. 
   - A hit on a wizard **at or below 40 HP drags them to the cage**, and so does the **heavy, telegraphed Lunge** at any HP.
   - The shockwave splash only captures someone it knocks to 0.
   - **Prisoners stabilise at 50 HP.**
-- **Recovery:** HP regenerates slowly (1/s) after 8s without damage, **only up to 60**. Above that you need magic: the Patronus, the Tree of Life, Cradle absorbs and Granite skin.
+- **Recovery:** HP regenerates slowly (1/s) after 8s without damage, **only up to 60**. Above that you need magic: the Tree of Life, the Slipstream bubble and granite skin.
 - **No timer:** a session lasts until the coven seals the Hell Portal (victory) or everyone is held at once (game over, Retry keeps your progress).
 - **A tougher Keeper:**
   - Hunt speed **4.8 → 5.64 u/s** at seven Hearts (and a **6.4 u/s** charge once it sees you within 10u), and aggression rises with every Heart.
@@ -169,50 +175,55 @@ Every wizard has **four spells on the hotbar (1–4)** and an **Ultimate (R)**. 
 ## 4c. Unkillable: Hiding, the Disillusionment Charm & the Three-Ultimate Escape
 
 - **The Keeper cannot be killed in Phases I and II.** Spells, dragons, fire and Ultimates do no damage (it shows "nothing harms it while a single Heart still beats"). Combining elements no longer drives it off. Only the finale gives it a body that can be hurt.
-- **Heavy footsteps:** its footfalls are loud, deep thuds with scraping claws that carry a long way. Within **22 units** each step trembles the camera slightly and draws a **red ripple** on the minimap where it fell. You hear it coming before it sees you.
-- **The Disillusionment Charm (V):** every wizard has it. **12s unseen, 18s cooldown**, with a glassy chameleon shimmer on your hands and wand, a shimmering screen edge and a HUD timer. Teammates see you as a faint glassy outline.
+- **The only footsteps in the house are the Keeper's.** Wizards (and bots) walk silently. Its footfalls are deep thuds with scraping claws, **heard from 28 units**, swelling **exponentially** as it closes in to 5u, panned to where it is (HRTF). From 15u to 5u your own **heartbeat** rises with it. Each step trembles the camera, draws a **red ripple** on the minimap, and fills the HUD's **FOOTSTEPS proximity bar** (with a ripple on every footfall). You hear it coming before it sees you.
+- **The Disillusionment Charm (V):** every wizard has it. An **infinite toggle with no cooldown**: V on, V off. Glassy chameleon shimmer on your hands and wand, a shimmering screen edge, the V slot reads ON. Teammates see you as a faint glassy outline (and anything you carry vanishes with you).
 - **The strict rules of sight:**
   1. **Hide before it sees you, then stand still.** Invisible *before* it has locked on to you, and standing completely still while it is near, it walks right past you, even brushing by.
   2. **Moving gives you away.** Moving (or casting) while invisible within **14 units** of it: it senses you, locks on at once and charges.
-  3. **Spotted = locked.** About 0.35s in plain view (or any wizard within 3u in its sight) and it **locks on to the first wizard it sees**. It then knows where they are wherever they go, invisible or not, on any floor, and charges at lethal speed. Going invisible after it has seen you does not work (the HUD says so). Its catch is a capture.
-  4. **The only escape once spotted: three Ultimates.** Ordinary stuns, roots, freezes, pushes and pulls only stall it for **0.8s** (and shove it at most 2.5u); they never break the lock. Only these break it:
+  3. **Spotted = locked.** About 0.35s in plain view (or any wizard within 3u in its sight) and it **locks on to the first wizard it sees**. It then knows where they are wherever they go, invisible or not, on any floor, and charges at lethal speed. Its catch is a capture.
+  4. **No charm in its sight.** Casting V **in front of it** (it already sees you, or is locked on) **fails**: "IT ALREADY SEES YOU", and it locks on and charges at once.
+  5. **The only escape once spotted: three Ultimates.** Ordinary stuns, roots, freezes, pushes and pulls only stall it for **0.8s** (and shove it at most 2.5u); they never break the lock. Only these break it:
      - **Dawn of the Sacred Order (White):** the mansion fills with golden light and it is frozen solid in chains for **30s**.
      - **Abyssal Mind Fracture (Black):** its mind is locked in place for **10s** while it claws at itself.
      - **Devil Union (Anti-magic):** **30s** of complete immunity for the coven; if it touches an immune wizard it recoils and freezes for **6s**.
      - When one lands, its lock is wiped (and it is blind for 1.5s after it is released). Get out of its sight, cast V, and hold still.
   - A taunt (Bull Thrust) can still redirect a lock onto the wizard who struck it.
-- **Bots** hide too: with the Keeper prowling within 18u (and not locked on to them) they cast V and freeze until it has passed. They save Dawn, Mind Fracture and Devil Union to rescue a teammate it is about to catch.
+- **Bots** hide too: with the Keeper prowling within 18u and not looking at them, they toggle V on and freeze until it has passed (and off again once it is 30u away). They save Dawn, Mind Fracture and Devil Union to rescue a teammate it is about to catch.
 
 ---
 
 ## 5. The Seven Hearts
 
-| Heart | Disguise | Its Sin | Tell (once its wards are broken) |
+| Heart | Sin | Its room | What it looks like (its tell once the Tome names it) |
 |---|---|---|---|
-| The Cursed Mirror | Gilded wall mirror | Pride | Glass blushes red in a heartbeat rhythm |
-| The Bleeding Painting | Ancestral portrait | Wrath | Eyes and canvas bleed; the paint pulses |
-| The Beating Clock | Grandfather clock | Sloth | Pendulum swings in a *lub-dub*, not a tick; the bob glows |
-| The Weeping Doll | Porcelain doll on a side table | Envy | Weeps red; the head **turns to follow you** |
-| The Whispering Music Box | Music box on a side table | Lust | The ballerina turns; red light inside the lid |
-| The Black Candelabra | Five-candle candelabra | Greed | Burns with black flame that casts no light |
-| The Grinning Skull | Skull on a velvet stand | Gluttony | Its jaw chews on nothing; its sockets glow |
+| Lucifer's Crowned Vanity | Pride | Grand Ballroom | A white-and-gold vanity, an oval mirror, a turning crown; a pale heart-gem in the glass |
+| Mammon's Locked Vault Coffer | Greed | Master Study | An iron-banded coffer, lid ajar, spilling coins over a golden glow |
+| Asmodeus's Crimson Velvet Portrait | Lust | Rose Bedroom | A portrait between drawn velvet curtains, blushing pink |
+| Leviathan's Green-Glass Astrolabe Clock | Envy | Observatory | Nested brass rings around a green eye **that follows you** |
+| Beelzebub's Overflowing Feast Chalice | Gluttony | Banquet Hall (at the head of the long table) | A giant golden chalice overflowing with glowing green ichor |
+| Satan's Brazen War-Bell | Wrath | Armory Hall | A bronze bell in a scorched frame, swinging to the heartbeat, its rune band burning |
+| Belphegor's Slumbering Cradle Box | Sloth | Nursery | A rocking cradle wrapped in grey sleep-mist |
 
-- Every disguise has 2–3 identical **decoys** spread across other rooms.
-- Each Heart sits in a different room with its three wards: 3–4 Hearts on Floor 1, the rest on Floor 2.
-- **Clients never learn which props are Hearts** until a Heart unseals. The server strips heart, decoy and ward-ownership flags from the map it sends, and the Tome sends riddles only.
+- Every Heart pulses with a heart-shaped gem in its Sin's colour once the Tome is read, and a red aura when unsealed.
+- Ordinary heirlooms (mirrors, paintings, clocks, dolls, music boxes, candelabra, skulls) are scattered as curios; examining one makes noise.
+- The server sends the client which Sin keeps which Heart only with the Tome.
 
 ## 5b. The Seven Deadly Sins
 
-| Sin | Demon | HP | Its kit |
-|---|---|---|---|
-| Pride | The Mirror Seraph | 150 | Spells cast at its face (within about 60° of where it looks) are **reflected** onto the caster (10 HP). It turns slowly: flank it, or stun it (stunned, it can't reflect). A light lance (0.8s aim, 20 HP) you can sidestep. |
-| Greed | The Gilded Hoarder | 140 | Lobs three bursts of **molten gold** (14 HP each, radius 1.8); every splash **steals 25% Ultimate charge**. |
-| Lust | The Siren Weaver | 130 | **Hypnotic ribbons** drag everyone in sight up to 4.5u toward it (your view is yanked along); a close caress (16 HP). |
-| Envy | The Hollow Mimic | 130 | Whatever element strikes it, it throws back 1.1s later as an expanding **counter-wave** of that element (15 HP); claws. |
-| Gluttony | The Maw of Famine | 160 | Spits **acid pools that spread** (to 3u, 9 HP/s). Every 7s it **inhales the room** (pulling everyone within 9u in) and bites (18 HP). |
-| Wrath | The Blood Berserker | 150 | Telegraphed **charges** (24 HP, knocks you aside) and cleaves; up to **+140% speed** as it bleeds; slams into walls. |
-| Sloth | The Somnolent Dread | 160 | A room-wide **aura of heavy sleep**: −45% speed and draining stamina for everyone inside. A slow, crushing yawn (5u, 22 HP). |
+| Sin | Demon | Base HP | Its kit | Enraged (≤ 50% HP) |
+|---|---|---|---|---|
+| Pride | The Mirror Seraph | 180 | Spells cast at its face (within about 60° of where it looks) are **reflected** onto the caster (10 HP). Flank it, or stun it. A light lance (0.8s aim, 20 HP). | A **fan of three lances** |
+| Greed | The Gilded Hoarder | 175 | Lobs bursts of **molten gold** (14 HP, radius 1.8); every splash **steals 25% Ultimate charge**. | More bursts, wider splashes |
+| Lust | The Siren Weaver | 170 | **Hypnotic ribbons** drag everyone in sight up to 4.5u toward it; a close caress (16 HP). | Ribbons pull 50% harder |
+| Envy | The Hollow Mimic | 170 | Whatever element strikes it, it throws back as an expanding **counter-wave** of that element (15 HP); claws. | A **second wave** right behind the first, half the cooldown |
+| Gluttony | The Maw of Famine | 190 | Spits **acid pools that spread** (9 HP/s). It **inhales the room** (9u) and bites (18 HP). | Bigger pools, a longer inhale |
+| Wrath | The Blood Berserker | 185 | Telegraphed **charges** (24 HP) and cleaves; up to **+140% speed** as it bleeds. | **Chained charges**: it wheels round and charges again |
+| Sloth | The Somnolent Dread | 190 | A room-wide **aura of heavy sleep**: −45% speed and draining stamina. A slow, crushing yawn (5u, 22 HP). | A deeper aura, a wider yawn |
 
+- **Scaled to the coven** (`sinScaling(N)` in `shared/sins.js`): **HP × (1 + 0.45 (N − 1))**, so about 180 solo, 260 for two, **340 for three, 420 for four**; **damage and projectile counts +20% per extra wizard**.
+- **Enrage at 50% HP:** a broadcast eruption of fire, a red-flame aura and a red sigil, every attack's cadence ×0.65 (windups ×0.8), and its signature attack upgraded (table). Himanshu's **Black Slash Wave** strips the enrage for 6s.
+- **Telegraphs:** every windup paints its area on the floor in **red** (circles and lanes) that fills as the strike nears.
+- **Presentation:** a top-center nameplate and HP bar (it throbs when enraged); every hit flashes the body white and throws up **damage numbers in the caster's element colour**, drifting away from the centre of the screen; at 0 HP it **burns away in a dissolve**, embers streaming off it.
 - Every Sin's attacks are telegraphed (windup poses, sound and light) and dodgeable. No crowd control holds a Sin longer than **3s**, and the wind dragon can't carry one out of its arena.
 
 ---
@@ -231,7 +242,7 @@ The last lord's Keeper: too tall for the doorways, gaunt and lopsided (one arm f
 ### Senses
 - **Sight:** a ~125° cone with line of sight. A wizard is visible at 16u (8u crouched), and **×1.5 with Lumos lit**. Invisible wizards (V, Shadow Step) are unseen. About **0.35s** in plain view **locks it on** (§4c).
 - **Sensing the invisible:** an invisible wizard who moves or casts within **14u** is sensed and locked on to at once.
-- **Noise:** carries to a radius. Sprinting carries 10u, any spellcast 14u, a decoy heirloom 8u and a ward's seal breaking 12u (both send it to search there). Noise that reaches it from a visible wizard locks on. A **dying Heart is felt anywhere** and sends it to search that room.
+- **Noise:** carries to a radius. Sprinting carries 10u, any spellcast 14u, a decoy heirloom 8u and a Heart's seal breaking 12u (both send it to search there). Noise that reaches it from a visible wizard locks on. A **dying Heart is felt anywhere** and sends it to search that room.
 - **Being stared at:** a lit wand held on it for **1.5s** (within 14u, inside about 15°) makes it **duck out of sight** (55%) or **charge** (45%), if it hasn't already seen you.
 
 ### States (server, `server/Monster.js`)
@@ -288,9 +299,9 @@ The last lord's Keeper: too tall for the doorways, gaunt and lopsided (one arm f
   - the gate clank and lock-grinding;
   - the **Tome awakening gong** and the hunt stinger;
   - the capture screen's **multi-layered shriek** (three detuned screams, a crushed scrape, a sub-bass drop and a heartbeat that stops), Heart destruction, and ping calls;
-  - Step 6: each room ward (brazier whoomph, mirror grind, clockwork, coin), the arena slam, each Sin's windups and strikes, the glassy Disillusionment shimmer, the chord when a lock is broken, and a click (or hum, for the Ultimate) when you select a slot;
-  - your own footsteps on wood and stone.
-- **Heart tells:** once their wards are broken, undestroyed Hearts beat faintly within 7u.
+  - each Sin task step, the arena slam, a Sin's enrage, each Sin's windups and strikes, the glassy Disillusionment shimmer, the chord when a lock is broken, and a click (or hum, for the Ultimate) when you select a slot;
+  - no footsteps but the Keeper's (Step 7): wizards walk silently.
+- **Heart tells:** once the Tome is read, undestroyed Hearts beat faintly within 7u.
 
 ## 8. The Mansion
 
@@ -315,14 +326,24 @@ Three levels (1 tile = 2 m): **Floor 1** (ground, 60 × 60 tiles), **Floor 2** (
 ### The minimap (top-left)
 - A **Marauder's-Map-style** plan inked on aged parchment, for the floor you're on: walls, corridors, the hatched void, every room's name in a cramped italic hand, spiral-stair glyphs with ▲/▼, a gold arrow for you and coloured arrows for your coven (✕ over anyone caged), floor tabs (II · I · B), and the floor's name.
 - **Sealed Sin arenas** are cross-hatched in blood and marked "ᛉ SEALED ᛉ".
-- **Red acoustic ripples** bloom wherever the Keeper's footsteps fall within 22u.
-- **M** (debug) still opens the full debug map, now with floor tabs: look at any floor and click to teleport there.
+- **Red acoustic ripples** bloom wherever the Keeper's footsteps fall within 28u.
+
+### The full map (M or Tab, every player)
+- All three floors behind tabs (it opens on yours), every room's name, the whole coven (you in gold).
+- After the Tome: each Heart's room tinted in its Sin's colour with **"♥ SIN · 1/3"**, the Heart and its task objects marked (done ones greyed), and a side panel of **the Seven Hearts**: Sin, room, floor, progress pips, and SEALED / UNSEALED / **LOCKDOWN** / SLAIN.
+- **Active lockdowns** throb red, with their blood-rune doorways drawn.
+- Only `?debug=1` games may click the plan to teleport.
+
+### Interaction (Step 7)
+- A **6px white crosshair dot with a dark ring**, always readable; it grows a ring over something usable.
+- Every frame a **ray from the centre of the screen** (6 units, never through walls) finds the interactable you look at. It gets a **white outline** (an inverted hull) and a floating billboard over it: **"[Hold E] Shatter Vanity Mirror (Progress 1/3)"** (or "… come closer" when out of reach). The labels mirror the server's rules (`shared/heartinfo.js`): take vs place, hands full, empty case.
+- Top right, inside a Heart's room, a **task tracker**: "MASTER STUDY (GREED) — Weigh Stolen Gold Ingots on Mammon's Scale: 1 / 3" (LOCKDOWN / SLAIN once it gets that far).
 
 ### Guarantees (enforced by the generator and by tests on 60 seeds)
 - Every floor is fully connected; furniture never cuts it in two and doorways are never blocked.
 - Every interactable and every room is reachable on foot from the spawn, using the stairs.
 - Every void tile hangs over the Foyer's floor; the dual staircases rise to the gallery through their own tile column.
-- Seven Hearts on Floors 1 and 2, in seven different rooms, each with three ward props of one kind in the same room.
+- Seven Hearts, one per Sin, each in its Sin's room (Ballroom, Master Study, Rose Bedroom, Observatory, Banquet Hall, Armory Hall, Nursery) with its three task objects (and the scale / furnace) in the same room.
 - The cage can only be left through its door.
 
 ---
@@ -336,23 +357,24 @@ Three levels (1 tile = 2 m): **Floor 1** (ground, 60 × 60 tiles), **Floor 2** (
 | Shift | Sprint: loud, uses stamina (drains in about 4s, recovers in about 7s) |
 | C (toggle) / Ctrl (hold) | Crouch: slow and quiet |
 | 1 – 4 | **Select** spell 1–4 (no cast; the wand tip previews it) |
-| R | **Select** the Ultimate |
+| R | **Select** the Ultimate (charges over 5:00; once per game) |
 | Left Mouse | **Cast** the selected slot |
 | Q | Cast the selected slot (alternate trigger) |
-| V | Disillusionment Charm: 12s unseen, 18s cooldown |
-| E (hold) | Interact: read, break a ward, open a Heart, use stairs, break the cage lock, eat from the Tree of Life |
-| F | Lumos / Nox: a bright, wide torch, but you're seen 50% further away (and it reveals ward runes) |
+| V | Disillusionment Charm: toggle invisibility on / off (no cooldown); fails in the Keeper's sight |
+| E (hold) | Interact with what the crosshair outlines: read, do a Sin task (take / place for carry tasks), open a Heart, stairs, the cage lock, the Tree of Life |
+| M / Tab | The full map (all floors, the coven, Hearts, task progress, lockdowns) |
+| F | Lumos / Nox: a bright, wide torch, but you're seen 50% further away |
 | J | Journal (the Tome's text and riddles) |
 | G | Call for help: ping your location to the coven |
 | E (hold, Convergence) | Chant the Forbidden Spell at the altar (everyone at once) |
 | 1–7 then Left Mouse (Archon) | Select an Elemental Mastery, then fire it (shared cooldowns) |
 | E / R (hold, Hell Portal) | Soul Grapple: drag the Amalgam into the rift |
-| M (debug) | Top-down debug map with floor tabs. Click to teleport. |
+| Map click (debug) | Teleport to where you clicked on the full map |
 | P (debug) | Cycle the monster: Husk → Haunt → Stalk → Hunt → Capture test → Auto |
 | K (debug) | Capture yourself instantly; if you're already held, break the lock |
-| L (debug) | Break open the nearest sealed Heart (wards done for you), pull the coven into its room and start the Sin's lockdown; inside a live arena, slay the Sin |
+| L (debug) | Break open the nearest sealed Heart (tasks done for you), pull the coven into its room and start the Sin's lockdown; inside a live arena, slay the Sin |
 | Shift + 1–7 (debug) | Hot-swap your wizard (whoever held it gets yours) |
-| U (debug) | Fill your Ultimate charge |
+| U (debug) | Ready your Ultimate (and un-spend it) |
 | H (debug) | Skip to Convergence: Tome read, all seven Hearts destroyed, prisoners freed to the altar |
 | N (debug) | During the boss fight: drop the Unbound Amalgam to 25% with its wards spent, just above the Hell Portal |
 
@@ -366,7 +388,7 @@ Three levels (1 tile = 2 m): **Floor 1** (ground, 60 × 60 tiles), **Floor 2** (
 - **Bots (movement):** server-side teammates that follow the nearest human using A*, take the stairs when you change floor, sprint to catch up, and scan the dark when idle. A human picking a bot's wizard makes the bot switch. When a monster is within 16u and their spell is nearly ready, they **move into range and cast it**. Aegis bots shield when the monster closes on someone near them.
 - **Test Monster Husk** (P, debug only): a slow, harmless husk with 100 HP that patrols, shambles after the nearest wizard it can see, and telegraphs a claw swipe (0.7s windup, every 3s). A floating panel shows HP and every status (Stunned, Tormented, Slowed, Burning, Knocked Back, Blocked, Visible Through Walls), along with damage numbers. It crumbles at 0 HP and re-forms after 3s. It uses the same `MonsterBody` as the Step 4 Monster, so every spell verified on it works on the real thing.
 - **Bots in the finale:** they walk to their own place around the altar and chant. Inside the Archon they cast their own spells, channel **their own element's Mastery** (and the Wind Dragon at the portal) only after it has sat ready for 2.5s, so humans get first pick of the shared cooldowns, and they Soul Grapple at the rift. Outside the finale they save Ultimates for the real Amalgam.
-- `?debug=1` shows the FPS, draw call and position HUD, enables the M map, and exposes `window.__game`.
+- `?debug=1` shows the FPS, draw call and position HUD, lets a full-map click teleport you, and exposes `window.__game`.
 - `?join=CODE` pre-fills the join code (useful for shareable links).
 
 ---
@@ -381,4 +403,5 @@ Three levels (1 tile = 2 m): **Floor 1** (ground, 60 × 60 tiles), **Floor 2** (
 | 4 | Malphas Amalgam (model, stop-motion, AI states, haunting, noise, stare), procedural audio, post-processing, Lights Out, terror, capture/rescue/ping/game over, bot rescue | ✅ Done |
 | 4.5 | Lumos, 35-spell grimoire + Ultimates and charge, player HP, tougher Amalgam (attacks, tendrils, smashing, phantoms), bots using the grimoire | ✅ Done |
 | 5 | Forbidden Spell (group chant), Soul Merge, the Archon (7 Masteries, crown), the Unbound Amalgam (volleys, shockwaves, charges, wards), Hell Portal + Soul Grapple, sunlit Epilogue with families + Play Again | ✅ Done |
+| 7 (v3.0) | The full map for everyone (M / Tab); only the Keeper's footsteps are heard (28u, exponential, heartbeat, HUD proximity bar); V as an infinite toggle that fails in its sight; crosshair dot, centre raycast, white outlines and "[Hold E]" billboards; tethers from each Heart; seven thematic Sin tasks (two carry tasks) in the Sins' own rooms; Sins scaled to the coven with telegraphs and an enrage phase; kits of 3 attacks + 1 utility; a 5-minute, once-per-game Ultimate; damage numbers, hit-flash, camera punch, death dissolve, the task tracker | ✅ Done |
 | 6 (v2.0) | Select-then-fire input; 2-story mansion + basement (Balcony Gallery over the Foyer, dual spiral staircases, family stair); top-left Marauder's-Map minimap with footstep ripples; PBR-style procedural materials, Gothic arches, stained-glass moonbeams, moving paintings, sconces, chandeliers; robed Harry-Potter-style wizard avatars; 7 Hearts with 3-part room wards; the Seven Deadly Sins in locked arenas; the unkillable Keeper with sight-lock, heavy footsteps, the Disillusionment Charm (V) and the three-Ultimate escape; the 1.5s Scary Capture Screen and the Underground Iron Cage | ✅ Done |

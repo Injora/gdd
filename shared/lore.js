@@ -61,102 +61,89 @@ export const ROOM_TYPES = {
   cell: { name: 'Underground Cage Prison', floor: 'basement', size: 'basement', hint: 'inside the iron cage' },
 };
 
-/** The seven Hearts, the ordinary props they hide among, and the Sin each one holds. */
-export const HEART_TYPES = {
-  mirror: {
-    name: 'The Cursed Mirror',
-    prop: 'mirror',
-    decoyName: 'an old mirror',
-    sin: 'pride',
-    riddle: 'A glass that shows you as you will look afterwards.',
+/**
+ * The seven Hearts (Step 7): one thematic centrepiece per Sin, each in its own
+ * room, keyed by Sin. `prop` is the centrepiece's model; `room` the room type.
+ */
+export const HEARTS = {
+  pride: {
+    name: 'Lucifer’s Crowned Vanity', prop: 'crowned_vanity', room: 'ballroom',
+    riddle: 'A crown upon a looking-glass that has only ever adored itself.',
   },
-  painting: {
-    name: 'The Bleeding Painting',
-    prop: 'painting',
-    decoyName: 'a portrait',
-    sin: 'wrath',
-    riddle: 'A face in oils that weeps what oils cannot.',
+  greed: {
+    name: 'Mammon’s Locked Vault Coffer', prop: 'vault_coffer', room: 'master_study',
+    riddle: 'A coffer that will open only when its master’s gold is weighed.',
   },
-  clock: {
-    name: 'The Beating Clock',
-    prop: 'clock',
-    decoyName: 'a grandfather clock',
-    sin: 'sloth',
-    riddle: 'A pendulum that keeps a pulse instead of the hour.',
+  lust: {
+    name: 'Asmodeus’s Crimson Velvet Portrait', prop: 'velvet_portrait', room: 'rose_bedroom',
+    riddle: 'A face in crimson velvet that wants you to come closer.',
   },
-  doll: {
-    name: 'The Weeping Doll',
-    prop: 'doll',
-    decoyName: 'a porcelain doll',
-    sin: 'envy',
-    riddle: 'A porcelain child whose eyes follow you, and grieve.',
+  envy: {
+    name: 'Leviathan’s Green-Glass Astrolabe Clock', prop: 'astrolabe_clock', room: 'observatory',
+    riddle: 'A clock of green glass that keeps the hours of everyone else’s happiness.',
   },
-  musicbox: {
-    name: 'The Whispering Music Box',
-    prop: 'musicbox',
-    decoyName: 'a music box',
-    sin: 'lust',
-    riddle: 'A lullaby that whispers your name between the notes.',
+  gluttony: {
+    name: 'Beelzebub’s Overflowing Feast Chalice', prop: 'feast_chalice', room: 'banquet',
+    riddle: 'A cup that has never once been empty, at the head of a feast that never ends.',
   },
-  candelabra: {
-    name: 'The Black Candelabra',
-    prop: 'candelabra',
-    decoyName: 'a candelabra',
-    sin: 'greed',
-    riddle: 'Five candles burning with a flame that gives no light.',
+  wrath: {
+    name: 'Satan’s Brazen War-Bell', prop: 'war_bell', room: 'armory',
+    riddle: 'A bell that rings for every battle, and has never rung for peace.',
   },
-  skull: {
-    name: 'The Grinning Skull',
-    prop: 'skull',
-    decoyName: 'a skull on a stand',
-    sin: 'gluttony',
-    riddle: 'A jaw that still chews, though nothing has fed it in a hundred years.',
+  sloth: {
+    name: 'Belphegor’s Slumbering Cradle Box', prop: 'cradle_box', room: 'nursery',
+    riddle: 'A cradle-box that rocks itself to sleep, and wants you to sleep too.',
   },
 };
-
-export const HEART_TYPE_IDS = Object.keys(HEART_TYPES);
+export const HEART_SINS = Object.keys(HEARTS);
+// (Kept names for older call sites.)
+export const HEART_TYPES = HEARTS;
+export const HEART_TYPE_IDS = HEART_SINS;
 
 /**
- * The 3-part room task that seals each Heart. Three task props stand in the
- * Heart's room; completing all three unseals the Cursed Heart Artifact.
- * `time` = seconds of holding E per step.
+ * The 3-part task in each Heart's room, by Sin. Three `prop`s (sources);
+ * carry tasks also have a `sink`: take one item from a source, bring it to
+ * the sink. `time` / `takeTime` = seconds of holding E.
  */
 export const TASKS = {
-  brazier: {
-    prop: 'brazier',
-    label: 'Light the runic brazier',
-    done: 'The rune-fire burns',
-    time: 1.4,
-    intro: 'Three cold runic braziers ring this room.',
+  pride: {
+    prop: 'ego_mirror', label: 'Shatter Vanity Mirror', done: 'The mirror lies in shards', time: 1.2,
+    objective: 'Shatter the 3 Tall Gilded Ego Mirrors',
   },
-  mirror: {
-    prop: 'rune_mirror',
-    label: 'Turn the rune mirror',
-    done: 'The mirror catches the light',
-    time: 0.6,
-    turns: true, // each needs 1–3 turns before it faces the Heart
-    intro: 'Three rune mirrors hang crooked on the walls.',
+  greed: {
+    prop: 'display_case', sink: 'weighing_scale', carry: 'ingot', time: 0.9, takeTime: 0.6,
+    take: 'Take Gold Ingot from Display Case', label: 'Weigh Ingot on Scale', done: 'The case is empty',
+    objective: 'Weigh Stolen Gold Ingots on Mammon’s Scale',
   },
-  pedestal: {
-    prop: 'pedestal',
-    label: 'Wind the clockwork pedestal',
-    done: 'The clockwork ticks',
-    time: 2.2,
-    intro: 'Three clockwork pedestals have wound down.',
+  lust: {
+    prop: 'silk_cocoon', label: 'Burn Silk Veil with Wand', done: 'Only ash remains of the veil', time: 1.5,
+    objective: 'Burn away the 3 Enchanted Crimson Silk Cocoons',
   },
-  chalice: {
-    prop: 'chalice',
-    label: 'Place a cursed coin in the chalice',
-    done: 'A coin rests in the chalice',
-    time: 1.0,
-    intro: 'Three empty chalices wait for their payment.',
+  envy: {
+    prop: 'envy_portrait', label: 'Deface Watching Portrait', done: 'Its jealous eyes are slashed out', time: 1.2,
+    objective: 'Deface the 3 Jealous Noble Portraits',
+  },
+  gluttony: {
+    prop: 'feast_platter', sink: 'feast_furnace', carry: 'platter', time: 0.9, takeTime: 0.6,
+    take: 'Take Rotting Feast Platter', label: 'Dump Cursed Feast Platter', done: 'The platter is gone',
+    objective: 'Dump the 3 Rotting Feast Platters into the Furnace',
+  },
+  wrath: {
+    prop: 'crucible_sword', label: 'Quench Molten Blade in Blood Trough', done: 'The blade hisses and cools', time: 1.6,
+    objective: 'Quench the 3 Red-Hot Crucible Greatswords',
+  },
+  sloth: {
+    prop: 'metronome', label: 'Wind Slumbering Mechanism', done: 'The pendulum swings awake', time: 2.0,
+    objective: 'Wind the 3 Heavy Pendulum Metronomes',
   },
 };
 export const TASK_KINDS = Object.keys(TASKS);
 export const TASK_STEPS = 3;
+/** Ordinary heirlooms scattered as curios (examining one makes noise). */
+export const CURIO_KINDS = ['mirror', 'painting', 'clock', 'doll', 'musicbox', 'candelabra', 'skull'];
 
-export function makeClue(heartType, roomType) {
-  return `${HEART_TYPES[heartType].riddle} Seek it ${ROOM_TYPES[roomType].hint}.`;
+export function makeClue(sin, roomType) {
+  return `${HEARTS[sin].riddle} Seek it ${ROOM_TYPES[roomType].hint}. ${TASKS[sin].objective} to unseal it.`;
 }
 
 export const DECOY_LINES = [
@@ -169,7 +156,7 @@ export const DECOY_LINES = [
 export const TOME_TEXT = [
   'Here is written the Forbidden Convergence, set down by the last lord of this house, who wished to never die.',
   'I cut my heart into seven and sealed each piece in a thing my family loved, and set one of the Seven Sins to keep it. While one heart beats, the Keeper of this house cannot be unmade. Do not try. Hide.',
-  'Each heart is warded by its room: light what is cold, turn what is crooked, wind what has stopped, pay what is owed. Break the wards, and the heart will open, and its Sin will come out to meet you. The doors will not let you leave until one of you is dead.',
+  'Each heart is warded by its room and by its Sin: shatter the vain glass, weigh the stolen gold, burn the silk, blind the jealous eyes, feed the furnace, quench the angry steel, wake what sleeps. Break the three wards, and the heart will open, and its Sin will come out to meet you. The doors will not let you leave until one of you is dead.',
   'You who read this have woken it. It will not kill you. It will keep you, below, in the iron cage, until all of you are kept.',
   'Silence the seven. Then go to the altar, and give it what it has always wanted: more than one soul in a single body.',
 ];

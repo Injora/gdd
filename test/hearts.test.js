@@ -10,8 +10,9 @@ import { moveCircle, overlapsSolid } from '../shared/collision.js';
 import { roomAt } from '../shared/mapgen.js';
 import { PHASE, HEART_COUNT, PLAYER_RADIUS, TILE, tileCenter, yawFromDir } from '../shared/constants.js';
 import { TASKS, TASK_STEPS } from '../shared/lore.js';
-import { SINS, SIN_IDS, SIN_ULT_BONUS } from '../shared/sins.js';
+import { SINS, SIN_IDS, SIN_ENRAGE, sinScaling } from '../shared/sins.js';
 import { ULT } from '../shared/wizards.js';
+import { use, doHeartTasks } from './_tasks.js';
 
 function makeGame(members, seed = 4242) {
   const events = [];
@@ -40,18 +41,9 @@ function hearts(g) {
   return g;
 }
 
-/** Do one task prop to completion (mirrors take several turns). */
-function doTask(g, p, tid) {
-  at(p, g.props[tid]);
-  for (let k = 0; k < 4 && !g.propState[tid]?.done; k++) {
-    g.onInteract(p.id, tid);
-    run(g, 3, () => !p.channel);
-  }
-}
-
 /** Every task of a heart done, then the heart opened with p standing at it. */
 function openHeart(g, p, heart) {
-  for (const tid of heart.tasks) doTask(g, p, tid);
+  doHeartTasks(g, p, heart, run);
   at(p, g.props[heart.propId]);
   g.onInteract(p.id, heart.propId);
   run(g, 3, () => g.arenas.has(heart.propId));
@@ -87,10 +79,11 @@ function spotNear(g, room, x, z, dist, ang = 0) {
 
 // ---------------------------------------------------------------------------
 
-test('room tasks: three wards per Heart; nothing works before the Tome; mirrors need turning', () => {
+test('room tasks: each Sin has its own 3-step task in its own room; nothing works before the Tome', () => {
   const g = makeGame(humans('parthius', 'soham'));
   const p = g.players.get('p0');
-  const heart = g.map.hearts[0];
+  assert.deepEqual(g.map.hearts.map((h) => h.sin).sort(), [...SIN_IDS].sort(), 'one Heart per Sin');
+  const heart = g.map.hearts.find((h) => !TASKS[h.sin].carry);
   at(p, g.props[heart.tasks[0]]);
   g.onInteract('p0', heart.tasks[0]);
   assert.equal(p.channel, null, 'cold before the Tome');
@@ -102,11 +95,13 @@ test('room tasks: three wards per Heart; nothing works before the Tome; mirrors 
   assert.equal(p.channel, null);
   for (const [i, tid] of heart.tasks.entries()) {
     const prop = g.props[tid];
-    assert.equal(prop.task, heart.task);
+    assert.equal(prop.task, heart.sin);
+    assert.equal(prop.kind, TASKS[heart.sin].prop);
+    assert.equal(g.map.floors[prop.floor] && roomAt(g.map, prop.floor, prop.x, prop.z)?.id, heart.roomId, 'in the Heart’s room');
     at(p, prop);
     g.onInteract('p0', tid);
-    assert.equal(p.channel.duration, TASKS[heart.task].time);
-    doTask(g, p, tid);
+    assert.equal(p.channel.duration, TASKS[heart.sin].time);
+    use(g, p, tid, run);
     assert.ok(g.propState[tid].done);
     assert.equal(evs(g, 'task').at(-1).progress, i + 1);
   }
@@ -114,22 +109,43 @@ test('room tasks: three wards per Heart; nothing works before the Tome; mirrors 
   const ev = evs(g, 'heart:unsealed')[0];
   assert.equal(ev.propId, heart.propId);
   assert.equal(ev.sin, heart.sin);
+});
 
-  // Mirrors: each needs 1–3 turns.
-  for (const seed of [1, 2, 3, 4, 5, 6, 7, 8]) {
-    const g2 = hearts(makeGame(humans('parthius'), seed));
-    const h = g2.map.hearts.find((x) => x.task === 'mirror');
-    if (!h) continue;
-    const q = g2.players.get('p0');
-    const tid = h.tasks[0];
-    const turns = g2.props[tid].turns;
-    at(q, g2.props[tid]);
-    for (let k = 1; k <= turns; k++) {
-      g2.onInteract('p0', tid);
-      run(g2, 1, () => !q.channel);
-      assert.equal(!!g2.propState[tid]?.done, k === turns, `turn ${k}/${turns}`);
-    }
-    return;
+test('carry tasks: Greed weighs three ingots on the scale; Gluttony feeds three platters to the furnace; one at a time', () => {
+  for (const sin of ['greed', 'gluttony']) {
+    const g = hearts(makeGame(humans('parthius', 'soham')));
+    const p = g.players.get('p0');
+    const T = TASKS[sin];
+    const heart = g.map.hearts.find((h) => h.sin === sin);
+    assert.ok(heart.sink, `${sin} has a sink`);
+    assert.equal(g.props[heart.sink].kind, T.sink);
+    // The sink with empty hands: nothing.
+    at(p, g.props[heart.sink]);
+    g.onInteract('p0', heart.sink);
+    assert.equal(p.channel, null, 'nothing to place');
+    const [a, b] = heart.tasks;
+    use(g, p, a, run);
+    assert.deepEqual(p.carry, { kind: T.carry, from: a });
+    assert.equal(g.snapshot().players.find((x) => x.id === 'p0').cy, T.carry, 'everyone sees it in your hands');
+    assert.ok(g.propState[a].taken && !g.propState[a].done);
+    // Hands full: can't take a second.
+    at(p, g.props[b]);
+    g.onInteract('p0', b);
+    assert.equal(p.channel, null, 'one at a time');
+    use(g, p, heart.sink, run);
+    assert.equal(p.carry, null);
+    assert.ok(g.propState[a].done);
+    assert.equal(g.propState[heart.sink].count, 1);
+    assert.equal(evs(g, 'task').at(-1).progress, 1);
+    // Captured while carrying: it goes back where it came from.
+    use(g, p, b, run);
+    assert.ok(p.carry);
+    g.dropCarry(p);
+    assert.equal(p.carry, null);
+    assert.ok(!g.propState[b].taken, 'returned');
+    doHeartTasks(g, p, { ...heart, tasks: heart.tasks.slice(1) }, run);
+    assert.equal(g.propState[heart.sink].count, 3);
+    assert.ok(g.propState[heart.propId].unsealed, `${sin} unsealed`);
   }
 });
 
@@ -147,8 +163,7 @@ test('breaking a Heart open seals its room: no one leaves, the Keeper cannot ent
   assert.ok(start.tiles.length >= 1);
   const demon = g.demons.find((d) => d.id === start.demonId);
   assert.equal(demon.sin, heart.sin);
-  assert.equal(demon.hp, SINS[heart.sin].hp);
-  assert.ok(demon.hp >= 120 && demon.hp <= 160);
+  assert.equal(demon.hp, Math.round(SINS[heart.sin].hp * sinScaling(2).hp), 'scaled for a coven of two');
   assert.ok(g.inArena(p));
 
   // Nobody walks out: every opening is a wall now, for movement and for paths.
@@ -188,7 +203,7 @@ test('breaking a Heart open seals its room: no one leaves, the Keeper cannot ent
   assert.notEqual(roomAt(g.map, room.floor, pos.x, pos.z)?.id, room.id, 'locked out');
 });
 
-test('slaying the Sin destroys its Heart for good, grants the coven Ult charge and opens the doors', () => {
+test('slaying the Sin destroys its Heart for good and opens the doors', () => {
   const g = hearts(makeGame(humans('parthius', 'soham')));
   const p = g.players.get('p0');
   const q = g.players.get('p1');
@@ -197,7 +212,6 @@ test('slaying the Sin destroys its Heart for good, grants the coven Ult charge a
   const demon = a.demon;
   run(g, 2.5); // the eruption
   assert.ok(!demon.er);
-  const ult0 = q.ult;
   // Fight it with real spells until it falls.
   p.ult = 0;
   for (let i = 0; i < 400 && !demon.dead; i++) {
@@ -212,7 +226,6 @@ test('slaying the Sin destroys its Heart for good, grants the coven Ult charge a
   const end = evs(g, 'arena:end')[0];
   assert.equal(end.won, true);
   assert.equal(evs(g, 'heart').at(-1).sin, heart.sin);
-  assert.ok(q.ult - ult0 >= ULT.HEART + SIN_ULT_BONUS - 1, 'team Ult charge');
   assert.ok(!g.arenas.has(heart.propId));
   const f = g.map.floors[a.room.floor];
   for (const [tx, ty] of a.tiles) assert.ok(!overlapsSolid(g.world, a.room.floor, tileCenter(tx), tileCenter(ty), PLAYER_RADIUS), 'the runes fade');
@@ -239,13 +252,13 @@ test('if everyone inside is taken, the Sin withdraws into its Heart (still unsea
   assert.ok(p.captured, 'in the cage');
 });
 
-test('every Sin erupts with its own kit (120–160 HP, telegraphed attacks)', () => {
+test('every Sin erupts with its own kit (scaled HP, telegraphed attacks with ground AOE)', () => {
   for (const sin of SIN_IDS) {
     const g = hearts(makeGame(humans('soham', 'parthius')));
     const p = g.players.get('p0');
     g.players.get('p1').floor = 1;
     const { demon, room } = arenaOf(g, sin, [p]);
-    assert.ok(demon.maxHp >= 120 && demon.maxHp <= 160, sin);
+    assert.equal(demon.maxHp, Math.round(SINS[sin].hp * sinScaling(2).hp), sin);
     assert.equal(demon.snapshot().sin, sin);
     assert.ok(demon.snapshot().er, 'erupting');
     const spot = spotNear(g, room, demon.x, demon.z, 4, Math.PI / 3);
@@ -259,6 +272,8 @@ test('every Sin erupts with its own kit (120–160 HP, telegraphed attacks)', ()
       if (sin === 'envy' && g.time > 3 && !struck) demon.damage(5, 'fire'); // Envy needs an element to copy
     }
     assert.ok(struck, `${sin} attacked`);
+    const windups = evs(g, 'sin:attack').filter((e) => e.stage === 'windup');
+    if (sin !== 'envy') assert.ok(windups.length && windups.every((e) => e.aoe?.length), `${sin} telegraphs on the ground`);
   }
 });
 
@@ -309,7 +324,7 @@ test('Greed drains Ult charge; Lust and Gluttony drag wizards in; Envy throws el
     Object.assign(p, spotNear(g, room, demon.x, demon.z, 5, 1));
     p.ult = 80;
     assert.ok(run(g, 12, () => evs(g, 'sin:impact').some((e) => e.hits.includes('p0'))), 'molten gold landed on you');
-    assert.ok(p.ult <= 80 - SINS.greed.gold.drain + ULT.PASSIVE * 12, `Ult charge stolen (${p.ult})`);
+    assert.ok(p.ult <= 80 - SINS.greed.gold.drain + (ULT.MAX / ULT.CHARGE_TIME) * 12, `Ult charge stolen (${p.ult})`);
   }
   // Lust
   {
@@ -412,4 +427,43 @@ test('debug L: opens the nearest Heart (or a named Sin) and pulls the coven into
   g.debugArena('p0');
   run(g, 0.1);
   assert.ok(g.destroyed.has(a.heart.propId));
+});
+
+test('Sins scale with the coven: HP ×(1 + 0.45(N−1)), damage and projectiles +20% per extra wizard', () => {
+  assert.deepEqual(sinScaling(1), { hp: 1, damage: 1 });
+  assert.ok(Math.abs(sinScaling(3).hp - 1.9) < 1e-9 && Math.abs(sinScaling(4).damage - 1.6) < 1e-9);
+  const hp = {};
+  const dmg = {};
+  for (const n of [1, 2, 3, 4]) {
+    const g = hearts(makeGame(humans(...['parthius', 'soham', 'himandriel', 'sushantus'].slice(0, n))));
+    const p = g.players.get('p0');
+    const { demon } = arenaOf(g, 'greed', [p]);
+    hp[n] = demon.maxHp;
+    p.hp = 100;
+    demon.hurt(p, 10);
+    dmg[n] = 100 - p.hp;
+    assert.equal(demon.count(SINS.greed.gold.count), Math.round(SINS.greed.gold.count * sinScaling(n).damage));
+  }
+  assert.equal(hp[1], SINS.greed.hp, 'about 180 solo');
+  assert.ok(hp[3] >= 320 && hp[3] <= 350, `about 340 for three (${hp[3]})`);
+  assert.ok(hp[4] >= 400 && hp[4] <= 440, `about 420 for four (${hp[4]})`);
+  assert.ok(dmg[4] > dmg[1] * 1.5, `it hits harder (${dmg[1]} → ${dmg[4]})`);
+});
+
+test('at 50% HP a Sin enrages: faster cadence, a broadcast eruption; the Black Slash Wave strips it for a while', () => {
+  const g = hearts(makeGame(humans('himanshu', 'soham')));
+  const p = g.players.get('p0');
+  g.players.get('p1').floor = 1;
+  const { demon } = arenaOf(g, 'pride', [p]);
+  demon.eruptUntil = 0;
+  assert.ok(!demon.isEnraged());
+  demon.damage(Math.ceil(demon.maxHp * (1 - SIN_ENRAGE.at)) + 1, 'test');
+  assert.ok(demon.isEnraged(), 'enraged');
+  assert.equal(evs(g, 'sin:enrage').length, 1);
+  assert.ok(demon.snapshot().rage, 'clients see the aura');
+  run(g, 0.1);
+  demon.stripEnrage(4);
+  assert.ok(!demon.isEnraged(), 'stripped');
+  run(g, 4.2);
+  assert.ok(demon.isEnraged(), 'it comes back');
 });

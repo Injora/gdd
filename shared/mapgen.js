@@ -24,7 +24,7 @@ import {
   TILE, TILE_WALL, TILE_FLOOR, TILE_DOOR, TILE_VOID, FLOOR, FLOOR_Y, DIRS, HEART_COUNT,
   tileCenter, propRotFromDir, yawFromDir,
 } from './constants.js';
-import { ROOM_TYPES, HEART_TYPES, HEART_TYPE_IDS, TASKS, TASK_KINDS, TASK_STEPS, makeClue } from './lore.js';
+import { ROOM_TYPES, HEARTS, HEART_SINS, TASKS, CURIO_KINDS, makeClue } from './lore.js';
 import { PROP_DEFS } from './propdefs.js';
 
 const W = 60;
@@ -269,7 +269,7 @@ const RECIPES = {
   altar: [['pillar', 'inset', 4, 4], ['statue', 'wall', 1, 2], ['sconce', 'wall', 2, 4]],
   stairwell: [['crate', 'wall', 1, 2], ['cabinet', 'wall', 0, 1], ['sconce', 'wall', 1, 2]],
   stairhall: [['statue', 'wall', 1, 2], ['sconce', 'wall', 2, 3], ['painting', 'wall', 1, 2], ['armchair', 'wall', 0, 1], ['rug', 'rug', 0, 1]],
-  banquet: [['longtable', 'longtable', 1, 1], ['cabinet', 'wall', 1, 2], ['fireplace', 'wall', 0, 1], ['painting', 'wall', 1, 2], ['chandelier', 'chandelier', 1, 1]],
+  banquet: [['cabinet', 'wall', 1, 2], ['fireplace', 'wall', 0, 1], ['painting', 'wall', 1, 2], ['chandelier', 'chandelier', 1, 1]],
   armory: [['armor', 'wall', 3, 6], ['weaponrack', 'wall', 1, 3], ['statue', 'center', 0, 1], ['sconce', 'wall', 1, 2], ['rug', 'rug', 0, 1]],
   nursery: [['crib', 'wall', 1, 2], ['rockinghorse', 'center', 0, 1], ['cabinet', 'wall', 0, 1], ['chair', 'wall', 0, 1]],
   conservatory: [['plant', 'wall', 4, 8], ['plant', 'center', 1, 3], ['table', 'center', 0, 1], ['chair', 'center', 0, 2]],
@@ -734,7 +734,8 @@ function tryGenerate(rng, seed) {
   const bySize = () => freeG().sort((a, b) => b.area - a.area);
   setType(bySize()[0], 'banquet');
   setType(bySize()[Math.min(1, bySize().length - 1)], 'armory');
-  setType(bySize().at(-1), 'nursery');
+  // The Nursery needs space for Belphegor's cradle-box and three metronomes.
+  setType(bySize().filter((r) => r.area >= 36 && r.w >= 6 && r.h >= 6).at(-1) ?? bySize()[0], 'nursery');
   fillPools(rng, groundRooms, 'ground', ['parlor', 'servants', 'smoking']);
 
   // ---- Basement + placer
@@ -839,71 +840,76 @@ function tryGenerate(rng, seed) {
   if (!gateProp) return null;
   placer.place(basement.cell, 'candles', { x: basement.cell.cx, y: basement.cell.cy, dir: 0, wall: false }, { light: '#b0141e' });
 
-  // ---- Hearts: seven rooms on Floors 1 and 2, seven disguises, a task in each room.
-  const excluded = new Set(['foyer', 'altar', 'stairwell', 'library', 'stairhall', 'gallery', 'landing']);
-  const heartable = (list) => rng.shuffle(list.filter((r) => !excluded.has(r.type) && r.w >= 5 && r.h >= 5))
-    .sort((a, b) => (b.area >= 30) - (a.area >= 30));
-  const gCands = heartable(groundRooms);
-  const uCands = heartable(upperRooms);
-  const nGround = Math.min(gCands.length, rng.int(3, 4));
-  const heartRooms = [...gCands.slice(0, nGround), ...uCands.slice(0, HEART_COUNT - nGround)];
-  if (heartRooms.length < HEART_COUNT) return null;
-  const spare = [...gCands.slice(nGround), ...uCands.slice(HEART_COUNT - nGround)];
-
+  // ---- Hearts (Step 7): each Sin's centrepiece in its own room, with its 3-part task.
   const hearts = [];
-  const types = rng.shuffle([...HEART_TYPE_IDS]);
-  for (let i = 0; i < types.length; i++) {
-    const type = types[i];
-    const ht = HEART_TYPES[type];
-    let placed = null, room = null;
-    for (const r of [heartRooms[i], ...spare].filter(Boolean)) {
-      if (hearts.some((h) => h.roomId === r.id)) continue;
-      placed = placer.placeOnWall(r, ht.prop, { heart: type });
-      if (placed) {
-        room = r;
-        const si = spare.indexOf(r);
-        if (si >= 0) spare.splice(si, 1);
-        break;
-      }
+  const dist2 = (a, b) => (a.x - b.x) ** 2 + (a.y - b.y) ** 2;
+  const nearest = (slots, pt) => slots.slice().sort((a, b) => dist2(a, pt) - dist2(b, pt));
+  /** Place `n` of `kind` from `slots`, each as far as possible from the ones already placed. */
+  const spread = (room, kind, slots, n, extra, avoid = []) => {
+    const out = [];
+    for (let k = 0; k < n; k++) {
+      const others = [...avoid, ...out.map((q) => ({ x: q.tx, y: q.ty }))];
+      const order = slots.slice().sort((a, b) => Math.min(...others.map((o) => dist2(b, o)), 1e9) - Math.min(...others.map((o) => dist2(a, o)), 1e9));
+      const placed = placer.placeAny(room, kind, order, { ...extra });
+      if (!placed) return null;
+      out.push(placed);
     }
-    if (!placed) return null;
-    // The room's task: three props of one kind.
-    const kind = rng.pick(TASK_KINDS);
-    const task = TASKS[kind];
-    const taskIds = [];
-    for (let k = 0; k < TASK_STEPS; k++) {
-      const extra = { task: kind, taskOf: type };
-      if (task.turns) extra.turns = rng.int(1, 3);
-      const slots = task.prop === 'rune_mirror' ? placer.wallSlots(room) : [...placer.centerSlots(room), ...placer.wallSlots(room)];
-      const tp = placer.placeAny(room, task.prop, slots, extra);
-      if (!tp) return null;
-      taskIds.push(tp.id);
+    return out;
+  };
+  for (const sin of HEART_SINS) {
+    const H = HEARTS[sin], T = TASKS[sin];
+    const room = rooms.find((r) => r.type === H.room);
+    if (!room) return null;
+    const centre = { x: room.cx, y: room.cy };
+    const extra = (role) => ({ task: sin, role, taskOf: sin });
+    let heart = null, sink = null, sources = null;
+    if (sin === 'gluttony') {
+      // The long banquet table first; the Chalice at its head; the platters by it; the furnace at the back.
+      const horizontal = room.w >= room.h;
+      const dir = horizontal ? 1 : 2;
+      const table = placer.place(room, 'longtable', { x: room.cx, y: room.cy, dir, wall: false, centered: true });
+      const [dx, dy] = DIRS[dir];
+      const head = table ? { x: room.cx + dx * 2, y: room.cy + dy * 2 } : centre;
+      heart = placer.placeAny(room, H.prop, nearest(placer.centerSlots(room), { x: head.x + dx, y: head.y + dy }), { heart: sin });
+      if (!heart) return null;
+      const tail = { x: room.cx - dx * 2, y: room.cy - dy * 2 };
+      sink = placer.placeAny(room, T.sink, placer.wallSlots(room).sort((a, b) => dist2(a, tail) - dist2(b, tail)), extra('sink'));
+      sources = spread(room, T.prop, nearest(placer.centerSlots(room), centre).slice(0, 24), 3, extra('source'), [{ x: heart.tx, y: heart.ty }]);
+    } else {
+      const heartSlots = H.prop === 'velvet_portrait' ? placer.wallSlots(room) : nearest(placer.centerSlots(room), centre);
+      heart = placer.placeAny(room, H.prop, heartSlots, { heart: sin });
+      if (!heart) return null;
+      const at = [{ x: heart.tx, y: heart.ty }];
+      if (T.sink) sink = placer.placeAny(room, T.sink, nearest(placer.centerSlots(room), centre), extra('sink'));
+      let slots = placer.wallSlots(room);
+      if (sin === 'sloth') slots = [...placer.insetSlots(room), ...placer.wallSlots(room)]; // the nursery's corners
+      sources = spread(room, T.prop, slots, 3, extra('source'), sink ? [...at, { x: sink.tx, y: sink.ty }] : at);
     }
+    if (!sources || (T.sink && !sink)) return null;
     hearts.push({
-      id: `heart_${type}`,
-      type,
-      name: ht.name,
-      sin: ht.sin,
-      propId: placed.id,
+      id: `heart_${sin}`,
+      type: sin,
+      sin,
+      name: H.name,
+      propId: heart.id,
       roomId: room.id,
       roomName: room.name,
       floor: room.floor,
-      task: kind,
-      tasks: taskIds,
-      clue: makeClue(type, room.type),
+      task: sin,
+      tasks: sources.map((q) => q.id),
+      sink: sink?.id ?? null,
+      clue: makeClue(sin, room.type),
     });
   }
 
-  // ---- Decoys: ordinary twins of each heart scattered elsewhere
-  const decoyRooms = rooms.filter((r) => r !== altar && r.type !== 'cell' && r.type !== 'antechamber' && r !== gallery);
-  for (const type of HEART_TYPE_IDS) {
-    const heartRoom = hearts.find((h) => h.type === type).roomId;
-    const count = rng.int(2, 3);
-    const candidates = rng.shuffle(decoyRooms.filter((r) => r.id !== heartRoom));
+  // ---- Curios: ordinary heirlooms scattered through the house (examining one makes noise)
+  const curioRooms = rooms.filter((r) => r !== altar && r.type !== 'cell' && r.type !== 'antechamber' && r !== gallery);
+  for (const kind of CURIO_KINDS) {
+    const count = rng.int(1, 2);
     let n = 0;
-    for (const r of candidates) {
+    for (const r of rng.shuffle(curioRooms.slice())) {
       if (n >= count) break;
-      if (placer.placeOnWall(r, HEART_TYPES[type].prop, { decoy: type })) n++;
+      if (placer.placeOnWall(r, kind, { decoy: kind })) n++;
     }
   }
 
@@ -956,7 +962,7 @@ function tryGenerate(rng, seed) {
   };
 }
 
-/** Copy of the map safe to send to clients: hearts look exactly like decoys. */
+/** Copy of the map for clients: which Sin keeps which Heart arrives with the Tome. */
 export function publicMap(map) {
   return {
     ...map,

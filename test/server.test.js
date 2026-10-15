@@ -128,17 +128,22 @@ test('solo coven: lobby -> tome -> seven hearts (room tasks, Sins) -> convergenc
   // Destroy all seven: break each room's three wards, open the Heart, slay its Sin.
   for (const h of map.hearts) {
     const prop = map.props[h.propId];
+    const use = async (id) => {
+      putAt(map.props[id]);
+      const started = waitFor(a, 'game:channel', (d) => d.propId === id);
+      a.emit('p:interact', { propId: id });
+      await started;
+      const step = waitFor(a, 'game:event', (e) => e.type === 'task' && e.propId === id);
+      fastForward();
+      return step;
+    };
     for (const tid of h.tasks) {
-      const tp = map.props[tid];
-      putAt(tp);
-      while (!game.propState[tid]?.done) {
-        const started = waitFor(a, 'game:channel', (d) => d.propId === tid);
-        a.emit('p:interact', { propId: tid });
-        await started;
-        const step = waitFor(a, 'game:event', (e) => e.type === 'task' && e.propId === tid);
-        fastForward();
-        await step;
-      }
+      const took = await use(tid);
+      if (h.sink === null || h.sink === undefined) continue;
+      assert.ok(took.took, 'picked it up');
+      const placed = await use(h.sink); // the scale / the furnace
+      assert.ok(placed.sink);
+      assert.ok(game.propState[tid]?.done);
     }
     putAt(prop);
     const started = waitFor(a, 'game:channel', (d) => d.propId === prop.id);

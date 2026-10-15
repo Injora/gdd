@@ -80,6 +80,7 @@ export class SpellSystem {
     if (!spell) return { ok: false, reason: WIZARD_BY_ID[p.wizardId] ? 'bad-slot' : 'no-ability' };
     if (!Number.isFinite(yaw)) return { ok: false, reason: 'bad-aim' };
     const ult = slot === 'ult';
+    if (ult && p.ultUsed) return { ok: false, reason: 'expended' }; // once per game
     if (ult && (p.ult ?? 0) < ULT.MAX) return { ok: false, reason: 'charge', charge: p.ult ?? 0 };
     const remaining = ult ? 0 : this.cooldownLeft(p, spell.id);
     if (remaining > 0) return { ok: false, reason: 'cooldown', remaining };
@@ -105,7 +106,10 @@ export class SpellSystem {
     if (refused) return { ok: false, reason: 'no-target' };
     p.actAt = this.t; // casting gives an invisible wizard away
     const cooldown = ult ? 0 : spell.cooldown * (this.game.cooldownScale ?? 1);
-    if (ult) p.ult = 0;
+    if (ult) {
+      p.ult = 0;
+      p.ultUsed = true; // never again this game
+    }
     else {
       p.cooldowns ??= {};
       p.cooldowns[spell.id] = this.t + cooldown;
@@ -115,11 +119,20 @@ export class SpellSystem {
     return { ok: true, event, cooldown };
   }
 
-  /** Ultimate charge for landing a normal spell (once per cast). */
+  /** A spell landed (Ultimates no longer charge from hits: they charge over time). */
   credit(p, ev) {
     if (!p || ev.ult || ev.credited) return;
     Object.defineProperty(ev, 'credited', { value: true, enumerable: false });
-    this.game.addUlt?.(p, ULT.HIT);
+  }
+
+  /** Utility dashes: slide `distance` along `dir` (walls stop you), as a teleport. */
+  dash(p, dir, distance, ev) {
+    const from = { x: p.x, z: p.z };
+    const to = moveCircle(this.game.world, p.floor, p.x, p.z, dir.x * distance, dir.z * distance, PLAYER_RADIUS);
+    ev.from = { x: r2(from.x), z: r2(from.z) };
+    ev.to = { x: r2(to.x), z: r2(to.z) };
+    this.game.teleport(p, to.x, to.z, p.floor, p.yaw);
+    return { from, to };
   }
 
   /** The monster inside the caster's aim cone, in range and in line of sight. */
@@ -200,6 +213,7 @@ export class SpellSystem {
       ev.to = { x: r2(end.x), z: r2(end.z) };
       if (!m) return;
       m.torment(a.interrupt, a.reveal);
+      m.damage(a.damage, 'black');
       ev.hit = m.id;
       this.credit(p, ev);
     },
@@ -280,7 +294,8 @@ export class SpellSystem {
       this.addZone({ kind: 'burnline', floor: p.floor, x: p.x, z: p.z, x2: end.x, z2: end.z, r: a.width / 2, until: this.t + a.lineDuration, a });
       ev.duration = a.lineDuration;
     },
-    phoenix_aura(p, a, dir, ev) {
+    phoenix_dash(p, a, dir, ev) {
+      this.dash(p, dir, a.distance, ev);
       this.addBuff(p, 'phoenix', a.duration);
       ev.duration = a.duration;
     },
@@ -314,19 +329,24 @@ export class SpellSystem {
         },
       });
     },
-    sea_cradle(p, a, dir, ev) {
-      const ids = [];
-      for (const o of this.allies(p, a.radius)) {
-        this.addBuff(o, 'cradle', a.duration, { hp: a.absorb });
-        ids.push(o.id);
-      }
-      ev.shielded = ids;
+    slipstream(p, a, dir, ev) {
+      this.dash(p, dir, a.distance, ev);
+      this.addBuff(p, 'cradle', a.duration, { hp: a.absorb });
+      ev.shielded = [p.id];
       ev.duration = a.duration;
     },
-    riptide_vortex(p, a, dir, ev) {
-      const at = this.reach(p, dir, a.range);
-      const zone = this.addZone({ kind: 'riptide', floor: p.floor, x: at.x, z: at.z, r: a.trigger, until: this.t + a.life, a, ev, owner: p, armed: true });
-      ev.zone = { id: zone.id, x: r2(zone.x), z: r2(zone.z), r: a.trigger, duration: a.life };
+    riptide_geyser(p, a, dir, ev) {
+      const m = this.coneTarget(p, a, dir);
+      const at = m ? { x: m.x, z: m.z } : this.reach(p, dir, a.range * 0.6);
+      ev.zone = { x: r2(at.x), z: r2(at.z), r: a.radius, duration: a.lift };
+      for (const mm of this.game.monsters()) {
+        if (mm.floor !== p.floor || Math.hypot(mm.x - at.x, mm.z - at.z) > a.radius + mm.radius) continue;
+        mm.lift(a.lift);
+        mm.damage(a.damage, 'water');
+        ev.hit = mm.id;
+        this.credit(p, ev);
+      }
+      this.game.emitAll({ type: 'zone:trigger', castId: ev.id, ability: 'riptide_geyser', floor: p.floor, x: r2(at.x), z: r2(at.z), duration: a.lift });
     },
     abyssal_deluge(p, a, dir, ev) {
       this.game.flood = { until: this.t + a.duration, slow: a.slow };
@@ -342,12 +362,6 @@ export class SpellSystem {
         this.credit(p, ev);
       }
       ev.range = a.range;
-      const tiles = this.barricadeTiles(p, a, dir);
-      if (tiles.length) {
-        addBarrier(this.game.world, p.floor, ev.id, tiles);
-        this.barriers.push({ id: ev.id, floor: p.floor, tiles, until: this.t + a.wallDuration, hp: a.wallHits });
-        ev.wall = { tiles, duration: a.wallDuration };
-      }
     },
     devils_snare(p, a, dir, ev) {
       const m = this.coneTarget(p, a, dir);
@@ -368,7 +382,7 @@ export class SpellSystem {
         },
       });
     },
-    granite_skin(p, a, dir, ev) {
+    earthen_rampart(p, a, dir, ev) {
       const ids = [];
       for (const o of this.allies(p, a.radius)) {
         this.addBuff(o, 'granite', a.duration);
@@ -376,6 +390,12 @@ export class SpellSystem {
       }
       ev.shielded = ids;
       ev.duration = a.duration;
+      const tiles = this.barricadeTiles(p, a, dir);
+      if (tiles.length) {
+        addBarrier(this.game.world, p.floor, ev.id, tiles);
+        this.barriers.push({ id: ev.id, floor: p.floor, tiles, until: this.t + a.wallDuration, hp: a.wallHits });
+        ev.wall = { tiles, duration: a.wallDuration };
+      }
     },
     yggdrasil(p, a, dir, ev) {
       const spot = this.reach(p, dir, 2.2); // the adjacent tile, within reach of its fruit
@@ -399,6 +419,7 @@ export class SpellSystem {
       const m = this.coneTarget(p, a, dir);
       ev.range = a.range;
       if (!m) return;
+      m.damage(a.damage, 'wind');
       m.knockback(p.x, p.z, a.knockback, a.knockbackTime, dir);
       ev.hit = m.id;
       this.credit(p, ev);
@@ -421,13 +442,10 @@ export class SpellSystem {
         });
       }
     },
-    zephyr_tailwind(p, a, dir, ev) {
-      const ids = [];
-      for (const o of this.allies(p, a.radius)) {
-        this.addBuff(o, 'tailwind', a.duration);
-        ids.push(o.id);
-      }
-      ev.shielded = ids;
+    zephyr_glide(p, a, dir, ev) {
+      this.dash(p, dir, a.distance, ev);
+      this.addBuff(p, 'tailwind', a.duration);
+      ev.shielded = [p.id];
       ev.duration = a.duration;
     },
     vacuum_tempest(p, a, dir, ev) {
@@ -438,6 +456,7 @@ export class SpellSystem {
         if (mm.floor !== p.floor || Math.hypot(mm.x - at.x, mm.z - at.z) > a.radius + mm.radius) continue;
         mm.lift(a.lift);
         mm.pull(at.x, at.z, a.lift, 3);
+        mm.damage(a.damage, 'wind');
         ev.hit = mm.id;
         this.credit(p, ev);
       }
@@ -455,6 +474,7 @@ export class SpellSystem {
       ev.to = { x: r2(at.x), z: r2(at.z) };
       if (!m) return;
       m.stun(a.stun);
+      m.damage(a.damage, 'white');
       ev.hit = m.id;
       ev.duration = a.stun;
       this.credit(p, ev);
@@ -476,9 +496,16 @@ export class SpellSystem {
         });
       }
     },
-    patronus_beacon(p, a, dir, ev) {
-      const zone = this.addZone({ kind: 'patronus', floor: p.floor, x: p.x, z: p.z, r: a.radius, until: this.t + a.duration, a });
-      ev.zone = { x: r2(zone.x), z: r2(zone.z), r: a.radius, duration: a.duration };
+    solar_nova(p, a, dir, ev) {
+      ev.radius = a.radius;
+      for (const m of this.game.monsters()) {
+        if (m.floor !== p.floor || Math.hypot(m.x - p.x, m.z - p.z) > a.radius + m.radius) continue;
+        if (!lineOfSight(this.game.map, p.floor, p.x, p.z, m.x, m.z)) continue;
+        m.damage(a.damage, 'white');
+        m.knockback(p.x, p.z, a.knock, 0.2);
+        ev.hit = m.id;
+        this.credit(p, ev);
+      }
     },
     flash_step(p, a, dir, ev) {
       const from = { x: p.x, z: p.z };
@@ -512,19 +539,27 @@ export class SpellSystem {
       ev.duration = a.shieldDuration;
       ev.radius = a.shieldRadius;
     },
-    black_slash(p, a, dir, ev) {
+    black_divider(p, a, dir, ev) {
       const m = this.coneTarget(p, a, dir);
       ev.range = a.range;
       if (!m) return;
       m.damage(a.damage, 'void');
       m.action = null; // the windup is cut apart
-      m.calm(a.calm);
+      if (m.attack && m.attack.kind !== 'dash') m.attack = null;
       ev.hit = m.id;
       this.credit(p, ev);
     },
-    null_zone(p, a, dir, ev) {
-      const zone = this.addZone({ kind: 'null', floor: p.floor, x: p.x, z: p.z, r: a.radius, until: this.t + a.duration, a });
-      ev.zone = { x: r2(zone.x), z: r2(zone.z), r: a.radius, duration: a.duration };
+    black_slash(p, a, dir, ev) {
+      this.spawnProjectile(p, ev, a, {
+        kind: 'crescent', dir, speed: a.speed, radius: a.radius, range: a.range,
+        onHit: (m) => {
+          m.damage(a.damage, 'void');
+          m.calm(a.calm);
+          m.stripEnrage?.(a.strip); // a Sin loses its enrage for a while
+          this.credit(p, ev);
+        },
+      });
+      ev.range = a.range;
     },
     bull_thrust(p, a, dir, ev) {
       const from = { x: p.x, z: p.z };
@@ -534,6 +569,7 @@ export class SpellSystem {
       this.game.teleport(p, to.x, to.z, p.floor, p.yaw);
       for (const m of this.game.monsters()) {
         if (m.floor !== p.floor || segDist(m.x, m.z, from.x, from.z, to.x, to.z) > a.hitRadius) continue;
+        m.damage(a.damage, 'void');
         m.knockback(from.x, from.z, a.knock, 0.25, dir);
         m.taunt?.(p, a.taunt);
         ev.hit = m.id;
@@ -736,14 +772,6 @@ export class SpellSystem {
       const z = this.zones[i];
       if (t >= z.until) { this.zones.splice(i, 1); continue; }
       const a = z.a;
-      if (z.kind === 'patronus') {
-        if (this.game.finale?.active) { this.game.finale.healArchon(a.heal * dt); continue; }
-        for (const p of this.game.players.values()) {
-          if (p.floor === z.floor && !p.captured && Math.hypot(p.x - z.x, p.z - z.z) <= z.r) p.hp = Math.min(HP.MAX, p.hp + a.heal * dt);
-        }
-        continue;
-      }
-      if (z.kind === 'null') continue; // a client-side calm; nothing to simulate
       for (const m of this.game.monsters()) {
         if (m.floor !== z.floor) continue;
         const inside = z.kind === 'burnline'
@@ -776,6 +804,12 @@ export class SpellSystem {
               m.root(a.root);
               this.credit(z.owner, z.ev);
               this.game.emitAll({ type: 'spell:hit', castId: z.ev.id, ability: a.id, id: m.id, floor: m.floor, x: r2(m.x), z: r2(m.z) });
+            }
+            // The thorns crush whatever they hold.
+            z.acc = (z.acc ?? 0) + (a.dps ?? 0) * dt;
+            if (z.acc >= 1) {
+              m.damage(Math.floor(z.acc), 'earth');
+              z.acc -= Math.floor(z.acc);
             }
             break;
           case 'riptide':

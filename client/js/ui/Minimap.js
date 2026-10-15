@@ -2,17 +2,17 @@
 // of the floor you're on (Floor 2, Floor 1 or the Basement), its room names,
 // stairs, a gold arrow for you and coloured ones for your coven, sealed Sin
 // arenas cross-hatched in blood, and red ripples wherever the Keeper's
-// footsteps fall within earshot (22 units).
+// footsteps fall within earshot (FOOTSTEPS.range, 28 units).
 //
 // Static ink is drawn once per floor; the dynamic layer redraws ~20 times a
 // second. `layout()` is pure (no DOM) so tests can check what it would show.
 
-import { TILE, TILE_WALL, TILE_DOOR, TILE_VOID, FLOOR, FLOOR_LABELS, FLOOR_ORDER } from '/shared/constants.js';
+import { TILE, TILE_WALL, TILE_DOOR, TILE_VOID, FLOOR, FLOOR_LABELS, FLOOR_ORDER, FOOTSTEPS } from '/shared/constants.js';
 import { WIZARD_BY_ID } from '/shared/wizards.js';
 
 const PX = 8; // static layer: pixels per tile
 const VIEW = 34; // tiles across the visible window
-export const FOOTSTEP_RANGE = 22;
+export const FOOTSTEP_RANGE = FOOTSTEPS.range;
 
 /** What the minimap shows for `floor` (pure: used by tests and the renderer). */
 export function minimapLayout(map, floor) {

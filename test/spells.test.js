@@ -103,10 +103,10 @@ test('casts are validated: bad aim and unknown wizard are rejected', () => {
   assert.equal(game.spells.cast(caster, EAST).reason, 'no-ability');
 });
 
-test('Psychic Torment: interrupts the chase 2s, reveals 6s, screams, no damage', () => {
+test('Dark Torment Bolt: 11 damage, interrupts the chase 2s, reveals 6s, screams', () => {
   const { game, caster, husk } = duel('injorath', 6);
   game.spells.cast(caster, EAST);
-  assert.equal(husk.hp, 100);
+  assert.equal(husk.hp, 100 - WIZARD_BY_ID.injorath.spells[0].damage);
   assert.ok(husk.isTormented() && husk.isRevealed());
   assert.equal(gameEvents(game, 'monster:scream').length, 1);
   const before = { x: husk.x, z: husk.z };
@@ -168,28 +168,28 @@ test('Tidal Surge: chip damage, 40% slow for 4s, puddle slows turning', () => {
   assert.equal(husk.turnMultiplier(), 1);
 });
 
-test('Sacred Bind: stuns and blinds in place for 3.5s', () => {
+test('Sacred Judgment Ray: 12 damage, stuns and blinds in place for 2.5s', () => {
   const { game, caster, husk } = duel('soham', 5);
   husk.attackReadyAt = 0;
   game.spells.cast(caster, EAST);
   assert.ok(husk.isStunned());
-  assert.equal(husk.hp, 100);
+  assert.equal(husk.hp, 100 - WIZARD_BY_ID.soham.spells[0].damage);
   const before = { x: husk.x, z: husk.z };
-  run(game, 3.3);
+  run(game, 2.3);
   assert.ok(Math.hypot(husk.x - before.x, husk.z - before.z) < 1e-6, 'frozen in place');
   assert.equal(gameEvents(game, 'husk:hit').length, 0, 'no attacks while stunned');
   run(game, 0.4);
   assert.ok(!husk.isStunned());
 });
 
-test('Gale Force: pushes 5 units straight back from the caster in open space', () => {
+test('Gale Force Cannon: 11 damage, pushes 5 units straight back from the caster in open space', () => {
   const { game, caster, husk } = duel('kartavian', 3, 12);
   const start = husk.x;
   game.spells.cast(caster, EAST);
   assert.ok(husk.isKnocked());
   run(game, 0.5);
   assert.ok(Math.abs(husk.x - start - 5) < 0.05, `moved ${husk.x - start}`);
-  assert.equal(husk.hp, 100);
+  assert.equal(husk.hp, 100 - WIZARD_BY_ID.kartavian.spells[0].damage);
 });
 
 test('Gale Force: knockback is clamped by walls (never out of bounds)', () => {
@@ -217,13 +217,15 @@ test('Gale Force: knockback is clamped by walls (never out of bounds)', () => {
   assert.ok(!overlapsSolid(game.world, 0, husk.x, husk.z, husk.radius - 1e-3), 'not embedded in geometry');
 });
 
-test('Terra Spike: chip damage + barricade that blocks movement and pathfinding, then crumbles', () => {
+test('Terra Spike damages; Earthen Rampart (utility) raises a barricade that blocks movement and pathfinding, then crumbles', () => {
   const { game, caster, husk, row } = duel('sushantus', 3, 9);
-  const a = WIZARD_BY_ID.sushantus.ability;
+  game.spells.cast(caster, EAST, 0, 0);
+  assert.equal(husk.hp, 100 - WIZARD_BY_ID.sushantus.spells[0].damage);
+  const a = WIZARD_BY_ID.sushantus.spells[3];
   const f = game.map.floors[0];
-  game.spells.cast(caster, EAST);
-  assert.equal(husk.hp, 100 - a.damage);
-  const wall = gameEvents(game, 'cast')[0].wall;
+  game.spells.cast(caster, EAST, 0, 3);
+  assert.ok(game.spells.buffCodes(caster).includes('granite'), 'granite armour');
+  const wall = gameEvents(game, 'cast')[1].wall;
   assert.ok(wall, 'barricade raised');
   assert.equal(wall.tiles.length, a.wallTiles);
   for (const [tx, ty] of wall.tiles) {
@@ -249,11 +251,11 @@ test('Terra Spike: chip damage + barricade that blocks movement and pathfinding,
   assert.ok(pos.x > (row.x + a.wallDistance + 1) * TILE, 'walkable again');
 });
 
-test('Terra Spike never entombs a wizard standing in the wall line', () => {
+test('Earthen Rampart never entombs a wizard standing in the wall line', () => {
   const { game, caster, row } = duel('sushantus', 7, 9);
   const ally = game.players.get('p1');
   place(ally, row.x + 2, row.y);
-  game.spells.cast(caster, EAST);
+  game.spells.cast(caster, EAST, 0, 3);
   const wall = gameEvents(game, 'cast')[0].wall;
   assert.ok(!wall || wall.tiles.every(([x, y]) => !(x === row.x + 2 && y === row.y)));
 });
@@ -265,7 +267,7 @@ test('Aegis of the Void: shields allies within 3 units; husk swipes are blocked'
   place(caster, row.x, row.y);
   place(near, row.x + 1, row.y); // 2 units
   place(far, row.x + 3, row.y); // 6 units
-  const res = game.spells.cast(caster, EAST);
+  const res = game.spells.cast(caster, EAST, 0, 3); // (utility: slot 4)
   assert.deepEqual(res.event.shielded.sort(), ['p0', 'p1']);
   assert.ok(game.spells.isShielded(near) && !game.spells.isShielded(far));
 

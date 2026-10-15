@@ -3,8 +3,8 @@
 //   2. The Keeper has locked on to a teammate → if our Ultimate is one of the
 //      three that break its lock (Dawn, Mind Fracture, Devil Union), use it.
 //   3. Locked in a Sin's arena → fight the Sin with everything we have.
-//   4. The Keeper prowls close (not locked on us) → Disillusionment (V), and
-//      hold perfectly still until it has passed.
+//   4. The Keeper prowls close (and can't see us) → toggle Disillusionment (V)
+//      on and hold perfectly still until it has passed.
 //   5. Someone is held  → run to the Cage (taking the stairs) and break the lock.
 //   6. Training Husk    → close into spell range and practise on it.
 //   7. Otherwise        → follow the nearest free human, scanning the dark.
@@ -119,16 +119,20 @@ export class Bot {
   }
 
   /**
-   * Disillusionment: with the Keeper stalking within HIDE_RADIUS (and not yet
-   * locked on to us), cast V and freeze until it has gone by. Returns true
-   * while hiding.
+   * Disillusionment (an infinite toggle): with the Keeper prowling within
+   * HIDE_RADIUS (and not seeing us), toggle V on and freeze until it has gone
+   * by; toggle it off again once it is far away. Returns true while hiding.
    */
   hide(dt, t) {
     const g = this.game, p = this.p, m = g.monster;
-    if (!m || m.hidden || m.floor !== p.floor || !['stalking', 'searching'].includes(m.state) || g.phase === PHASE.TOME) return false;
-    const d = Math.hypot(m.x - p.x, m.z - p.z);
     const invisible = g.spells.hasBuff(p, 'invis');
-    if (!invisible && d < HIDE_RADIUS && (p.cooldowns.invis ?? 0) <= t) g.onInvis(p.id);
+    const prowling = m && !m.hidden && m.floor === p.floor && ['stalking', 'searching'].includes(m.state) && g.phase !== PHASE.TOME;
+    const d = prowling ? Math.hypot(m.x - p.x, m.z - p.z) : Infinity;
+    if (!invisible && d < HIDE_RADIUS && !m.wouldSee(p)) g.onInvis(p.id);
+    else if (invisible && d > HIDE_RADIUS + 12 && t >= (this.hideToggleAt ?? 0)) {
+      g.onInvis(p.id); // off again: teammates can see us
+      this.hideToggleAt = t + 3;
+    }
     if (!g.spells.hasBuff(p, 'invis') || d > INVIS.sense + 4) return false;
     p.moving = false; // completely still
     p.sprint = false;

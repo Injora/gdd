@@ -9,7 +9,7 @@ export const SINS = {
     name: 'Pride',
     title: 'The Mirror Seraph',
     color: '#dfe8ff',
-    hp: 150,
+    hp: 180,
     speed: 2.4,
     radius: 0.6,
     blurb: 'It reflects anything cast at its face. Flank it, or stun it.',
@@ -21,7 +21,7 @@ export const SINS = {
     name: 'Greed',
     title: 'The Gilded Hoarder',
     color: '#ffc23a',
-    hp: 140,
+    hp: 175,
     speed: 2.0,
     radius: 0.7,
     blurb: 'Its molten gold burns, and every splash steals your Ultimate charge.',
@@ -31,7 +31,7 @@ export const SINS = {
     name: 'Lust',
     title: 'The Siren Weaver',
     color: '#ff5fb4',
-    hp: 130,
+    hp: 170,
     speed: 2.8,
     radius: 0.55,
     blurb: 'Its hypnotic ribbons drag you into its arms.',
@@ -42,7 +42,7 @@ export const SINS = {
     name: 'Envy',
     title: 'The Hollow Mimic',
     color: '#6dff9a',
-    hp: 130,
+    hp: 170,
     speed: 2.6,
     radius: 0.55,
     blurb: 'Whatever element strikes it, it throws back as a wave.',
@@ -53,7 +53,7 @@ export const SINS = {
     name: 'Gluttony',
     title: 'The Maw of Famine',
     color: '#a6e22e',
-    hp: 160,
+    hp: 190,
     speed: 1.7,
     radius: 0.85,
     blurb: 'It spits acid that spreads, and inhales everything near it.',
@@ -64,7 +64,7 @@ export const SINS = {
     name: 'Wrath',
     title: 'The Blood Berserker',
     color: '#ff2a1a',
-    hp: 150,
+    hp: 185,
     speed: 3.0,
     radius: 0.65,
     blurb: 'It charges, and it only gets faster as it bleeds.',
@@ -76,7 +76,7 @@ export const SINS = {
     name: 'Sloth',
     title: 'The Somnolent Dread',
     color: '#8f9bb8',
-    hp: 160,
+    hp: 190,
     speed: 1.3,
     radius: 0.9,
     blurb: 'Its aura fills the room with a heavy, dragging sleep.',
@@ -86,9 +86,21 @@ export const SINS = {
 };
 
 export const SIN_IDS = Object.keys(SINS);
+
+/**
+ * Co-op scaling (Step 7), by the number of wizards N in the game:
+ *   HP     = base × (1 + 0.45 (N − 1))     ~180 solo, ~340 for 3, ~420 for 4
+ *   damage and projectile counts × (1 + 0.20 (N − 1))
+ */
+export const SIN_SCALE = { hpPerPlayer: 0.45, damagePerPlayer: 0.2 };
+export function sinScaling(players) {
+  const n = Math.max(1, players);
+  return { hp: 1 + SIN_SCALE.hpPerPlayer * (n - 1), damage: 1 + SIN_SCALE.damagePerPlayer * (n - 1) };
+}
+/** At this HP fraction a Sin enrages: faster cadence and its signature attack upgraded. */
+export const SIN_ENRAGE = { at: 0.5, cadence: 0.65 };
 /** Seconds after a heart is broken before its demon can act (the eruption). */
 export const SIN_ERUPT = 2.2;
 /** No crowd control holds a Sin demon longer than this. */
 export const SIN_CC_CAP = 3;
-/** Ultimate charge every wizard gains when a Sin falls (on top of the Heart's own). */
-export const SIN_ULT_BONUS = 20;
+

@@ -1,12 +1,13 @@
 // Procedural models for every prop kind in shared/propdefs.js. Models face +Z
 // (out into the room) with their origin on the floor at the prop's position.
 //
-// Heart-capable props ("curios") get a userData.fx(t, ctx) animator. It only
-// shows the heart's tell once the Tome has revealed which props are hearts.
+// Animated props get a userData.fx(t, ctx) animator; the Hearts (sinProps.js)
+// only show their tell once the Tome has named them.
 
 import * as THREE from 'three';
 import { WALL_HEIGHT, FLOOR_Y } from '/shared/constants.js';
 import { portrait, stainedGlass } from './textures.js';
+import { sinBuilders } from './sinProps.js';
 
 const std = (color, rough = 0.85, metal = 0, extra = {}) =>
   new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: metal, ...extra });
@@ -812,146 +813,6 @@ export function createPropKit(tex) {
       return g;
     },
 
-    // ---- Step 6: the room tasks (three per Heart room) ------------------------
-    brazier(prop) {
-      const g = G();
-      for (let i = 0; i < 3; i++) {
-        const a = (i / 3) * Math.PI * 2;
-        const leg = cyl(g, 0.02, 0.03, 0.95, M.iron, Math.cos(a) * 0.22, 0.45, Math.sin(a) * 0.22, 5);
-        leg.rotation.z = Math.cos(a) * 0.2;
-        leg.rotation.x = -Math.sin(a) * 0.2;
-      }
-      const bowl = new THREE.Mesh(new THREE.LatheGeometry([[0, 0], [0.18, 0.02], [0.32, 0.14], [0.34, 0.2]].map(([r, y2]) => new THREE.Vector2(r, y2)), 16), M.iron);
-      bowl.position.y = 0.88;
-      g.add(bowl);
-      const runeMat = std(0x10080a, 0.6, 0.3, { emissive: 0xff7a20, emissiveIntensity: 0.05 });
-      const band = new THREE.Mesh(new THREE.TorusGeometry(0.33, 0.03, 6, 24), runeMat);
-      band.rotation.x = Math.PI / 2;
-      band.position.y = 1.06;
-      g.add(band);
-      for (let i = 0; i < 7; i++) {
-        const a = (i / 7) * Math.PI * 2;
-        box(g, 0.05, 0.08, 0.01, runeMat, Math.cos(a) * 0.335, 0.98, Math.sin(a) * 0.335).rotation.y = -a + Math.PI / 2;
-      }
-      const fire = G();
-      fire.position.y = 1.1;
-      const fireMat = new THREE.MeshBasicMaterial({ color: 0xff8a2a });
-      for (let i = 0; i < 5; i++) {
-        const f = new THREE.Mesh(new THREE.ConeGeometry(0.07 + (i % 2) * 0.04, 0.35 + (i % 3) * 0.12, 6), fireMat);
-        f.position.set(Math.cos(i * 1.3) * 0.12 * (i ? 1 : 0), 0.15, Math.sin(i * 1.3) * 0.12 * (i ? 1 : 0));
-        fire.add(f);
-      }
-      const halo = glow(fire, 0, 0.3, 0, 0xff8a30, 1.4, true);
-      fire.visible = false;
-      g.add(fire);
-      g.userData.setState = (st) => { g.userData.done = !!st?.done; fire.visible = g.userData.done; };
-      g.userData.fx = (t, ctx) => {
-        if (g.userData.done) {
-          fire.children.forEach((f, i) => { if (f.isMesh) f.scale.y = 1 + Math.sin(t * 13 + i * 1.9) * 0.25; });
-          halo.material.opacity = 0.7 + Math.sin(t * 9) * 0.2;
-          runeMat.emissiveIntensity = 1.2;
-        } else {
-          runeMat.emissiveIntensity = ctx.lumosNear ? 0.35 + Math.sin(t * 3) * 0.2 : 0.05; // Lumos picks out the runes
-        }
-      };
-      return g;
-    },
-    rune_mirror(prop) {
-      const g = G();
-      const y = 1.75;
-      const frame = G();
-      frame.position.set(0, y, 0);
-      const rim = new THREE.Mesh(new THREE.TorusGeometry(0.4, 0.05, 8, 32), M.brass);
-      rim.scale.y = 1.4;
-      frame.add(rim);
-      const glassMat = M.glass.clone();
-      glassMat.emissive = new THREE.Color(0x40c8ff);
-      glassMat.emissiveIntensity = 0;
-      const glassM = new THREE.Mesh(new THREE.CircleGeometry(0.38, 32), glassMat);
-      glassM.scale.y = 1.4;
-      glassM.position.z = 0.01;
-      frame.add(glassM);
-      const runeMat = std(0x101018, 0.5, 0.5, { emissive: 0x60d0ff, emissiveIntensity: 0.05 });
-      for (let i = 0; i < 6; i++) {
-        const a = (i / 6) * Math.PI * 2;
-        box(frame, 0.05, 0.05, 0.02, runeMat, Math.cos(a) * 0.46, Math.sin(a) * 0.64, 0.03);
-      }
-      const arrow = box(frame, 0.04, 0.16, 0.02, runeMat, 0, 0.66, 0.04); // aligned when this points up
-      g.add(frame);
-      g.userData.target = (prop?.turns ?? 0) * 0.55;
-      g.userData.setState = (st) => {
-        g.userData.done = !!st?.done;
-        const turns = st?.done ? 0 : (st?.turns ?? prop?.turns ?? 0);
-        g.userData.target = turns * 0.55;
-      };
-      g.userData.fx = (t, ctx) => {
-        frame.rotation.z += (g.userData.target - frame.rotation.z) * 0.08;
-        glassMat.emissiveIntensity = g.userData.done ? 0.35 + Math.sin(t * 2) * 0.1 : 0;
-        runeMat.emissiveIntensity = g.userData.done ? 1 : ctx.lumosNear ? 0.4 + Math.sin(t * 3) * 0.2 : 0.05;
-        arrow.visible = true;
-      };
-      g.userData.setState({ turns: prop?.turns });
-      return g;
-    },
-    pedestal() {
-      const g = G();
-      cyl(g, 0.24, 0.3, 0.1, M.stoneDark, 0, 0.05, 0, 10);
-      cyl(g, 0.14, 0.18, 0.85, M.stone, 0, 0.5, 0, 10);
-      box(g, 0.5, 0.08, 0.5, M.stoneDark, 0, 0.96, 0);
-      const glowMat2 = std(0x1a1006, 0.4, 0.8, { emissive: 0xffb040, emissiveIntensity: 0 });
-      const gears = [];
-      for (const [x, r, n] of [[-0.08, 0.15, 10], [0.13, 0.09, 7]]) {
-        const gear = G();
-        gear.position.set(x, 1.12, 0);
-        const wheel = new THREE.Mesh(new THREE.TorusGeometry(r, 0.025, 6, 20), glowMat2);
-        gear.add(wheel);
-        for (let i = 0; i < n; i++) {
-          const a = (i / n) * Math.PI * 2;
-          box(gear, 0.04, 0.04, 0.03, glowMat2, Math.cos(a) * (r + 0.03), Math.sin(a) * (r + 0.03), 0).rotation.z = a;
-        }
-        box(gear, r * 1.8, 0.02, 0.02, glowMat2);
-        g.add(gear);
-        gears.push({ gear, r });
-      }
-      const key = G();
-      key.position.set(0, 1.12, 0.12);
-      box(key, 0.03, 0.03, 0.12, M.brass, 0, 0, 0.04);
-      box(key, 0.16, 0.05, 0.02, M.brass, 0, 0, 0.1);
-      g.add(key);
-      g.userData.setState = (st) => { g.userData.done = !!st?.done; };
-      g.userData.fx = (t, ctx) => {
-        if (g.userData.done) {
-          gears.forEach(({ gear, r }, i) => { gear.rotation.z = t * (i ? -1.6 : 1) * (0.15 / r); });
-          key.rotation.z = t * 2;
-          glowMat2.emissiveIntensity = 0.6;
-        } else {
-          glowMat2.emissiveIntensity = ctx.lumosNear ? 0.25 + Math.sin(t * 3) * 0.15 : 0;
-        }
-      };
-      return g;
-    },
-    chalice() {
-      const g = G();
-      cyl(g, 0.22, 0.26, 0.6, M.stoneDark, 0, 0.3, 0, 10);
-      const gold = std(0xc8a040, 0.25, 0.9);
-      const cup = new THREE.Mesh(new THREE.LatheGeometry([[0, 0], [0.11, 0.01], [0.03, 0.05], [0.025, 0.2], [0.05, 0.24], [0.13, 0.32], [0.14, 0.42]].map(([r, y2]) => new THREE.Vector2(r, y2)), 16), gold);
-      cup.position.y = 0.6;
-      g.add(cup);
-      const inner = std(0x200204, 0.3, 0, { emissive: 0xff2030, emissiveIntensity: 0.05 });
-      cyl(g, 0.12, 0.12, 0.01, inner, 0, 0.99, 0, 14);
-      const coin = cyl(g, 0.05, 0.05, 0.012, gold, 0.02, 1.0, 0.01, 12);
-      coin.rotation.x = 0.3;
-      coin.visible = false;
-      const halo = glow(g, 0, 1.08, 0, 0xff3040, 0.6, true);
-      halo.visible = false;
-      g.userData.setState = (st) => { g.userData.done = !!st?.done; coin.visible = halo.visible = g.userData.done; };
-      g.userData.fx = (t, ctx) => {
-        inner.emissiveIntensity = g.userData.done ? 0.8 + Math.sin(t * 4) * 0.2 : ctx.lumosNear ? 0.3 + Math.sin(t * 3) * 0.2 : 0.05;
-        if (g.userData.done) halo.material.opacity = 0.5 + Math.sin(t * 4) * 0.2;
-      };
-      return g;
-    },
-
     // ---- curios (may be a Heart) -------------------------------------------
     mirror(prop) {
       const g = G();
@@ -1149,6 +1010,10 @@ export function createPropKit(tex) {
     return g;
   };
 
+  // Step 7: the Seven Hearts, their room tasks, and the things you carry.
+  const sin = sinBuilders({ G, box, cyl, sph, glow, std, M, heartbeat, getPortrait });
+  Object.assign(builders, sin.builders);
+
   function build(prop) {
     const make = builders[prop.kind];
     if (!make) throw new Error(`No model for prop kind "${prop.kind}"`);
@@ -1164,7 +1029,7 @@ export function createPropKit(tex) {
     return obj;
   }
 
-  return { build, materials: M, uniforms, glow, coneMaterial };
+  return { build, materials: M, uniforms, glow, coneMaterial, carry: sin.carry };
 }
 
 /** 0..1 "lub-dub" pulse at ~66 bpm. */

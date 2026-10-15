@@ -6,11 +6,11 @@ import { performance } from 'node:perf_hooks';
 import { generateMansion, publicMap, roomAt } from '../shared/mapgen.js';
 import { createCollisionWorld, overlapsSolid, addBarrier, removeBarrier, moveCircle } from '../shared/collision.js';
 import {
-  PHASE, CHANNEL, INTERACT_RANGE, TICK_RATE, SPEED, HEART_COUNT, TILE, TILE_WALL, TILE_VOID, PLAYER_RADIUS, HP, INVIS,
+  PHASE, CHANNEL, INTERACT_RANGE, TICK_RATE, SPEED, HEART_COUNT, TILE, TILE_WALL, TILE_VOID, PLAYER_RADIUS, HP,
   tileCenter,
 } from '../shared/constants.js';
 import { DECOY_LINES, TOME_TEXT, TASKS, TASK_STEPS, HEART_TYPES } from '../shared/lore.js';
-import { SINS, SIN_ULT_BONUS } from '../shared/sins.js';
+import { SINS } from '../shared/sins.js';
 import { SinDemon } from './SinDemon.js';
 import { PROP_LABELS } from '../shared/propdefs.js';
 import { WIZARD_BY_ID, ULT } from '../shared/wizards.js';
@@ -45,7 +45,7 @@ export class Game {
     this.clientMap = publicMap(this.map);
     this.props = this.map.props;
     this.heartByProp = new Map(this.map.hearts.map((h) => [h.propId, h]));
-    this.heartByTask = new Map(this.map.hearts.flatMap((h) => h.tasks.map((id) => [id, h])));
+    this.heartByTask = new Map(this.map.hearts.flatMap((h) => [...h.tasks, ...(h.sink !== null && h.sink !== undefined ? [h.sink] : [])].map((id) => [id, h])));
     this.arenas = new Map(); // heart propId -> { heart, room, tiles, barrierId, demon, by, startedAt }
     this.demons = [];
     this.propState = {}; // propId -> { open?, destroyed? }
@@ -88,7 +88,8 @@ export class Game {
         cooldowns: {},
         shieldUntil: 0,
         hp: HP.MAX,
-        ult: 0, // Ultimate charge 0–100
+        ult: 0, // Ultimate charge 0–100 (5 minutes of match time)
+        ultUsed: false, // an Ultimate is cast once per game
         buffs: {},
         lastHurtAt: -Infinity,
         captured: false, // held in the Basement Ritual Cell
@@ -148,8 +149,10 @@ export class Game {
     return {
       by: this.tomeReadBy,
       text: TOME_TEXT,
-      // Riddles only: which object is the Heart, you find out by breaking its room's wards.
-      hearts: this.map.hearts.map(({ id, type, name, sin, propId, clue }) => ({ id, type, name, sin, clue, destroyed: this.destroyed.has(propId) })),
+      // Step 7: the Tome names each Sin's Heart, its room and its task (the map shows them).
+      hearts: this.map.hearts.map(({ id, type, name, sin, propId, roomId, roomName, floor, tasks, sink, clue }) => ({
+        id, type, name, sin, propId, roomId, roomName, floor, tasks, sink, clue, destroyed: this.destroyed.has(propId),
+      })),
     };
   }
 
@@ -202,7 +205,9 @@ export class Game {
         cap: p.captured,
         cg: !!p.capturing,
         hp: Math.ceil(p.hp),
+        cy: p.carry?.kind ?? null,
         u: Math.floor(p.ult),
+        ux: !!p.ultUsed,
         bf: this.spells.buffCodes(p),
       })),
       monsters: this.bodies().map((m) => m.snapshot()),
@@ -329,7 +334,7 @@ export class Game {
           this.whisper(p, `${SINS[heart.sin].name} is loose. Kill it, and the Heart dies with it.`);
         } else if (heart && !this.propState[prop.id]?.unsealed) {
           const left = TASK_STEPS - this.tasksDone(heart);
-          this.whisper(p, `It beats behind a seal. ${TASKS[heart.task].intro} ${left} of ${TASK_STEPS} still hold it shut.`);
+          this.whisper(p, `It beats behind a seal. ${TASKS[heart.sin].objective} to unseal it (${TASK_STEPS - left} of ${TASK_STEPS}).`);
         } else if (heart) {
           this.startChannel(p, prop, CHANNEL.heart);
         } else {
@@ -348,14 +353,23 @@ export class Game {
         const heart = this.heartByTask.get(prop.id);
         const st = this.propState[prop.id];
         if (!heart) break;
+        const T = TASKS[heart.sin];
         if (this.phase === PHASE.TOME) {
-          this.whisper(p, 'Old runes, cold and meaningless. Not until the Tome has been read.');
+          this.whisper(p, 'It means nothing to you yet. Not until the Tome has been read.');
         } else if (this.destroyed.has(heart.propId) || this.propState[heart.propId]?.unsealed) {
-          this.whisper(p, `${TASKS[prop.task].done}. The ward is broken.`);
+          this.whisper(p, `${T.done}. The Heart is already unsealed.`);
+        } else if (prop.role === 'sink') {
+          // The scale / the furnace: bring it what it wants.
+          if (p.carry?.kind !== T.carry) this.whisper(p, T.carry === 'ingot' ? 'The scale waits, empty. Bring it gold from the display cases.' : 'The furnace roars, hungry. Bring it the rotting platters.');
+          else this.startChannel(p, prop, T.time);
         } else if (st?.done) {
-          this.whisper(p, `${TASKS[prop.task].done}.`);
+          this.whisper(p, `${T.done}.`);
+        } else if (T.carry) {
+          if (st?.taken) this.whisper(p, 'Empty. Someone is carrying it.');
+          else if (p.carry) this.whisper(p, 'Your hands are full.');
+          else this.startChannel(p, prop, T.takeTime);
         } else {
-          this.startChannel(p, prop, TASKS[prop.task].time);
+          this.startChannel(p, prop, T.time);
         }
         break;
       }
@@ -435,20 +449,53 @@ export class Game {
   completeTask(p, prop) {
     const heart = this.heartByTask.get(prop.id);
     if (!heart || this.phase !== PHASE.HEARTS || this.propState[heart.propId]?.unsealed || this.destroyed.has(heart.propId)) return;
+    const T = TASKS[heart.sin];
     const st = this.propState[prop.id] ?? {};
-    if (st.done) return;
-    if (TASKS[prop.task].turns) {
-      const turns = (st.turns ?? prop.turns) - 1;
-      this.propState[prop.id] = turns <= 0 ? { done: true, turns: 0 } : { turns };
+    let stepId = prop.id;
+    if (prop.role === 'sink') {
+      // Weigh the ingot / dump the platter: its source counts as done.
+      if (p.carry?.kind !== T.carry) return;
+      stepId = p.carry.from;
+      this.propState[stepId] = { done: true };
+      this.setCarry(p, null);
+      const placed = heart.tasks.filter((id) => this.propState[id]?.done).length;
+      this.propState[prop.id] = { count: placed };
+      this.emitAll({ type: 'task', propId: prop.id, task: heart.sin, by: p.name, state: this.propState[prop.id], progress: placed, of: TASK_STEPS, sink: true });
+    } else if (T.carry) {
+      // Take the ingot / the platter (one at a time).
+      if (st.done || st.taken || p.carry) return;
+      this.propState[prop.id] = { taken: true };
+      this.setCarry(p, { kind: T.carry, from: prop.id });
+      this.emitAll({ type: 'task', propId: prop.id, task: heart.sin, by: p.name, state: this.propState[prop.id], progress: this.tasksDone(heart), of: TASK_STEPS, took: true });
+      return;
     } else {
+      if (st.done) return;
       this.propState[prop.id] = { done: true };
     }
     const done = this.tasksDone(heart);
-    this.emitAll({ type: 'task', propId: prop.id, task: prop.task, by: p.name, state: this.propState[prop.id], progress: done, of: TASK_STEPS });
+    this.emitAll({ type: 'task', propId: stepId, task: heart.sin, by: p.name, state: this.propState[stepId], progress: done, of: TASK_STEPS });
     if (done < TASK_STEPS) return;
     this.propState[heart.propId] = { unsealed: true };
     this.emitAll({ type: 'heart:unsealed', propId: heart.propId, name: heart.name, room: heart.roomName, sin: heart.sin, by: p.name });
     this.noise(p, 12, 'decoy'); // the seal breaks loudly: it comes to look
+  }
+
+  /** What p carries (an ingot, a platter), or null; everyone sees it in their hands. */
+  setCarry(p, carry) {
+    p.carry = carry;
+    this.emitAll({ type: 'carry', id: p.id, kind: carry?.kind ?? null });
+  }
+
+  /** Taken (captured…) while carrying: the item goes back where it came from. */
+  dropCarry(p) {
+    if (!p.carry) return;
+    const from = p.carry.from;
+    if (this.propState[from]?.taken) {
+      this.propState[from] = {};
+      const heart = this.heartByTask.get(from);
+      this.emitAll({ type: 'task', propId: from, task: heart?.sin, state: {}, progress: heart ? this.tasksDone(heart) : 0, of: TASK_STEPS, returned: true });
+    }
+    this.setCarry(p, null);
   }
 
   /** Walkable tiles just outside a room's doorways: where the blood-runes seal it. */
@@ -555,7 +602,6 @@ export class Game {
     if (this.destroyed.has(heart.propId)) return;
     this.destroyed.add(heart.propId);
     this.propState[heart.propId] = { destroyed: true };
-    for (const o of this.players.values()) this.addUlt(o, ULT.HEART + SIN_ULT_BONUS);
     this.emitAll({
       type: 'heart',
       propId: heart.propId,
@@ -594,21 +640,31 @@ export class Game {
 
   // --- the Disillusionment Charm (V) --------------------------------------------------
 
-  /** Every wizard's invisibility: 12s unseen, 18s cooldown. */
+  /**
+   * V: the Disillusionment Charm, an infinite toggle with no cooldown. Turning
+   * it on FAILS if the Keeper can already see you (or has locked on): it comes
+   * for you instead.
+   */
   onInvis(id) {
     const p = this.players.get(id);
     if (!p || p.captured || p.capturing || this.finale.active) return { ok: false, reason: 'unavailable' };
-    const left = (p.cooldowns.invis ?? 0) - this.time;
     let res;
-    if (left > 0) {
-      res = { ok: false, reason: 'cooldown', readyIn: Math.round(left * 10) / 10 };
+    if (this.spells.hasBuff(p, 'invis')) {
+      delete p.buffs.invis;
+      this.emitAll({ type: 'invis', id: p.id, on: false });
+      res = { ok: true, on: false };
     } else {
-      this.spells.addBuff(p, 'invis', INVIS.duration);
-      p.cooldowns.invis = this.time + INVIS.cooldown;
-      // Too late if it has already locked on: it still tracks you.
-      const late = this.monster.lockedOn(p);
-      this.emitAll({ type: 'invis', id: p.id, duration: INVIS.duration, late });
-      res = { ok: true, duration: INVIS.duration, readyIn: INVIS.cooldown, late };
+      const m = this.monster;
+      const seen = m && !m.hidden && m.state !== 'boss' && (m.lockedOn(p) || m.wouldSee(p));
+      if (seen) {
+        m.hunt(p, 'sighted'); // in front of it: the charm fails, and it charges
+        this.emitAll({ type: 'invis', id: p.id, on: false, failed: true });
+        res = { ok: false, reason: 'seen' };
+      } else {
+        this.spells.addBuff(p, 'invis', Infinity);
+        this.emitAll({ type: 'invis', id: p.id, on: true });
+        res = { ok: true, on: true };
+      }
     }
     if (!p.isBot) this.socketOf(p)?.emit('game:invis', res);
     return res;
@@ -688,6 +744,7 @@ export class Game {
     if (!p || p.captured || p.capturing) return false;
     p.capturing = this.time + CAPTURE_DELAY;
     p.impulse = null;
+    this.dropCarry(p);
     if (p.channel) this.cancelChannel(p);
     // The capture screen always shows the Keeper's face, even when a Sin broke you.
     const by = monster?.kind === 'amalgam' ? monster : null;
@@ -724,7 +781,6 @@ export class Game {
     this.emitAll({ type: 'gate', propId: gateId, open: true, by });
     const freed = this.prisoners();
     for (const p of freed) p.captured = false;
-    if (freed.length && rescuer && !rescuer.captured) this.addUlt(rescuer, ULT.RESCUE);
     if (freed.length) this.emitAll({ type: 'freed', ids: freed.map((p) => p.id), names: freed.map((p) => p.name), by });
   }
 
@@ -833,19 +889,21 @@ export class Game {
       this.dawn = null;
       this.emitAll({ type: 'dawn:end' });
     }
-    const awake = !!this.tomeReadBy;
+    const ticking = this.phase !== PHASE.GAMEOVER && this.phase !== PHASE.EPILOGUE;
     for (const p of this.players.values()) {
+      // The Ultimate charges strictly with match time (caged or not): 0 → READY in 5 minutes, once per game.
+      if (ticking && !p.ultUsed) this.addUlt(p, (ULT.MAX / ULT.CHARGE_TIME) * dt);
       if (p.captured || p.capturing) continue;
       if (this.time - p.lastHurtAt > HP.REGEN_DELAY && p.hp < HP.REGEN_CAP) p.hp = Math.min(HP.REGEN_CAP, p.hp + HP.REGEN * dt);
-      if (awake) this.addUlt(p, ULT.PASSIVE * dt);
-      if (this.monster?.state === 'hunting' && this.monster.targetId === p.id) this.addUlt(p, ULT.CHASED * dt);
     }
   }
 
-  /** Debug U: fill your Ultimate. */
+  /** Debug U: ready (and un-spend) your Ultimate. */
   debugUlt(id) {
     const p = this.players.get(id);
-    if (p) p.ult = ULT.MAX;
+    if (!p) return;
+    p.ult = ULT.MAX; // ready, and un-spent
+    p.ultUsed = false;
   }
 
   // --- Phase III input ---------------------------------------------------------------

@@ -2,24 +2,28 @@
 // prompt + channel bar, banners, whispers, team list, stamina, journal.
 
 import { WIZARD_BY_ID } from '/shared/wizards.js';
-import { PHASE, HEART_COUNT, STAMINA, INVIS } from '/shared/constants.js';
+import { PHASE, HEART_COUNT, STAMINA } from '/shared/constants.js';
+import { ULT } from '/shared/wizards.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 const SPELL_GLYPHS = {
   psychic_torment: '\u263E', dimension_slash: '\u263D', black_hole: '\u25C9', shadow_step: '\u2601', abyssal_mind_fracture: '\u2620',
-  ignis_blast: '\u2668', calidus_brachium: '\u270A', sol_linea: '\u2600', phoenix_aura: '\u2735', fiendfyre_dragon: '\u2652',
-  tidal_surge: '\u2652', water_spear: '\u2191', sea_cradle: '\u25CE', riptide_vortex: '\u058D', abyssal_deluge: '\u2248',
-  terra_spike: '\u25B2', devils_snare: '\u2698', golem_boulder: '\u25CF', granite_skin: '\u25A3', yggdrasil: '\u2E19',
-  gale_force: '\u2248', kamaitachi: '\u263E', zephyr_tailwind: '\u27B3', vacuum_tempest: '\u058E', sylph_dragon: '\u2652',
-  sacred_bind: '\u2600', arrows_of_judgment: '\u2694', patronus_beacon: '\u2726', flash_step: '\u26A1', dawn_sacred_order: '\u2609',
-  aegis_void: '\u2205', black_slash: '\u2694', null_zone: '\u29B8', bull_thrust: '\u2648', devil_union: '\u2742',
+  ignis_blast: '\u2668', calidus_brachium: '\u270A', sol_linea: '\u2600', phoenix_dash: '\u2735', fiendfyre_dragon: '\u2652',
+  tidal_surge: '\u2652', water_spear: '\u2191', riptide_geyser: '\u058D', slipstream: '\u25CE', abyssal_deluge: '\u2248',
+  terra_spike: '\u25B2', devils_snare: '\u2698', golem_boulder: '\u25CF', earthen_rampart: '\u25A3', yggdrasil: '\u2E19',
+  gale_force: '\u2248', kamaitachi: '\u263E', vacuum_tempest: '\u058E', zephyr_glide: '\u27B3', sylph_dragon: '\u2652',
+  sacred_bind: '\u2600', arrows_of_judgment: '\u2694', solar_nova: '\u2726', flash_step: '\u26A1', dawn_sacred_order: '\u2609',
+  black_divider: '\u2694', black_slash: '\u263D', bull_thrust: '\u2648', aegis_void: '\u2205', devil_union: '\u2742',
 };
+
+/** 272 → "4:32" */
+export const ultClock = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
 const OBJECTIVES = {
   [PHASE.TOME]: ['Phase I · The Tome', 'Somewhere in this house is the Ritual Book. Find it. Read it.'],
-  [PHASE.HEARTS]: ['Phase II · The Seven Hearts', 'Break each Heart’s three room wards, then slay the Sin inside it. [J] Journal'],
+  [PHASE.HEARTS]: ['Phase II · The Seven Hearts', 'Do each Sin’s three room tasks, break its Heart open, slay the Sin. [M] Map · [J] Journal'],
   [PHASE.CONVERGENCE]: ['Phase II · Complete', 'Seven hearts are silent. Return to the Ritual Altar together.'],
   [PHASE.ARCHON]: ['Phase III · The Archon', 'Seven elements. One body. Drag it into Hell.'],
 };
@@ -59,9 +63,15 @@ export class HUD {
     this.flash(el, 'show', 2600);
   }
 
+  /** The centre dot grows a ring when it's on something you can use. */
+  crosshair(active) {
+    if (active === this._cross) return;
+    this._cross = active;
+    $('hud-crosshair').classList.toggle('active', active);
+  }
+
   prompt(text, hold) {
     const el = $('hud-prompt');
-    $('hud-crosshair').classList.toggle('active', !!text);
     el.innerHTML = text ? `<kbd>${hold ? 'Hold E' : 'E'}</kbd>${esc(text)}` : '';
   }
 
@@ -169,6 +179,7 @@ export class HUD {
     ult.style.setProperty('--wiz', wizard.color);
     ult.title = `ULTIMATE: ${wizard.ultimate.name}: ${wizard.ultimate.description}`;
     ult.innerHTML = `<div class="charge"></div><span class="glyph">${SPELL_GLYPHS[wizard.ultimate.id] ?? '\u2605'}</span><span class="key">R</span><span class="pct"></span>`;
+    ult.title += ' (charges over 5 minutes; once per game)';
     bar.appendChild(ult);
     this.ultEl = ult;
     $('hud-wizard').textContent = `${wizard.name} \u00b7 ${wizard.title} \u00b7 ${wizard.element}`;
@@ -186,17 +197,46 @@ export class HUD {
     if (sp) $('hud-spellname').textContent = slot === 'ult' ? `ULTIMATE · ${sp.name}` : sp.name;
   }
 
-  /** The Disillusionment Charm (V): active time left, or cooldown left. */
-  invis(active, left, cooldown) {
+  /** The Disillusionment Charm (V): an infinite toggle, no cooldown. */
+  invis(on) {
+    if (on === this._invisOn) return;
+    this._invisOn = on;
     const el = $('hud-invis');
-    const key = `${active}|${Math.ceil(left * 10)}|${Math.ceil(cooldown * 10)}`;
-    if (key === this._invisKey) return;
-    this._invisKey = key;
-    el.classList.toggle('active', active);
-    el.classList.toggle('cooling', !active && cooldown > 0);
-    el.style.setProperty('--cd', String(active ? left / INVIS.duration : cooldown / INVIS.cooldown));
-    el.querySelector('.time').textContent = active ? `${left.toFixed(1)}s` : cooldown > 0 ? cooldown.toFixed(1) : '';
-    $('screen-invis').classList.toggle('on', active);
+    el.classList.toggle('active', on);
+    el.querySelector('.time').textContent = on ? 'ON' : '';
+    $('screen-invis').classList.toggle('on', on);
+  }
+
+  /** The Keeper's footsteps: a proximity bar (0..1) and a ripple on each footfall. */
+  footsteps(closeness, step = false) {
+    const el = $('hud-footsteps');
+    const key = Math.round(closeness * 40);
+    if (key !== this._stepKey) {
+      this._stepKey = key;
+      el.classList.toggle('show', closeness > 0);
+      el.classList.toggle('near', closeness > 0.6);
+      el.querySelector('i').style.width = `${Math.round(closeness * 100)}%`;
+    }
+    if (step && closeness > 0) {
+      const r = el.querySelector('.ripple');
+      r.classList.remove('go');
+      void r.offsetWidth;
+      r.style.setProperty('--k', String(0.4 + closeness * 0.6));
+      r.classList.add('go');
+    }
+  }
+
+  /** Top right: the task tracker for the Heart room you're standing in (or null). */
+  tracker(text, color = null, state = 'sealed') {
+    const el = $('hud-tracker');
+    const key = `${text}|${state}`;
+    if (key === this._trackKey) return;
+    this._trackKey = key;
+    el.classList.toggle('show', !!text);
+    if (!text) return;
+    el.dataset.state = state;
+    el.style.setProperty('--sin', color ?? '#f6d26a');
+    el.textContent = text;
   }
 
   /** The Keeper's capture screen (1.5s). */
@@ -217,13 +257,16 @@ export class HUD {
     });
   }
 
-  ult(charge) {
-    const key = Math.floor(charge);
+  /** Charging (an MM:SS countdown to READY), READY, or EXPENDED (once per game). */
+  ult(charge, expended = false) {
+    const left = Math.max(0, Math.ceil(((ULT.MAX - charge) / ULT.MAX) * ULT.CHARGE_TIME));
+    const key = expended ? 'x' : charge >= ULT.MAX ? 'r' : left;
     if (key === this._ultKey || !this.ultEl) return;
     this._ultKey = key;
-    this.ultEl.style.setProperty('--charge', String(Math.min(1, charge / 100)));
-    this.ultEl.querySelector('.pct').textContent = charge >= 100 ? 'READY' : `${key}%`;
-    this.ultEl.classList.toggle('ready', charge >= 100);
+    this.ultEl.style.setProperty('--charge', String(expended ? 0 : Math.min(1, charge / ULT.MAX)));
+    this.ultEl.querySelector('.pct').textContent = expended ? 'EXPENDED' : charge >= ULT.MAX ? 'READY' : ultClock(left);
+    this.ultEl.classList.toggle('ready', !expended && charge >= ULT.MAX);
+    this.ultEl.classList.toggle('expended', expended);
   }
 
   denied(slot) {
@@ -284,7 +327,7 @@ export class HUD {
     el.querySelector('small').textContent = text;
   }
 
-  boss(hp, max, ward, text, title = 'THE UNBOUND MALPHAS AMALGAM', color = null) {
+  boss(hp, max, ward, text, title = 'THE UNBOUND MALPHAS AMALGAM', color = null, enraged = false) {
     const el = $('hud-boss');
     el.classList.toggle('hidden', hp === null);
     if (hp === null) return;
@@ -292,6 +335,7 @@ export class HUD {
     el.style.setProperty('--boss', color ?? '#c0102a');
     el.querySelector('i').style.width = `${Math.max(0, (hp / max) * 100)}%`;
     el.classList.toggle('ward', !!ward);
+    el.classList.toggle('enraged', enraged);
     el.querySelector('small').textContent = text;
   }
 

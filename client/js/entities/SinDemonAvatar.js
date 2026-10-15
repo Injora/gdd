@@ -1,7 +1,9 @@
 // The Seven Deadly Sins, as seen in their locked arenas. Seven procedural
 // models (each with its own idle, windup and strike animation), a floating
-// name + health plate, damage numbers, their hazards (acid pools, Envy's
-// counter-waves, Greed's molten gold in flight) and their attack VFX.
+// name + health plate, their hazards (acid pools, Envy's counter-waves,
+// Greed's molten gold in flight) and their attack VFX. Step 7: red ground
+// telegraphs for every windup, a white hit-flash, the enraged aura below half
+// health, and a burning dissolve when it dies. (Damage numbers: ui/DamageNumbers.)
 
 import * as THREE from 'three';
 import { FLOOR_Y } from '/shared/constants.js';
@@ -33,6 +35,37 @@ function addMesh(parent, geo, mat, x = 0, y = 0, z = 0) {
   return m;
 }
 const lathe = (pts, seg = 18) => new THREE.LatheGeometry(pts.map(([r, y]) => new THREE.Vector2(r, y)), seg);
+const WHITE = new THREE.Color(0xffffff);
+const RAGE = new THREE.Color(0xff2a10);
+
+/**
+ * Patch a model material for the death dissolve: fragments vanish where a 3D
+ * noise falls below uDissolve, with a burning rim in the Sin's colour. Patched
+ * at spawn, so dying never compiles a new shader.
+ */
+function addDissolve(mat, dissolve, edge) {
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uDissolve = dissolve;
+    sh.uniforms.uEdge = edge;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vDPos;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvDPos = position;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+uniform float uDissolve; uniform vec3 uEdge; varying vec3 vDPos;
+float dHash(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+float dNoise(vec3 x) {
+  vec3 i = floor(x); vec3 f = fract(x); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(dHash(i), dHash(i + vec3(1, 0, 0)), f.x), mix(dHash(i + vec3(0, 1, 0)), dHash(i + vec3(1, 1, 0)), f.x), f.y),
+             mix(mix(dHash(i + vec3(0, 0, 1)), dHash(i + vec3(1, 0, 1)), f.x), mix(dHash(i + vec3(0, 1, 1)), dHash(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+}`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+float dn = dNoise(vDPos * 6.0) * 0.75 + dNoise(vDPos * 17.0) * 0.25;
+if (dn < uDissolve) discard;
+totalEmissiveRadiance += uEdge * smoothstep(uDissolve + 0.09, uDissolve, dn) * step(0.001, uDissolve) * 5.0;`);
+  };
+  mat.customProgramCacheKey = () => 'sin-dissolve';
+}
 
 // ---- the seven models: each returns { root, height, animate(t, dt, k) } ---------------
 // k = { moving, windup (0..1), strike (0..1), hurt (0..1), state }
@@ -403,8 +436,9 @@ export class SinDemonAvatar {
     this.hurt = 0;
     this.deathK = 0;
     this.erupt = snap.er ? 0 : 1;
-    this.damageNumbers = [];
     this.effects = [];
+    this.telegraphs = [];
+    this.rageK = 0;
     this.hazards = new Map();
 
     this.group = new THREE.Group();
@@ -423,6 +457,26 @@ export class SinDemonAvatar {
     this.label.sprite.position.y = this.model.height + 0.55;
     this.group.add(this.label.sprite);
     this.hazardGroup = new THREE.Group(); // in world space
+    // Hit-flash and the death dissolve work on every lit material of the model.
+    this.dissolve = { value: 0 };
+    this.edge = { value: this.color.clone().multiplyScalar(1.5) };
+    this.flashMats = [];
+    this.unlit = [];
+    this.model.root.traverse((o) => {
+      if (o.isMesh && !o.material?.isMeshStandardMaterial) this.unlit.push(o);
+      if (!o.isMesh || !o.material?.isMeshStandardMaterial || o.material.userData.sinPatched) return;
+      const m = o.material;
+      m.userData.sinPatched = true;
+      m.userData.base = m.emissive.clone();
+      m.userData.baseI = m.emissiveIntensity;
+      addDissolve(m, this.dissolve, this.edge);
+      this.flashMats.push(m);
+    });
+    // The enraged aura: a flickering shell of the Sin's fire.
+    this.aura = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.3, this.model.height + 0.6, 24, 1, true),
+      new THREE.MeshBasicMaterial({ color: 0xff2a10, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+    this.aura.position.y = (this.model.height + 0.6) / 2;
+    this.group.add(this.aura);
     this.labelKey = '';
     this.setSnapshot(snap);
   }
@@ -431,7 +485,7 @@ export class SinDemonAvatar {
     if (s.f !== this.floor) { this.x = s.x; this.z = s.z; }
     this.snap = s;
     this.floor = s.f;
-    const key = `${s.hp}|${s.dead}|${s.st.join(',')}`;
+    const key = `${s.hp}|${s.dead}|${s.rage}|${s.st.join(',')}`;
     if (key !== this.labelKey) {
       this.labelKey = key;
       this.drawLabel(s);
@@ -446,7 +500,7 @@ export class SinDemonAvatar {
     ctx.font = 'bold 30px Cinzel, Georgia, serif';
     ctx.lineWidth = 6;
     ctx.strokeStyle = 'rgba(0,0,0,0.9)';
-    const title = `${this.S.name.toUpperCase()} · ${this.S.title}`;
+    const title = `${this.S.name.toUpperCase()} · ${s.rage ? 'ENRAGED' : this.S.title}`;
     ctx.strokeText(title, 256, 38);
     ctx.fillStyle = this.S.color;
     ctx.fillText(title, 256, 38);
@@ -461,23 +515,49 @@ export class SinDemonAvatar {
     tex.needsUpdate = true;
   }
 
+  /** A hit: the white flash (the number itself floats up from ui/DamageNumbers). */
   showDamage(amount, source) {
-    const d = textSprite(128, 64, 0.9);
-    const { ctx, tex } = d;
-    ctx.font = 'bold 44px Cinzel, Georgia, serif';
-    ctx.textAlign = 'center';
-    ctx.lineWidth = 6;
-    ctx.strokeStyle = '#000';
-    const text = `-${Math.round(amount)}`;
-    ctx.strokeText(text, 64, 46);
-    ctx.fillStyle = '#ffd0a0';
-    ctx.fillText(text, 64, 46);
-    tex.needsUpdate = true;
-    d.sprite.position.set((Math.random() - 0.5) * 0.8, this.model.height * 0.8, (Math.random() - 0.5) * 0.8);
-    this.group.add(d.sprite);
-    this.damageNumbers.push({ ...d, age: 0 });
-    this.hurt = 1;
+    this.hurt = Math.min(1, 0.55 + amount / 30);
     if (this.sin === 'envy' && source) this.model.element = source;
+  }
+
+  /** Below half health (or the Black Slash Wave wore off): an eruption of its fire. */
+  onEnrage(e) {
+    if (e.stripped) { this.strippedUntil = performance.now() + e.stripped * 1000; return; }
+    const y = FLOOR_Y[this.floor];
+    this.ring(this.x, this.z, 7, 0xff2a10, 0.9);
+    this.ring(this.x, this.z, 4, this.S.color, 0.6);
+    this.fx?.glow.burst(160, this.x, y + 1.2, this.z, { speed: 7, up: 3, life: 1.2, color: new THREE.Color(0xff3010), colorVar: 0.08, drag: 1.6 });
+    this.fx?.glow.burst(80, this.x, y + 1.5, this.z, { speed: 4, up: 4, life: 1.4, color: this.color, drag: 1.4 });
+    this.hurt = 1;
+  }
+
+  /** Where the attack will land: red on the ground for the whole windup. */
+  telegraph(aoe, windup) {
+    const y = FLOOR_Y[this.floor] + 0.045;
+    for (const a of aoe) {
+      let mesh, fill;
+      const mat = new THREE.MeshBasicMaterial({ color: 0xff1a10, transparent: true, opacity: 0.0, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -4 });
+      const fillMat = mat.clone();
+      if (a.shape === 'circle') {
+        mesh = new THREE.Mesh(new THREE.RingGeometry(a.r * 0.92, a.r, 48).rotateX(-Math.PI / 2), mat);
+        fill = new THREE.Mesh(new THREE.CircleGeometry(a.r, 48).rotateX(-Math.PI / 2), fillMat);
+        mesh.position.set(a.x, y, a.z);
+        fill.position.set(a.x, y - 0.005, a.z);
+      } else {
+        const len = Math.hypot(a.x2 - a.x, a.z2 - a.z);
+        const geo = () => new THREE.PlaneGeometry(a.w, len).rotateX(-Math.PI / 2);
+        mesh = new THREE.Mesh(geo(), mat);
+        fill = new THREE.Mesh(geo(), fillMat);
+        for (const m of [mesh, fill]) {
+          m.position.set((a.x + a.x2) / 2, y, (a.z + a.z2) / 2);
+          m.rotation.y = Math.atan2(a.x2 - a.x, a.z2 - a.z);
+        }
+        fill.position.y -= 0.005;
+      }
+      this.hazardGroup.add(mesh, fill);
+      this.telegraphs.push({ mesh, fill, age: 0, life: Math.max(0.2, windup), shape: a.shape });
+    }
   }
 
   // ---- hazards from the snapshot ----------------------------------------------------
@@ -542,6 +622,7 @@ export class SinDemonAvatar {
     }
     if (e.stage === 'windup') {
       this.windupUntil = performance.now() + (e.windup ?? 0.6) * 1000;
+      if (e.aoe?.length) this.telegraph(e.aoe, e.windup ?? 0.6);
       if (e.kind === 'vacuum') this.swirl(e.r ?? 9, e.windup);
       return;
     }
@@ -617,18 +698,36 @@ export class SinDemonAvatar {
     // Eruption: it climbs out of its Heart.
     this.erupt = s.er ? Math.min(0.999, this.erupt + dt / 2.2) : Math.min(1, this.erupt + dt * 2);
     const up = 1 - (1 - this.erupt) ** 3;
-    this.deathK += ((s.dead ? 1 : 0) - this.deathK) * Math.min(1, dt * 1.5);
-    const scale = up * (1 - this.deathK * 0.9);
-    this.group.position.set(this.x, FLOOR_Y[s.f] - (1 - up) * 1.2, this.z);
+    // Death: it burns away from within (the dissolve shader), sinking a little.
+    this.deathK = s.dead ? Math.min(1, this.deathK + dt / 2.2) : 0;
+    this.group.position.set(this.x, FLOOR_Y[s.f] - (1 - up) * 1.2 - this.deathK * 0.3, this.z);
     this.group.rotation.y = this.yaw + Math.PI; // models face +z; yaw 0 looks -z
-    this.model.root.scale.setScalar(Math.max(0.01, scale));
-    this.model.root.rotation.z = this.deathK * 0.6;
+    this.model.root.scale.setScalar(Math.max(0.01, up));
+    this.dissolve.value = this.deathK * 1.02;
+    for (const o of this.unlit) o.visible = this.deathK < 0.4; // eyes and glows can't dissolve: they go out
     const now = performance.now();
     const winding = (this.windupUntil ?? 0) > now || ['lance', 'gold', 'ribbons', 'caress', 'claw', 'acid', 'vacuum', 'charge', 'cleave', 'yawn'].includes(s.act);
     this.windup += ((winding ? 1 : 0) - this.windup) * Math.min(1, dt * 6);
     this.strike = Math.max(0, this.strike - dt * 4);
     this.hurt = Math.max(0, this.hurt - dt * 3);
+    for (const m of this.flashMats) { m.emissive.copy(m.userData.base); m.emissiveIntensity = m.userData.baseI; }
     this.model.animate(t, dt, { moving: s.mv, windup: this.windup, strike: this.strike, hurt: this.hurt, state: s.act, hpK: s.hp / s.maxHp });
+    // Hit-flash: every lit surface blazes white for a moment.
+    if (this.hurt > 0.01) {
+      for (const m of this.flashMats) {
+        m.emissive.lerp(WHITE, this.hurt * 0.85);
+        m.emissiveIntensity = Math.max(m.emissiveIntensity, this.hurt * 2.2);
+      }
+    }
+    // Enraged: a red-fire shell, a red sigil, embers pouring off it.
+    const rage = !!s.rage && !s.dead;
+    this.rageK += ((rage ? 1 : 0) - this.rageK) * Math.min(1, dt * 3);
+    this.aura.visible = this.rageK > 0.01;
+    this.aura.material.opacity = this.rageK * (0.16 + Math.sin(t * 14) * 0.05 + Math.random() * 0.04);
+    this.aura.scale.set(1 + Math.sin(t * 9) * 0.04, 1, 1 + Math.cos(t * 7) * 0.04);
+    this.aura.rotation.y = t * 1.5;
+    this.sigil.material.color.copy(this.color).lerp(new THREE.Color(0xff1a08), this.rageK);
+    this.sigil.scale.setScalar(1 + this.rageK * 0.4);
     this.sigil.material.opacity = (0.25 + Math.sin(t * 3) * 0.1 + this.windup * 0.4) * (1 - this.deathK);
     this.sigil.rotation.y = t * 0.4;
     this.label.sprite.material.opacity = 1 - this.deathK;
@@ -643,6 +742,36 @@ export class SinDemonAvatar {
           0, 0.4, 0, 0.8, this.color, -0.2, 0.5);
       }
       if (s.act === 'charge' && Math.random() < 0.9) this.fx.glow.emit(this.x, y + 0.8, this.z, 0, 0.5, 0, 0.5, new THREE.Color(0xff2010), 0, 1);
+      if (rage) {
+        for (let n = 0; n < 3; n++) {
+          const a = Math.random() * Math.PI * 2;
+          this.fx.glow.emit(this.x + Math.cos(a) * 0.9, y + Math.random() * this.model.height, this.z + Math.sin(a) * 0.9, 0, 2 + Math.random() * 2, 0, 0.6, Math.random() < 0.6 ? RAGE : this.color, -0.5, 1);
+        }
+      }
+    }
+    // Dying: embers stream up off the dissolving body.
+    if (vis && this.fx && s.dead && this.deathK < 0.95) {
+      const y = FLOOR_Y[s.f];
+      for (let n = 0; n < 4; n++) {
+        this.fx.glow.emit(this.x + (Math.random() - 0.5) * 1.4, y + Math.random() * this.model.height, this.z + (Math.random() - 0.5) * 1.4, 0, 1.5 + Math.random() * 2, 0, 1, this.color, -0.3, 0.5);
+      }
+    }
+    // Ground telegraphs fill up as the strike nears, then flash.
+    for (let i = this.telegraphs.length - 1; i >= 0; i--) {
+      const tg = this.telegraphs[i];
+      tg.age += dt;
+      const f = tg.age / tg.life;
+      tg.mesh.material.opacity = f < 1 ? 0.55 + Math.sin(tg.age * 18) * 0.2 : Math.max(0, 1 - (f - 1) * 5);
+      tg.fill.material.opacity = f < 1 ? 0.12 + f * 0.33 : Math.max(0, 0.6 - (f - 1) * 5);
+      if (tg.shape === 'circle') tg.fill.scale.setScalar(Math.min(1, 0.15 + f * 0.85));
+      if (f >= 1.2 || s.dead) {
+        for (const m of [tg.mesh, tg.fill]) {
+          this.hazardGroup.remove(m);
+          m.geometry.dispose();
+          m.material.dispose();
+        }
+        this.telegraphs.splice(i, 1);
+      }
     }
     for (const o of this.hazards.values()) {
       if (o.userData.h?.k === 'acid') o.material.emissiveIntensity = 0.55 + Math.sin(t * 4 + o.userData.h.id) * 0.2;
@@ -659,18 +788,6 @@ export class SinDemonAvatar {
         e.mesh.geometry.dispose();
         e.mesh.material.dispose();
         this.effects.splice(i, 1);
-      }
-    }
-    for (let i = this.damageNumbers.length - 1; i >= 0; i--) {
-      const d = this.damageNumbers[i];
-      d.age += dt;
-      d.sprite.position.y += dt * 0.9;
-      d.sprite.material.opacity = Math.max(0, 1 - d.age / 1.2);
-      if (d.age > 1.2) {
-        this.group.remove(d.sprite);
-        d.tex.dispose();
-        d.sprite.material.dispose();
-        this.damageNumbers.splice(i, 1);
       }
     }
   }

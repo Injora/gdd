@@ -26,7 +26,27 @@ export const PROP_DEFS = {
   candelabra: { w: 0.7, d: 0.7, blocks: true, mount: 'floor', interact: 'curio' },
   skull: { w: 0.7, d: 0.7, blocks: true, mount: 'floor', interact: 'curio' },
 
-  // Room tasks (three per Heart room)
+  // Step 7: the seven Sin Hearts (thematic centrepieces)
+  crowned_vanity: { w: 1.4, d: 0.7, blocks: true, mount: 'floor', interact: 'curio' },
+  vault_coffer: { w: 0.9, d: 0.9, blocks: true, mount: 'floor', interact: 'curio' },
+  velvet_portrait: { w: 1.4, d: 0.12, blocks: false, mount: 'wall', interact: 'curio' },
+  astrolabe_clock: { w: 0.9, d: 0.9, blocks: true, mount: 'floor', interact: 'curio' },
+  feast_chalice: { w: 0.8, d: 0.8, blocks: true, mount: 'floor', interact: 'curio' },
+  war_bell: { w: 1.2, d: 1.2, blocks: true, mount: 'floor', interact: 'curio' },
+  cradle_box: { w: 1.1, d: 0.8, blocks: true, mount: 'floor', interact: 'curio' },
+
+  // Step 7: the seven Sins' thematic room tasks (three sources each; two have a sink)
+  ego_mirror: { w: 0.9, d: 0.35, blocks: true, mount: 'floor', interact: 'task' },
+  display_case: { w: 1.0, d: 0.6, blocks: true, mount: 'floor', interact: 'task' },
+  weighing_scale: { w: 0.9, d: 0.7, blocks: true, mount: 'floor', interact: 'task' },
+  silk_cocoon: { w: 0.9, d: 0.8, blocks: true, mount: 'floor', interact: 'task' },
+  envy_portrait: { w: 1.1, d: 0.1, blocks: false, mount: 'wall', interact: 'task' },
+  feast_platter: { w: 0.8, d: 0.8, blocks: true, mount: 'floor', interact: 'task' },
+  feast_furnace: { w: 1.6, d: 0.8, blocks: true, mount: 'floor', interact: 'task' },
+  crucible_sword: { w: 1.2, d: 0.6, blocks: true, mount: 'floor', interact: 'task' },
+  metronome: { w: 0.7, d: 0.7, blocks: true, mount: 'floor', interact: 'task' },
+
+  // Step 6 room tasks (superseded by the Sin tasks; kept for old maps)
   brazier: { w: 0.8, d: 0.8, blocks: true, mount: 'floor', interact: 'task' },
   rune_mirror: { w: 0.9, d: 0.12, blocks: false, mount: 'wall', interact: 'task' },
   pedestal: { w: 0.7, d: 0.7, blocks: true, mount: 'floor', interact: 'task' },

@@ -79,6 +79,7 @@
     <div id="hud-objective" class="hud-objective"></div>
     <div id="hud-hearts" class="hud-hearts hidden"></div>
     <div id="hud-room" class="hud-room"></div>
+    <div id="hud-tracker" class="hud-tracker"></div>
     <div id="hud-crosshair" class="hud-crosshair"></div>
     <div id="hud-prompt" class="hud-prompt"></div>
     <div id="hud-progress" class="hud-progress hidden"><div></div></div>
@@ -86,6 +87,7 @@
     <div id="hud-whisper" class="hud-whisper"></div>
     <ul id="hud-team" class="hud-team"></ul>
     <div id="hud-stamina" class="hud-stamina"><div></div></div>
+    <div id="hud-footsteps" class="hud-footsteps"><span class="ripple"></span><b>FOOTSTEPS</b><div class="bar"><i></i></div></div>
     <div id="hud-light" class="hud-light"></div>
     <div id="hud-caption" class="hud-caption"></div>
     <div id="hud-ritual" class="hud-topbar hud-ritual hidden"><span>THE FORBIDDEN SPELL</span><div class="bar"><i></i></div><small></small></div>
@@ -99,7 +101,7 @@
       </div>
       <div class="hud-row">
         <div id="hud-hotbar" class="hud-hotbar"></div>
-        <div id="hud-invis" class="slot invis" title="V: Disillusionment Charm. 12s unseen, 18s cooldown. Cast it BEFORE it sees you, and hold still.">
+        <div id="hud-invis" class="slot invis" title="V: Disillusionment Charm. Toggle on / off, no cooldown. Only BEFORE it sees you, and hold still; in front of it, it fails.">
           <div class="cd"></div><span class="glyph">◌</span><span class="key">V</span><span class="time"></span>
         </div>
       </div>
@@ -134,18 +136,19 @@
         <tr><td>Shift</td><td>Sprint (loud)</td></tr>
         <tr><td>C / Ctrl</td><td>Crouch (quiet)</td></tr>
         <tr><td>1 – 4</td><td>Select spell 1–4 (the wand tip previews it)</td></tr>
-        <tr><td>R</td><td>Select your Ultimate (needs 100% charge)</td></tr>
+        <tr><td>R</td><td>Select your Ultimate (charges over 5 minutes; once per game)</td></tr>
         <tr><td>LMB / Q</td><td>Cast the selected spell</td></tr>
-        <tr><td>V</td><td>Disillusionment Charm: 12s unseen (18s cooldown). Cast it BEFORE it sees you, then hold still</td></tr>
+        <tr><td>V</td><td>Disillusionment Charm: toggle invisibility (no cooldown). Only BEFORE it sees you; then hold still</td></tr>
         <tr><td>F</td><td>Lumos / Nox: bright torch (you're seen 50% further)</td></tr>
-        <tr><td>E (hold)</td><td>Interact: read, break a room's wards, open a Heart, use stairs, break the cage lock</td></tr>
+        <tr><td>E (hold)</td><td>Interact with what the crosshair outlines: read, do a Sin's room task, open a Heart, stairs, the cage lock</td></tr>
+        <tr><td>M / Tab</td><td>Full map: every floor, your coven, the Hearts, task progress, lockdowns</td></tr>
         <tr><td>J</td><td>Journal</td></tr>
         <tr><td>G</td><td>Call for help (ping your location)</td></tr>
-        <tr class="debug-only"><td>M</td><td>Debug map (click to teleport)</td></tr>
+        <tr class="debug-only"><td>Map click</td><td>Teleport there</td></tr>
         <tr class="debug-only"><td>P</td><td>Cycle monster: Husk → Haunt → Stalk → Hunt → Capture → Auto</td></tr>
         <tr class="debug-only"><td>K</td><td>Instant capture / break the lock</td></tr>
         <tr class="debug-only"><td>Shift + 1 – 7</td><td>Hot-swap wizard</td></tr>
-        <tr class="debug-only"><td>U</td><td>Fill Ultimate charge</td></tr>
+        <tr class="debug-only"><td>U</td><td>Ready (and un-spend) your Ultimate</td></tr>
         <tr class="debug-only"><td>L</td><td>Open the nearest Heart's Sin arena (in one: slay the Sin)</td></tr>
         <tr class="debug-only"><td>H / N</td><td>Skip to the Convergence / boss to the Hell Portal</td></tr>
       </table>
@@ -178,7 +181,7 @@
     </div>
   </div>
 
-  <canvas id="debug-map" class="hidden"></canvas>
+  <canvas id="full-map" class="full-map hidden" aria-label="Full map of the mansion"></canvas>
   <div id="debug-stats" class="hidden"></div>
 
   <script src="/socket.io/socket.io.js"></script>

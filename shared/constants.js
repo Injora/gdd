@@ -72,12 +72,28 @@ export const HP = {
   REGEN_CAP: 60, // ...up to this (only magic heals higher)
 };
 
-/** The Disillusionment Charm (V): every wizard's invisibility. */
+/**
+ * The Disillusionment Charm (V): every wizard's invisibility. Step 7: an
+ * infinite toggle with no cooldown. It FAILS if the Keeper can already see you.
+ */
 export const INVIS = {
-  duration: 12,
-  cooldown: 18,
   sense: 14, // moving (or casting) this close to the Amalgam while invisible gives you away
 };
+
+/** The Keeper's footsteps: heard from this far, louder and louder down to NEAR. */
+export const FOOTSTEPS = { range: 28, near: 5 };
+
+/** How close the Keeper's footfalls are: 0 at FOOTSTEPS.range (or further), 1 at NEAR. */
+export function footstepCloseness(dist) {
+  if (!(dist <= FOOTSTEPS.range)) return 0;
+  return Math.max(0, Math.min(1, (FOOTSTEPS.range - dist) / (FOOTSTEPS.range - FOOTSTEPS.near)));
+}
+
+/** A Keeper footstep's loudness: silent beyond range, then an exponential swell. */
+export function keeperStepGain(dist, hunting = false) {
+  if (!(dist <= FOOTSTEPS.range)) return 0;
+  return (hunting ? 3.75 : 3) * Math.exp(2.8 * (footstepCloseness(dist) - 1));
+}
 
 /** Lumos (F): a bright wide torch, at the cost of being seen 50% further away. */
 export const LUMOS = { range: 28, angle: 0.85, detection: 1.5 };

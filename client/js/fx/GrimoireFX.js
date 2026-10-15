@@ -7,7 +7,7 @@
 import * as THREE from 'three';
 import { FLOOR_Y, TILE } from '/shared/constants.js';
 import { ABILITY_BY_ID } from '/shared/wizards.js';
-import { jaggedSpike, hexMaterial } from './SpellFX.js';
+import { jaggedSpike } from './SpellFX.js';
 
 const H = 1.35; // wand height
 const ease = (k) => 1 - (1 - k) ** 3;
@@ -83,7 +83,6 @@ export class GrimoireFX {
     this.entities = new Map();
     this.auras = new Map();
     this.statusFx = new Map();
-    this.riptides = new Map();
     this.time = 0;
     this.runeCyan = runeTexture('rgba(120,220,255,1)');
     this.runeGray = runeTexture('rgba(210,215,225,1)');
@@ -239,36 +238,24 @@ export class GrimoireFX {
     }, () => this.fx.disposeObject(line));
   }
 
-  cast_phoenix_aura(ev) {
-    this.fx.glow.burst(120, ev.x, this.y(ev.floor, 1), ev.z, { speed: 4, up: 2, life: 1, color: COLORS.ember, colorVar: 0.06, drag: 2 });
+  cast_phoenix_dash(ev) {
+    this.dashTrail(ev, COLORS.ember, COLORS.spark);
+    this.fx.glow.burst(120, ev.to.x, this.y(ev.floor, 1), ev.to.z, { speed: 4, up: 2, life: 1, color: COLORS.ember, colorVar: 0.06, drag: 2 });
   }
 
   // ---------------------------------------------------------------- Water
   cast_water_spear(ev) { this.flare(ev, COLORS.water, 0.6); }
 
-  cast_sea_cradle(ev) {
-    this.fx.glow.burst(80, ev.x, this.y(ev.floor, 1), ev.z, { speed: 3, life: 1, color: COLORS.water, drag: 2.5 });
+  cast_slipstream(ev) {
+    this.dashTrail(ev, COLORS.water, COLORS.foam);
+    this.fx.glow.burst(80, ev.to.x, this.y(ev.floor, 1), ev.to.z, { speed: 3, life: 1, color: COLORS.water, drag: 2.5 });
   }
 
-  cast_riptide_vortex(ev, a) {
-    const z = ev.zone;
-    const rune = new THREE.Mesh(new THREE.PlaneGeometry(z.r * 2.4, z.r * 2.4).rotateX(-Math.PI / 2),
-      new THREE.MeshBasicMaterial({ map: this.runeCyan, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, polygonOffset: true, polygonOffsetFactor: -3 }));
-    rune.position.set(z.x, FLOOR_Y[ev.floor] + 0.04, z.z);
-    this.scene.add(rune);
-    const state = { done: false, rune };
-    this.riptides.set(ev.id, state);
-    this.fx.timed(z.duration, (k, dt, age) => {
-      rune.rotation.y += dt * 0.6;
-      rune.material.opacity = state.done ? Math.max(0, rune.material.opacity - dt * 2) : 0.45 + Math.sin(age * 3) * 0.2;
-      return !state.done;
-    }, () => { this.riptides.delete(ev.id); this.fx.disposeObject(rune); });
-  }
+  /** The geyser itself erupts on the zone:trigger that follows. */
+  cast_riptide_geyser(ev) { this.flare(ev, COLORS.water, 0.7); }
 
-  /** Riptide sprung: a spinning geyser. */
+  /** Riptide Geyser: a spinning pillar of water. */
   onZoneTrigger(ev) {
-    const st = this.riptides.get(ev.castId);
-    if (st) st.done = true;
     const y0 = FLOOR_Y[ev.floor];
     const g = new THREE.Group();
     g.position.set(ev.x, y0, ev.z);
@@ -336,22 +323,24 @@ export class GrimoireFX {
     }, () => this.fx.disposeObject(g));
   }
 
-  cast_granite_skin(ev) {
-    this.fx.dust.burst(70, ev.x, this.y(ev.floor, 1), ev.z, { speed: 3, up: 1, life: 1.2, color: COLORS.stone, drag: 2 });
-  }
-
   cast_golem_boulder(ev) { this.flare(ev, COLORS.stone, 0.4); }
+
+  cast_earthen_rampart(ev) {
+    this.fx.dust.burst(70, ev.x, this.y(ev.floor, 1), ev.z, { speed: 3, up: 1, life: 1.2, color: COLORS.stone, drag: 2 });
+    if (ev.caster === this.localId) this.hooks.shake(0.35);
+  }
 
   cast_yggdrasil() { /* grows as an entity (see Tree) */ }
 
   // ---------------------------------------------------------------- Wind
   cast_kamaitachi(ev) { this.flare(ev, COLORS.wind, 0.5); }
 
-  cast_zephyr_tailwind(ev) {
+  cast_zephyr_glide(ev) {
+    this.dashTrail(ev, COLORS.wind, C(0xe8fffa));
     const y0 = FLOOR_Y[ev.floor];
-    for (let n = 0; n < 90; n++) {
-      const ang = Math.random() * Math.PI * 2, r = rand(0.5, 5);
-      this.fx.glow.emit(ev.x + Math.cos(ang) * r, y0 + rand(0.3, 2.2), ev.z + Math.sin(ang) * r, -Math.sin(ang) * 6, 0.3, Math.cos(ang) * 6, 0.7, COLORS.wind, 0, 1);
+    for (let n = 0; n < 60; n++) {
+      const ang = Math.random() * Math.PI * 2, r = rand(0.5, 3);
+      this.fx.glow.emit(ev.to.x + Math.cos(ang) * r, y0 + rand(0.3, 2.2), ev.to.z + Math.sin(ang) * r, -Math.sin(ang) * 6, 0.3, Math.cos(ang) * 6, 0.7, COLORS.wind, 0, 1);
     }
   }
 
@@ -407,35 +396,29 @@ export class GrimoireFX {
     this.fx.glow.burst(40, ev.x, y0, ev.z, { speed: 2, life: 0.8, color: COLORS.gold, drag: 2 });
   }
 
-  cast_patronus_beacon(ev, a) {
-    const z = ev.zone;
+  /** Solar Purging Nova: a ring of white-gold fire bursting outward. */
+  cast_solar_nova(ev) {
     const y0 = FLOOR_Y[ev.floor];
-    const g = new THREE.Group();
-    g.position.set(z.x, y0, z.z);
-    const spirit = this.makeStag();
-    spirit.position.y = 0.2;
-    g.add(spirit);
-    const ring = new THREE.Mesh(new THREE.PlaneGeometry(z.r * 2, z.r * 2).rotateX(-Math.PI / 2),
-      new THREE.MeshBasicMaterial({ map: this.runeGold, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.4, polygonOffset: true, polygonOffsetFactor: -3 }));
-    ring.position.y = 0.05;
-    g.add(ring);
-    this.scene.add(g);
-    const light = this.fx.takeLight(`pat${ev.id}`, 0xfff0d0);
-    if (light) { light.position.set(z.x, y0 + 2.2, z.z); light.distance = 14; }
-    const dur = z.duration ?? a.duration;
-    this.fx.timed(dur, (k, dt, age) => {
-      const fade = Math.min(1, age / 0.5) * Math.min(1, (dur - age) / 0.8);
-      spirit.position.y = 0.2 + Math.sin(age * 1.6) * 0.15;
-      spirit.rotation.y += dt * 0.4;
-      spirit.traverse((o) => { if (o.material?.opacity !== undefined && o.material.transparent) o.material.opacity = (o.userData.base ?? 0.5) * fade; });
-      ring.rotation.y -= dt * 0.3;
-      ring.material.opacity = 0.4 * fade;
-      if (light) light.intensity = 30 * fade;
-      if (Math.random() < 0.8) {
-        const ang = Math.random() * Math.PI * 2, r = Math.random() * z.r;
-        this.fx.glow.emit(z.x + Math.cos(ang) * r, y0 + 0.1, z.z + Math.sin(ang) * r, 0, rand(0.6, 1.4), 0, 1.4, Math.random() < 0.5 ? COLORS.gold : COLORS.silver, -0.2, 0.3);
-      }
-    }, () => { this.fx.releaseLight(light); this.fx.disposeObject(g); });
+    const r = ev.radius ?? 6;
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.7, 1, 64).rotateX(-Math.PI / 2), this.fx.additive(COLORS.gold, 0.9));
+    ring.position.set(ev.x, y0 + 0.08, ev.z);
+    const dome = this.fx.glowSprite(0xfff4c0, 1);
+    dome.position.set(ev.x, y0 + 1.2, ev.z);
+    this.scene.add(ring);
+    const light = this.fx.takeLight(`nova${ev.id}`, 0xffe6a0);
+    if (light) { light.position.set(ev.x, y0 + 1.6, ev.z); light.distance = r * 2.5; }
+    this.fx.timed(0.7, (k) => {
+      ring.scale.setScalar(0.3 + ease(k) * r);
+      ring.material.opacity = 0.9 * (1 - k);
+      dome.scale.setScalar(1 + ease(k) * r * 1.4);
+      dome.material.opacity = (1 - k) ** 2;
+      if (light) light.intensity = 40 * (1 - k);
+    }, () => { this.fx.releaseLight(light); this.fx.disposeObject(ring); this.fx.disposeObject(dome); });
+    for (let n = 0; n < 140; n++) {
+      const ang = (n / 140) * Math.PI * 2;
+      this.fx.glow.emit(ev.x, y0 + rand(0.4, 1.6), ev.z, Math.cos(ang) * r * 2, rand(0, 1), Math.sin(ang) * r * 2, 0.5, Math.random() < 0.6 ? COLORS.gold : COLORS.whiteHot, 0, 2.5);
+    }
+    if (ev.caster === this.localId) this.hooks.screen('white', 0.3);
   }
 
   cast_flash_step(ev) {
@@ -458,7 +441,11 @@ export class GrimoireFX {
   cast_dawn_sacred_order() { /* environment (snapshot `dw`) + golden chains on the monster */ }
 
   // ---------------------------------------------------------------- Anti-magic
-  cast_black_slash(ev, a) {
+  /** Black Slash Wave: the crescent projectile takes over once it flies. */
+  cast_black_slash(ev) { this.flare(ev, COLORS.crimson, 0.8); }
+
+  /** Black Divider: a close-range cone of black cleaving edge. */
+  cast_black_divider(ev, a) {
     const dir = this.dirOf(ev);
     const y0 = this.y(ev.floor, 1.1);
     const g = new THREE.Group();
@@ -479,39 +466,6 @@ export class GrimoireFX {
       const s = Math.random() * a.range;
       this.fx.glow.emit(ev.x + dir.x * s + rand(-1, 1), y0 + rand(-0.5, 0.5), ev.z + dir.z * s + rand(-1, 1), dir.x * 4, 0, dir.z * 4, 0.5, COLORS.crimson, 0, 2);
     }
-  }
-
-  cast_null_zone(ev, a) {
-    const z = ev.zone;
-    const y0 = FLOOR_Y[ev.floor];
-    const decal = new THREE.Mesh(new THREE.PlaneGeometry(z.r * 2, z.r * 2).rotateX(-Math.PI / 2),
-      new THREE.MeshBasicMaterial({ map: this.runeGray, transparent: true, depthWrite: false, opacity: 0.5, polygonOffset: true, polygonOffsetFactor: -3 }));
-    decal.position.set(z.x, y0 + 0.05, z.z);
-    const dome = new THREE.Mesh(this.fx.domeGeo, hexMaterial());
-    dome.position.set(z.x, y0, z.z);
-    dome.scale.setScalar(z.r);
-    dome.renderOrder = 5;
-    this.scene.add(decal, dome);
-    const dur = z.duration ?? a.duration;
-    this.fx.timed(dur, (k, dt, age) => {
-      const fade = Math.min(1, age / 0.4) * Math.min(1, (dur - age) / 0.5);
-      decal.rotation.y += dt * 0.2;
-      decal.material.opacity = 0.5 * fade;
-      dome.material.uniforms.uAlpha.value = 0.35 * fade;
-      dome.material.uniforms.uTime.value = age;
-      if (Math.random() < 0.6) {
-        const ang = Math.random() * Math.PI * 2, r = Math.random() * z.r;
-        this.fx.dust.emit(z.x + Math.cos(ang) * r, y0 + 0.1, z.z + Math.sin(ang) * r, 0, rand(0.4, 1), 0, 2, C(0xb0b6c0), -0.2, 0);
-      }
-    }, () => { this.fx.disposeObject(decal); this.scene.remove(dome); dome.material.dispose(); });
-    this.activeNullZones = (this.activeNullZones ?? []).concat([{ x: z.x, z: z.z, r: z.r, floor: ev.floor, until: performance.now() + dur * 1000 }]);
-  }
-
-  /** Is (x, z) inside an active Null Zone? (no flicker, no terror) */
-  inNullZone(floor, x, z) {
-    const now = performance.now();
-    this.activeNullZones = (this.activeNullZones ?? []).filter((n) => n.until > now);
-    return this.activeNullZones.some((n) => n.floor === floor && Math.hypot(n.x - x, n.z - z) <= n.r);
   }
 
   cast_bull_thrust(ev) {
@@ -537,6 +491,22 @@ export class GrimoireFX {
     const dir = this.dirOf(ev);
     const y0 = this.y(ev.floor);
     this.fx.glow.burst(Math.round(30 * strength), ev.x + dir.x * 0.6, y0, ev.z + dir.z * 0.6, { speed: 2.5, life: 0.5, color, drag: 3 });
+  }
+
+  /** A dash: a streak from `from` to `to` in the element's colours. */
+  dashTrail(ev, color, spark) {
+    const y0 = FLOOR_Y[ev.floor] + 1;
+    const len = Math.max(0.1, Math.hypot(ev.to.x - ev.from.x, ev.to.z - ev.from.z));
+    const streak = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.05, len, 8, 1, true).rotateX(Math.PI / 2), this.fx.additive(color, 0.85));
+    streak.position.set((ev.from.x + ev.to.x) / 2, y0, (ev.from.z + ev.to.z) / 2);
+    streak.lookAt(ev.to.x, y0, ev.to.z);
+    this.scene.add(streak);
+    this.fx.timed(0.6, (k) => { streak.material.opacity = 0.85 * (1 - k) ** 2; streak.scale.set(1 + k * 2, 1 + k * 2, 1); }, () => this.fx.disposeObject(streak));
+    for (let n = 0; n < 40; n++) {
+      const s = Math.random();
+      this.fx.glow.emit(ev.from.x + (ev.to.x - ev.from.x) * s, y0 + rand(-0.6, 0.6), ev.from.z + (ev.to.z - ev.from.z) * s, rand(-1, 1), rand(0, 1.5), rand(-1, 1), 0.6, Math.random() < 0.5 ? color : spark, 0, 2);
+    }
+    if (ev.caster === this.localId) this.hooks.shake(0.25);
   }
 
   explosion(floor, x, z, scale, color) {
@@ -566,39 +536,6 @@ export class GrimoireFX {
     glow.scale.set(0.8, 0.8, 1);
     glow.position.z = -0.3;
     g.add(blade, tip, guard, hilt, glow);
-    return g;
-  }
-
-  /** An ethereal silver-gold stag (the Patronus). */
-  makeStag() {
-    const g = new THREE.Group();
-    const mat = (o = 0.55) => {
-      const m = new THREE.MeshBasicMaterial({ color: 0xe8f0ff, transparent: true, opacity: o, blending: THREE.AdditiveBlending, depthWrite: false });
-      return m;
-    };
-    const add = (geo, x, y, z, rx = 0, rz = 0, o) => {
-      const m = new THREE.Mesh(geo, mat(o));
-      m.position.set(x, y, z);
-      m.rotation.set(rx, 0, rz);
-      m.userData.base = m.material.opacity;
-      g.add(m);
-      return m;
-    };
-    const body = add(new THREE.SphereGeometry(0.42, 16, 12), 0, 1.25, 0);
-    body.scale.set(0.75, 0.7, 1.5);
-    add(new THREE.CylinderGeometry(0.12, 0.17, 0.7, 8), 0, 1.7, -0.55, -0.6);
-    const head = add(new THREE.SphereGeometry(0.17, 12, 10), 0, 2.05, -0.82);
-    head.scale.set(0.8, 0.9, 1.4);
-    for (const s of [-1, 1]) {
-      for (let i = 0; i < 4; i++) add(new THREE.CylinderGeometry(0.015, 0.025, 0.45 - i * 0.07, 5), s * (0.1 + i * 0.07), 2.35 + i * 0.12, -0.78 + i * 0.04, 0, s * (0.4 + i * 0.25), 0.7);
-      for (const z of [-0.45, 0.45]) add(new THREE.CylinderGeometry(0.04, 0.05, 0.95, 6), s * 0.18, 0.55, z);
-    }
-    const glow = this.fx.glowSprite(0xfff2d0, 0.7);
-    this.scene.remove(glow);
-    glow.scale.setScalar(4);
-    glow.position.y = 1.4;
-    glow.userData.base = 0.7;
-    g.add(glow);
     return g;
   }
 

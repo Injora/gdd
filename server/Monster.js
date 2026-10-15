@@ -230,6 +230,19 @@ export class Monster extends MonsterBody {
     return this.los(this, p, this.floor);
   }
 
+  /** Would it see p right now if p weren't invisible? (V cast in front of it fails.) */
+  wouldSee(p) {
+    if (this.hidden || p.floor !== this.floor || this.t < this.blindUntil || !this.canAct()) return false;
+    const d = this.dist(p);
+    const range = (p.crouch ? AI.SIGHT_SNEAK : AI.SIGHT) * (p.light ? LUMOS.detection : 1);
+    if (d > range) return false;
+    if (d > 4) {
+      const fx = -Math.sin(this.yaw), fz = -Math.cos(this.yaw);
+      if (((p.x - this.x) * fx + (p.z - this.z) * fz) / d < AI.FOV_COS) return false;
+    }
+    return this.los(this, p, this.floor);
+  }
+
   /** Is (x, z) inside any free wizard's beam? A plain wand glow reaches 16u; Lumos 28u and wider. */
   inLight(pt, floor) {
     return this.freePlayers().some((p) => {

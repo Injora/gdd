@@ -73,8 +73,10 @@ const lathe = (pts, seg = 20, phiStart = 0, phiLength = Math.PI * 2) =>
   new THREE.LatheGeometry(pts.map(([r, y]) => new THREE.Vector2(r, y)), seg, phiStart, phiLength);
 
 export class WizardAvatar {
-  constructor(info, wizard) {
+  /** @param makeCarry (kind) => Object3D for a carried ingot / platter (optional) */
+  constructor(info, wizard, makeCarry = null) {
     this.id = info.id;
+    this.makeCarry = makeCarry;
     this.wizard = wizard;
     const color = new THREE.Color(wizard.color);
     const robeColor = color.clone().multiplyScalar(0.16).lerp(new THREE.Color(0x0b0a0c), 0.55);
@@ -347,8 +349,11 @@ export class WizardAvatar {
     // Wand arm follows the aim; the other swings.
     this.armR.sh.rotation.x = -1.15 - this.pitch * 0.9 - this.castK * 0.5;
     this.armR.el.rotation.x = -0.35;
-    this.armL.sh.rotation.x = sway * 0.45;
-    this.armL.el.rotation.x = -0.2;
+    // Carrying an ingot or a platter (Step 7): the off hand holds it out in front.
+    const cy = this.state.cy ?? null;
+    if (cy !== this.carryKind) this.setCarry(cy);
+    this.armL.sh.rotation.x = this.carry ? -0.9 : sway * 0.45;
+    this.armL.el.rotation.x = this.carry ? -0.5 : -0.2;
     this.head.rotation.x = -this.pitch * 0.5;
 
     // Channelling makes the wand flare.
@@ -366,6 +371,7 @@ export class WizardAvatar {
       m.depthWrite = this.invisK < 0.5;
     }
     this.shadow.material.opacity = 1 - this.invisK;
+    if (this.carry) this.carry.visible = this.invisK < 0.5;
     this.tipMat.opacity = alpha;
     this.tipMat.transparent = this.invisK > 0.01;
 
@@ -398,7 +404,20 @@ export class WizardAvatar {
     this.tipMat.color.set(this.wizard.color).multiplyScalar(this.state.li ? 1.8 : 1);
   }
 
+  /** Show (or drop) the carried item; its model and materials belong to the prop kit. */
+  setCarry(kind) {
+    this.carryKind = kind;
+    if (this.carry) this.armL.el.remove(this.carry);
+    this.carry = kind ? this.makeCarry?.(kind) ?? null : null;
+    if (!this.carry) return;
+    this.carry.position.set(0, -0.4, 0.06);
+    this.carry.rotation.x = Math.PI / 2;
+    this.carry.scale.setScalar(kind === 'platter' ? 0.9 : 1.2);
+    this.armL.el.add(this.carry);
+  }
+
   dispose() {
+    if (this.carry) this.armL.el.remove(this.carry); // shared with the mansion's props
     this.group.traverse((o) => {
       if (o.isMesh || o.isSprite) {
         o.geometry?.dispose();

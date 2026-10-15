@@ -13,9 +13,14 @@
 //   Gluttony  Maw of Famine     spreading acid pools; inhales the room, then bites
 //   Wrath     Blood Berserker   charges; faster and faster as it bleeds
 //   Sloth     Somnolent Dread   a room-wide aura of slow, heavy sleep; yawning slam
+//
+// Step 7: HP scales with the number of wizards, damage and projectile counts
+// by +20% per extra wizard; at 50% HP it ENRAGES (faster cadence, a dramatic
+// eruption, and its signature attack upgraded). Every windup carries an `aoe`
+// so clients can paint the red ground telegraph.
 
 import { MonsterBody } from './MonsterBody.js';
-import { SINS, SIN_ERUPT, SIN_CC_CAP } from '../shared/sins.js';
+import { SINS, SIN_ERUPT, SIN_CC_CAP, SIN_ENRAGE, sinScaling } from '../shared/sins.js';
 import { lineOfSight, moveCircle, overlapsSolid } from '../shared/collision.js';
 import { findPath, pathToWorld } from '../shared/pathfinding.js';
 import { roomAt } from '../shared/mapgen.js';
@@ -51,7 +56,11 @@ export class SinDemon extends MonsterBody {
     const S = SINS[heart.sin];
     const prop = game.props[heart.propId];
     const at = spawnPoint(game, prop, room, S.radius);
-    super(game, { id: `sin_${heart.sin}`, kind: 'sin', x: at.x, z: at.z, floor: room.floor, maxHp: S.hp, radius: S.radius, speed: S.speed });
+    const scale = sinScaling(game.players.size);
+    super(game, { id: `sin_${heart.sin}`, kind: 'sin', x: at.x, z: at.z, floor: room.floor, maxHp: Math.round(S.hp * scale.hp), radius: S.radius, speed: S.speed });
+    this.dmgScale = scale.damage;
+    this.enraged = false;
+    this.stripUntil = 0;
     this.sin = heart.sin;
     this.S = S;
     this.heart = heart;
@@ -94,6 +103,16 @@ export class SinDemon extends MonsterBody {
   }
 
   ready(kind) { return this.t >= this.timers[kind]; }
+
+  /** Enraged (below half HP), unless a Black Slash Wave has stripped it for now. */
+  isEnraged() { return this.enraged && this.t >= this.stripUntil; }
+  stripEnrage(seconds) {
+    if (!this.enraged) return;
+    this.stripUntil = Math.max(this.stripUntil, this.t + seconds);
+    this.game.emitAll({ type: 'sin:enrage', id: this.id, sin: this.sin, floor: this.floor, x: r2(this.x), z: r2(this.z), stripped: seconds });
+  }
+  /** Projectile / bolt counts grow with the coven (and with rage). */
+  count(base) { return Math.round(base * this.dmgScale) + (this.isEnraged() ? 2 : 0); }
 
   /** Is the point (x, z) in front of it, inside Pride's mirror? */
   frontal(x, z) {
@@ -150,11 +169,23 @@ export class SinDemon extends MonsterBody {
     }
     if (this.sin === 'envy' && ELEMENTS.has(source) && this.t >= this.waveReadyAt) {
       const c = this.S.counter;
-      this.waveReadyAt = this.t + c.cooldown;
+      this.waveReadyAt = this.t + c.cooldown * (this.isEnraged() ? 0.5 : 1);
       this.hazards.push({ id: this.nextHazardId++, k: 'wave', x: this.x, z: this.z, r: 0, el: source, startAt: this.t + c.delay, hit: new Set() });
+      // Enraged: a second ring right behind the first.
+      if (this.isEnraged()) this.hazards.push({ id: this.nextHazardId++, k: 'wave', x: this.x, z: this.z, r: 0, el: source, startAt: this.t + c.delay + 0.45, hit: new Set() });
       this.game.emitAll({ type: 'sin:attack', id: this.id, sin: this.sin, kind: 'mimic', stage: 'windup', el: source, floor: this.floor, x: r2(this.x), z: r2(this.z), windup: c.delay });
     }
     super.damage(amount, source);
+    this.hitFrom = sp.caster ? { x: sp.caster.x, z: sp.caster.z } : null;
+    if (!this.enraged && !this.dead && this.hp <= this.maxHp * SIN_ENRAGE.at) this.enrage();
+  }
+
+  /** Half its blood gone: it erupts in fury. */
+  enrage() {
+    this.enraged = true;
+    for (const k of Object.keys(this.timers)) this.timers[k] = Math.min(this.timers[k], this.t + 0.8);
+    this.st.staggerUntil = Math.max(this.st.staggerUntil, this.t + 1.0); // the eruption
+    this.game.emitAll({ type: 'sin:enrage', id: this.id, sin: this.sin, floor: this.floor, x: r2(this.x), z: r2(this.z) });
   }
 
   die() {
@@ -177,7 +208,8 @@ export class SinDemon extends MonsterBody {
       if (this.t >= this.pending[i].at) this.pending.splice(i, 1)[0].fn();
     }
     if (this.sin === 'sloth') {
-      for (const p of this.targets()) this.game.spells.addBuff(p, 'sloth', 0.4, { slow: this.S.aura.slow, drain: this.S.aura.drain });
+      const deep = this.isEnraged();
+      for (const p of this.targets()) this.game.spells.addBuff(p, 'sloth', 0.4, { slow: this.S.aura.slow * (deep ? 1.35 : 1), drain: this.S.aura.drain * (deep ? 1.5 : 1) });
     }
     if (this.t < this.eruptUntil) {
       this.action = 'erupt';
@@ -221,6 +253,7 @@ export class SinDemon extends MonsterBody {
       case 'gluttony': {
         const near = this.targets().filter((o) => this.dist(o) <= S.vacuum.radius).length;
         if (this.ready('vacuum') && near) return go('vacuum');
+        // (enraged, the vacuum reaches further: see strike())
         if (this.ready('acid') && sees && d <= S.acid.range) return go('acid');
         return this.approach(p, dt, 2.4);
       }
@@ -273,17 +306,47 @@ export class SinDemon extends MonsterBody {
     const S = this.S;
     const spec = { lance: S.lance, gold: S.gold, ribbons: S.ribbons, caress: S.caress, claw: S.claw, acid: S.acid,
       vacuum: S.vacuum, charge: S.charge, cleave: S.cleave, yawn: S.yawn }[kind];
-    this.timers[kind] = this.t + spec.every;
-    this.attack = { kind, strikeAt: this.t + spec.windup, targetId: p.id, tx: p.x, tz: p.z, aimUntil: this.t + spec.windup * 0.7, ...extra };
+    const rage = this.isEnraged();
+    this.timers[kind] = this.t + spec.every * (rage ? SIN_ENRAGE.cadence : 1);
+    const windup = spec.windup * (rage ? 0.8 : 1);
+    this.attack = { kind, strikeAt: this.t + windup, targetId: p.id, tx: p.x, tz: p.z, aimUntil: this.t + windup * 0.7, ...extra };
+    if (kind === 'gold') {
+      // Where the gold will land is decided now, so the floor can glow red there first.
+      const g = this.S.gold;
+      this.attack.landing = [];
+      for (let i = 0; i < this.count(g.count); i++) {
+        const ang = Math.random() * Math.PI * 2, spread = i === 0 ? 0 : rand(1, 2.6);
+        this.attack.landing.push({ x: p.x + Math.cos(ang) * spread, z: p.z + Math.sin(ang) * spread });
+      }
+    }
     this.action = kind;
     this.game.emitAll({
-      type: 'sin:attack', id: this.id, sin: this.sin, kind, stage: 'windup', targetId: p.id,
-      floor: this.floor, x: r2(this.x), z: r2(this.z), tx: r2(p.x), tz: r2(p.z), windup: spec.windup,
-      r: spec.radius ?? spec.range,
+      type: 'sin:attack', id: this.id, sin: this.sin, kind, stage: 'windup', targetId: p.id, enraged: rage,
+      floor: this.floor, x: r2(this.x), z: r2(this.z), tx: r2(p.x), tz: r2(p.z), windup,
+      r: spec.radius ?? spec.range, aoe: this.telegraph(kind, p),
     });
   }
 
-  hurt(p, amount) { return this.game.damagePlayer(p, amount, this, 'sin'); }
+  /** The red ground telegraph of an attack (circles and lines in world units). */
+  telegraph(kind, p) {
+    const S = this.S, rage = this.isEnraged();
+    const circle = (x, z, r) => ({ shape: 'circle', x: r2(x), z: r2(z), r: r2(r) });
+    const line = (yaw, len, w) => ({ shape: 'line', x: r2(this.x), z: r2(this.z), x2: r2(this.x + Math.cos(yaw) * len), z2: r2(this.z + Math.sin(yaw) * len), w });
+    const aim = Math.atan2(p.z - this.z, p.x - this.x);
+    switch (kind) {
+      case 'lance': return rage ? [line(aim - 0.32, S.lance.range, 1.6), line(aim, S.lance.range, 1.6), line(aim + 0.32, S.lance.range, 1.6)] : [line(aim, S.lance.range, 1.6)];
+      case 'gold': return this.attack.landing.map((l) => circle(l.x, l.z, S.gold.radius * (rage ? 1.3 : 1)));
+      case 'charge': return [line(aim, S.charge.speed * S.charge.time + 1, 1.8)];
+      case 'acid': return [circle(p.x, p.z, S.acid.max * (rage ? 1.4 : 1))];
+      case 'vacuum': return [circle(this.x, this.z, S.vacuum.radius * (rage ? 1.25 : 1))];
+      case 'yawn': return [circle(this.x, this.z, S.yawn.radius * (rage ? 1.4 : 1))];
+      case 'ribbons': return [circle(p.x, p.z, 1.2)];
+      default: return [circle(this.x, this.z, (S[kind]?.range ?? 2.4) + 0.4)];
+    }
+  }
+
+  /** Every hit grows with the coven (+20% per extra wizard). */
+  hurt(p, amount) { return this.game.damagePlayer(p, amount * this.dmgScale, this, 'sin'); }
 
   updateAttack(p, dt) {
     const a = this.attack, S = this.S, t = this.t;
@@ -304,6 +367,13 @@ export class SinDemon extends MonsterBody {
         this.attack = null;
         this.action = null;
         if (blocked) this.st.staggerUntil = Math.max(this.st.staggerUntil, t + 0.8); // slammed into a wall
+        else if (this.isEnraged() && !a.chained && this.inArena(p)) {
+          // Enraged: it wheels round and charges again at once.
+          const d = Math.max(1e-3, Math.hypot(p.x - this.x, p.z - this.z));
+          this.attack = { kind: 'dash', dir: { x: (p.x - this.x) / d, z: (p.z - this.z) / d }, until: t + S.charge.time, hit: new Set(), chained: true };
+          this.action = 'charge';
+          this.game.emitAll({ type: 'sin:attack', id: this.id, sin: this.sin, kind: 'charge', stage: 'strike', floor: this.floor, x: r2(this.x), z: r2(this.z), tx: r2(p.x), tz: r2(p.z), hits: [] });
+        }
       }
       return;
     }
@@ -335,23 +405,28 @@ export class SinDemon extends MonsterBody {
     };
     switch (a.kind) {
       case 'lance': {
-        const d = Math.max(1e-3, Math.hypot(a.tx - this.x, a.tz - this.z));
-        const ex = this.x + ((a.tx - this.x) / d) * S.lance.range, ez = this.z + ((a.tz - this.z) / d) * S.lance.range;
-        ev.tx = r2(ex);
-        ev.tz = r2(ez);
-        for (const o of this.targets()) {
-          if (segDist(o.x, o.z, this.x, this.z, ex, ez) > 0.8 || !this.los(o)) continue;
-          ev.hits.push(o.id);
-          this.hurt(o, S.lance.damage);
+        // Enraged: a fan of three lances.
+        const aim = Math.atan2(a.tz - this.z, a.tx - this.x);
+        const fan = this.isEnraged() ? [-0.32, 0, 0.32] : [0];
+        ev.lances = [];
+        for (const off of fan) {
+          const ex = this.x + Math.cos(aim + off) * S.lance.range, ez = this.z + Math.sin(aim + off) * S.lance.range;
+          ev.lances.push({ x: r2(ex), z: r2(ez) });
+          for (const o of this.targets()) {
+            if (ev.hits.includes(o.id) || segDist(o.x, o.z, this.x, this.z, ex, ez) > 0.8 || !this.los(o)) continue;
+            ev.hits.push(o.id);
+            this.hurt(o, S.lance.damage);
+          }
         }
+        ev.tx = ev.lances[Math.floor(fan.length / 2)].x;
+        ev.tz = ev.lances[Math.floor(fan.length / 2)].z;
         break;
       }
       case 'gold': {
         const g = S.gold;
         ev.bolts = [];
-        for (let i = 0; i < g.count; i++) {
-          const ang = Math.random() * Math.PI * 2, spread = i === 0 ? 0 : rand(1, 2.4);
-          const lx = a.tx + Math.cos(ang) * spread, lz = a.tz + Math.sin(ang) * spread;
+        for (const l of a.landing ?? [{ x: a.tx, z: a.tz }]) {
+          const lx = l.x, lz = l.z;
           const flight = Math.hypot(lx - this.x, lz - this.z) / g.speed;
           this.hazards.push({ id: this.nextHazardId++, k: 'gold', fx: this.x, fz: this.z, x: lx, z: lz, t0: t, land: t + flight });
           ev.bolts.push({ x: r2(lx), z: r2(lz), flight: r2(flight) });
@@ -364,7 +439,7 @@ export class SinDemon extends MonsterBody {
           if (d > S.ribbons.range || !this.los(o)) continue;
           ev.hits.push(o.id);
           this.hurt(o, S.ribbons.damage);
-          const pull = Math.min(S.ribbons.pull, Math.max(0, d - 1.5));
+          const pull = Math.min(S.ribbons.pull * (this.isEnraged() ? 1.5 : 1), Math.max(0, d - 1.5));
           this.game.impulse(o, ((this.x - o.x) / d) * (pull / 0.45), ((this.z - o.z) / d) * (pull / 0.45), 0.45);
         }
         break;
@@ -372,12 +447,12 @@ export class SinDemon extends MonsterBody {
       case 'claw': melee(S.claw); break;
       case 'cleave': melee(S.cleave); break;
       case 'acid':
-        this.hazards.push({ id: this.nextHazardId++, k: 'acid', x: a.tx, z: a.tz, r: S.acid.grow, until: t + S.acid.life, acc: new Map() });
+        this.hazards.push({ id: this.nextHazardId++, k: 'acid', x: a.tx, z: a.tz, r: S.acid.grow, max: S.acid.max * (this.isEnraged() ? 1.4 : 1), until: t + S.acid.life, acc: new Map() });
         break;
       case 'vacuum':
         for (const o of this.targets()) {
           const d = this.dist(o);
-          if (d > S.vacuum.radius || d < 1e-3) continue;
+          if (d > S.vacuum.radius * (this.isEnraged() ? 1.25 : 1) || d < 1e-3) continue;
           ev.hits.push(o.id);
           const pull = Math.min(S.vacuum.pull, Math.max(0, d - 1.4));
           this.game.impulse(o, ((this.x - o.x) / d) * (pull / 0.5), ((this.z - o.z) / d) * (pull / 0.5), 0.5);
@@ -395,14 +470,16 @@ export class SinDemon extends MonsterBody {
           },
         });
         break;
-      case 'yawn':
+      case 'yawn': {
+        const r = S.yawn.radius * (this.isEnraged() ? 1.4 : 1);
         for (const o of this.targets()) {
-          if (this.dist(o) > S.yawn.radius) continue;
+          if (this.dist(o) > r) continue;
           ev.hits.push(o.id);
           this.hurt(o, S.yawn.damage);
         }
-        ev.r = S.yawn.radius;
+        ev.r = r;
         break;
+      }
       case 'charge': {
         const d = Math.max(1e-3, Math.hypot(a.tx - this.x, a.tz - this.z));
         this.attack = { kind: 'dash', dir: { x: (a.tx - this.x) / d, z: (a.tz - this.z) / d }, until: t + S.charge.time, hit: new Set() };
@@ -419,7 +496,7 @@ export class SinDemon extends MonsterBody {
       const h = this.hazards[i];
       if (h.k === 'acid') {
         if (t >= h.until) { this.hazards.splice(i, 1); continue; }
-        h.r = Math.min(this.S.acid.max, h.r + this.S.acid.grow * dt);
+        h.r = Math.min(h.max ?? this.S.acid.max, h.r + this.S.acid.grow * dt);
         for (const o of this.targets()) {
           if (Math.hypot(o.x - h.x, o.z - h.z) > h.r) continue;
           const acc = (h.acc.get(o.id) ?? 0) + this.S.acid.dps * dt;
@@ -462,6 +539,7 @@ export class SinDemon extends MonsterBody {
       ...super.snapshot(),
       sin: this.sin,
       er: this.t < this.eruptUntil,
+      rage: this.isEnraged(),
       hz: this.hazards
         .filter((h) => h.k !== 'wave' || this.t >= h.startAt)
         .map((h) => (h.k === 'gold'

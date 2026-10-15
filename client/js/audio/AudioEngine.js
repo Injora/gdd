@@ -3,6 +3,8 @@
 // Spatial sounds use HRTF PannerNodes positioned in world space; the listener
 // follows the camera. The context is created/resumed on the first user gesture.
 
+import { FOOTSTEPS, keeperStepGain } from '/shared/constants.js';
+
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
 const rand = (a, b) => a + Math.random() * (b - a);
 
@@ -237,8 +239,8 @@ export class AudioEngine {
       L.setOrientation(listener.fx, 0, listener.fz, 0, 1, 0);
     }
 
-    // 18 units → 3 units maps to 0 → 1.
-    const k = clamp01((18 - m.dist) / 15);
+    // Step 7: the heartbeat starts as it closes in, 15 units → 5 units maps to 0 → 1.
+    const k = clamp01((15 - m.dist) / 10);
     const target = m.hunting ? Math.max(k, 0.35) : k;
     this.proximity += (target - this.proximity) * Math.min(1, dt * 2);
     const p = this.proximity;
@@ -266,15 +268,18 @@ export class AudioEngine {
   // ---- the Amalgam ------------------------------------------------------------------
 
   /**
-   * Its footfall: a HEAVY thud you feel in the floorboards (carries far: low
-   * rolloff), a wet slap, a bone click, and scraping claws — loud enough to
-   * warn you before it ever sees you.
+   * Its footfall: a HEAVY thud you feel in the floorboards, a wet slap, a bone
+   * click, and scraping claws. The only footsteps in the house (Step 7): heard
+   * from FOOTSTEPS.range (28u) away, swelling exponentially as it closes in to
+   * FOOTSTEPS.near, and panned to where it is.
+   * @param dist distance to the listener on the same floor (Infinity: another floor)
    */
-  monsterStep(pos, hunting) {
-    if (!this.running) return;
+  monsterStep(pos, hunting, dist = 0) {
+    if (!this.running || dist > FOOTSTEPS.range) return;
     const t = this.now();
-    const vol = hunting ? 1.6 : 1.1;
-    const o = this.out({ pos, reverb: 0.35, gain: vol, ref: 5, rolloff: 0.55 });
+    const vol = keeperStepGain(dist, hunting);
+    // Volume is ours (exponential); the panner only places it left / right / behind.
+    const o = this.out({ pos, reverb: 0.35, gain: vol, ref: 1, rolloff: 0 });
     // the weight: a deep, distorted thud with a sub tail
     const th = this.osc('sine', 78, t, 0.32);
     th.frequency.exponentialRampToValueAtTime(34, t + 0.28);
@@ -289,12 +294,12 @@ export class AudioEngine {
     const cr = this.osc('sawtooth', rand(140, 220), t + 0.05, 0.25);
     cr.frequency.linearRampToValueAtTime(rand(90, 130), t + 0.3);
     cr.connect(this.filter('bandpass', 600, 8)).connect(this.env(t + 0.05, 0.05, 0.22, 0.18)).connect(o);
-    if (Math.random() < (hunting ? 0.6 : 0.45)) this.claws(pos);
+    if (Math.random() < (hunting ? 0.6 : 0.45)) this.claws(pos, vol);
   }
 
-  claws(pos) {
+  claws(pos, vol = 1) {
     const t = this.now() + 0.05;
-    const o = this.out({ pos, reverb: 0.3, gain: 0.8, ref: 4, rolloff: 0.7 });
+    const o = this.out({ pos, reverb: 0.3, gain: 0.7 * vol, ref: 1, rolloff: 0 });
     const n = this.noiseSrc(t, 0.7);
     const f = this.filter('bandpass', 900, 9);
     f.frequency.setValueAtTime(700, t);
@@ -572,15 +577,6 @@ export class AudioEngine {
     s.connect(this.env(t, 0.08, 1.05, 0.8, 'lin')).connect(o);
   }
 
-  playerStep(stone, speed) {
-    if (!this.running) return;
-    const t = this.now();
-    const o = this.out({ reverb: 0.12, gain: 0.08 + Math.min(1, speed / 5.6) * 0.12 });
-    this.noiseSrc(t, 0.08).connect(this.filter('bandpass', stone ? 520 : 300, 1.5)).connect(this.env(t, 0.003, 0.07, 1)).connect(o);
-    const th = this.osc('sine', stone ? 120 : 85, t, 0.08);
-    th.connect(this.env(t, 0.002, 0.07, 0.5)).connect(o);
-  }
-
   // ---- the seven spells ------------------------------------------------------------------
 
   spell(ability, pos) {
@@ -737,26 +733,26 @@ export class AudioEngine {
       case 'abyssal_mind_fracture': this.rumble(pos, 1.5, 1); this.chime(pos, [55, 58.3, 77.8, 110.4], 3, 0.4, 'sawtooth'); break;
       case 'calidus_brachium': for (let i = 0; i < 3; i++) setTimeout(() => { this.boom(pos, 120, 0.35, 0.8); this.crackle(pos, 0.3, 8); }, i * 200); break;
       case 'sol_linea': this.whoosh(pos, 600, 4000, 0.5, { q: 3, gain: 1 }); this.chime(pos, [1046.5, 1568], 0.8, 0.2, 'sawtooth'); this.crackle(pos, 1.5, 30, 0.5); break;
-      case 'phoenix_aura': this.whoosh(pos, 300, 2000, 0.9, { gain: 0.8 }); this.crackle(pos, 1, 20); break;
+      case 'phoenix_dash': this.whoosh(pos, 300, 2000, 0.6, { gain: 0.9 }); this.crackle(pos, 1, 20); break;
       case 'fiendfyre_dragon': this.roar(pos, true); this.crackle(pos, 2, 50, 0.8); break;
       case 'water_spear': this.whoosh(pos, 1200, 6000, 0.3, { q: 6, gain: 0.8 }); break;
-      case 'sea_cradle': this.whoosh(pos, 400, 1400, 1, { type: 'lowpass', gain: 0.7 }); this.chime(pos, [392, 523, 659], 1.2, 0.15); break;
-      case 'riptide_vortex': this.chime(pos, [587, 880, 1174], 0.9, 0.18); break;
+      case 'slipstream': this.whoosh(pos, 400, 2400, 0.6, { type: 'lowpass', gain: 0.8 }); this.chime(pos, [392, 523, 659], 1.2, 0.15); break;
+      case 'riptide_geyser': this.whoosh(pos, 200, 1800, 1, { type: 'lowpass', gain: 1 }); this.chime(pos, [587, 880, 1174], 0.9, 0.18); break;
       case 'abyssal_deluge': this.rumble(pos, 3, 1.2); this.whoosh(pos, 200, 1500, 3, { type: 'lowpass', gain: 1.2, reverb: 0.8 }); break;
       case 'devils_snare': this.crackle(pos, 0.8, 40, 0.9); this.rumble(pos, 0.6, 0.6); break;
       case 'golem_boulder': this.rumble(pos, 0.5, 0.8); this.whoosh(pos, 300, 120, 0.5, { gain: 0.6 }); break;
-      case 'granite_skin': this.crackle(pos, 0.6, 25, 0.8); this.boom(pos, 70, 0.4, 0.6); break;
+      case 'earthen_rampart': this.crackle(pos, 0.6, 25, 0.8); this.rumble(pos, 0.8, 0.9); this.boom(pos, 70, 0.4, 0.6); break;
       case 'yggdrasil': this.rumble(pos, 2.5, 1); this.chime(pos, [261.6, 329.6, 392, 523.3, 659.3], 3.5, 0.3); break;
       case 'kamaitachi': for (let i = 0; i < 3; i++) setTimeout(() => this.whoosh(pos, 4000, 800, 0.25, { q: 5, gain: 0.7 }), i * 150); break;
-      case 'zephyr_tailwind': this.whoosh(pos, 500, 2500, 1.2, { q: 1, gain: 0.8 }); break;
+      case 'zephyr_glide': this.whoosh(pos, 500, 3500, 0.7, { q: 1, gain: 0.9 }); break;
       case 'vacuum_tempest': this.whoosh(pos, 3000, 150, 1.2, { q: 2, gain: 1 }); this.boom(pos, 60, 0.8, 0.6); break;
       case 'sylph_dragon': this.roar(pos, false); this.whoosh(pos, 300, 3000, 2.5, { q: 0.8, gain: 1 }); break;
       case 'arrows_of_judgment': for (let i = 0; i < 5; i++) setTimeout(() => this.chime(pos, [1318.5 + i * 100, 1760 + i * 120], 0.4, 0.15), 350 + i * 150); break;
-      case 'patronus_beacon': this.chime(pos, [523.3, 659.3, 784, 1046.5, 1318.5], 2.5, 0.25); break;
+      case 'solar_nova': this.boom(pos, 110, 0.6, 0.9); this.chime(pos, [523.3, 659.3, 784, 1046.5, 1318.5], 1.6, 0.25); break;
       case 'flash_step': this.whoosh(pos, 6000, 1500, 0.2, { q: 2, gain: 0.7 }); this.chime(pos, [1760, 2637], 0.5, 0.15); break;
       case 'dawn_sacred_order': this.choir(); break;
-      case 'black_slash': this.whoosh(pos, 1500, 300, 0.4, { q: 3, gain: 1 }); this.boom(pos, 90, 0.3, 0.6); break;
-      case 'null_zone': this.chime(pos, [110, 116.5], 2, 0.3, 'triangle'); break;
+      case 'black_divider': this.whoosh(pos, 1500, 300, 0.4, { q: 3, gain: 1 }); this.boom(pos, 90, 0.3, 0.6); break;
+      case 'black_slash': this.whoosh(pos, 2400, 400, 0.6, { q: 2, gain: 0.9 }); this.chime(pos, [110, 116.5], 0.8, 0.2, 'triangle'); break;
       case 'bull_thrust': this.whoosh(pos, 400, 100, 0.4, { type: 'lowpass', gain: 1 }); this.boom(pos, 80, 0.5, 1); break;
       case 'devil_union': this.chime(null, [55, 82.4, 110, 164.8], 3, 0.5, 'sawtooth'); this.whoosh(null, 100, 1500, 2, { type: 'lowpass', gain: 1, reverb: 0.8 }); break;
     }

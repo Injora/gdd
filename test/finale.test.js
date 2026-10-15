@@ -8,6 +8,7 @@ import { FINALE as F, MASTERIES } from '../shared/finale.js';
 import { ARCHON_COOLDOWN_SCALE } from '../shared/wizards.js';
 import { PHASE, yawFromDir } from '../shared/constants.js';
 import { overlapsSolid } from '../shared/collision.js';
+import { doHeartTasks } from './_tasks.js';
 
 function makeGame(members) {
   const events = [];
@@ -212,14 +213,8 @@ test('full playthrough: Tome → seven Hearts (tasks, Sins) → the chant (a bot
       const spot = prop.front ?? { x: prop.x, z: prop.z };
       Object.assign(h, { x: spot.x, z: spot.z, floor: prop.floor });
     };
-    for (const tid of heart.tasks) {
-      at(g.props[tid]);
-      for (let k = 0; k < 4 && !g.propState[tid]?.done; k++) {
-        g.onInteract('h', tid);
-        run(g, 2.5, () => !h.channel);
-      }
-      assert.ok(g.propState[tid]?.done, `task ${tid} done`);
-    }
+    doHeartTasks(g, h, heart, run);
+    for (const tid of heart.tasks) assert.ok(g.propState[tid]?.done, `task ${tid} done`);
     const prop = g.props[heart.propId];
     at(prop);
     g.onInteract('h', prop.id);

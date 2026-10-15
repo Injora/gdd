@@ -1,5 +1,6 @@
-// The seven playable wizards: 4 normal spells (hotbar 1–4) + 1 Ultimate (R)
-// each. These numbers are the single source of truth for the server
+// The seven playable wizards (Step 7 kits): slots 1–3 are ATTACKS, slot 4 is
+// MOBILITY / UTILITY, and R is the Ultimate (charges over 5 minutes, usable
+// ONCE per game). These numbers are the single source of truth for the server
 // simulation (server/SpellSystem.js), bots, and the client HUD.
 //
 // Distances are world units (1 tile = 2 units). Durations/cooldowns in seconds.
@@ -7,10 +8,12 @@
 // used for combined-element banishes. `bot` tells bots when to use a spell:
 //   target  needs the monster in range + sight      self/ally  defensive buff
 //   escape  when hunted up close                     zone       placed effect
+// `kind` is 'attack' (slots 1–3) or 'utility' (slot 4).
 
 const W = (w) => {
   w.ability = w.spells[0]; // legacy alias: slot 1
   for (const s of [...w.spells, w.ultimate]) s.source = w.source;
+  w.spells.forEach((s, i) => { s.kind = i < 3 ? 'attack' : 'utility'; });
   w.ultimate.ultimate = true;
   return w;
 };
@@ -26,24 +29,24 @@ export const WIZARDS = [
     lightTint: '#c9b8ff',
     spells: [
       {
-        id: 'psychic_torment', name: 'Psychic Torment', bot: 'target',
-        description: 'A wave of black-violet dread. No damage, but the Monster shrieks, abandons its chase for 2s, and is visible through walls to everyone for 6s.',
-        cooldown: 16, range: 22, cone: 0.5, damage: 0, interrupt: 2.0, reveal: 6.0,
+        id: 'psychic_torment', name: 'Dark Torment Bolt', bot: 'target',
+        description: 'A bolt of black-violet dread: 11 damage. The Keeper shrieks and falters for a moment (Sins for 2s) and shows through walls to everyone for 6s.',
+        cooldown: 6, range: 22, cone: 0.45, damage: 11, interrupt: 2.0, reveal: 6.0,
       },
       {
         id: 'dimension_slash', name: 'Dimension Slash', bot: 'target',
-        description: 'A vertical crescent of void-black space. Heavy stagger, and the Monster’s reach shrinks for 6s.',
-        cooldown: 7, range: 25, speed: 24, radius: 0.45, damage: 5, knock: 1.5, stagger: 0.8, shortReach: 6, reachScale: 0.6,
+        description: 'A crescent of void-black space: 18 damage, heavy stagger, and its reach shrinks for 6s.',
+        cooldown: 8, range: 25, speed: 24, radius: 0.45, damage: 18, knock: 1.5, stagger: 0.8, shortReach: 6, reachScale: 0.6,
       },
       {
         id: 'black_hole', name: 'Black Hole Singularity', bot: 'target',
-        description: 'A spinning sphere of collapsed dark that drags the Monster into its centre for 3s.',
-        cooldown: 14, range: 10, cone: 0.6, radius: 7, duration: 3, pull: 5, dps: 1.5,
+        description: 'A spinning orb of collapsed dark that drags its target into the centre for 3s, crushing it (7 damage/s).',
+        cooldown: 13, range: 10, cone: 0.6, radius: 7, duration: 3, pull: 5, dps: 7,
       },
       {
         id: 'shadow_step', name: 'Shadow Step', bot: 'escape',
-        description: 'Dissolve into black smoke for 2.5s: +40% speed, invisible to the Monster, pass through furniture.',
-        cooldown: 16, duration: 2.5, speed: 0.4,
+        description: 'Utility: dissolve into black smoke for 2.5s: +40% speed, unseen, pass through furniture.',
+        cooldown: 14, duration: 2.5, speed: 0.4,
       },
     ],
     ultimate: {
@@ -65,24 +68,24 @@ export const WIZARDS = [
     spells: [
       {
         id: 'ignis_blast', name: 'Ignis Blast', bot: 'target',
-        description: 'A roaring fireball that lights the corridors it flies through. Chips health, sets the Monster burning, leaves a glowing scorch for 4s.',
-        cooldown: 5, range: 30, damage: 4, projectileSpeed: 18, projectileRadius: 0.25,
-        burnDps: 1, burnDuration: 3, burnSlow: 0.15, scorchDuration: 4,
+        description: 'A roaring fireball: 12 damage, sets its target burning (3/s), leaves a glowing scorch.',
+        cooldown: 5, range: 30, damage: 12, projectileSpeed: 18, projectileRadius: 0.25,
+        burnDps: 3, burnDuration: 3, burnSlow: 0.15, scorchDuration: 4,
       },
       {
         id: 'calidus_brachium', name: 'Calidus Brachium', bot: 'target',
-        description: 'Three explosive flame fists hammer the cone in front of you, staggering the Monster back.',
-        cooldown: 8, range: 6, cone: 0.6, hits: 3, interval: 0.2, damage: 2, knock: 1.2,
+        description: 'Three explosive flame fists hammer the cone in front of you: 7 damage each, staggering it back.',
+        cooldown: 8, range: 6, cone: 0.6, hits: 3, interval: 0.2, damage: 7, knock: 1.2,
       },
       {
         id: 'sol_linea', name: 'Sol Linea', bot: 'target',
-        description: 'A piercing white-hot beam down the corridor that leaves a burning line on the floor for 5s.',
-        cooldown: 11, range: 30, width: 0.9, damage: 6, lineDuration: 5, burnDps: 1, burnDuration: 2,
+        description: 'A piercing white-hot laser down the corridor: 20 damage, and a burning line on the floor for 5s.',
+        cooldown: 11, range: 30, width: 0.9, damage: 20, lineDuration: 5, burnDps: 3, burnDuration: 2,
       },
       {
-        id: 'phoenix_aura', name: 'Phoenix Cinder Aura', bot: 'self',
-        description: 'A cloak of swirling embers for 6s: +30% sprint speed, bright light, and burns the Monster on contact.',
-        cooldown: 18, duration: 6, speed: 0.3, contactRadius: 1.8, burnDps: 2,
+        id: 'phoenix_dash', name: 'Phoenix Cinder Dash', bot: 'escape',
+        description: 'Utility: burst 6u forward in a plume of fire, then a cloak of embers for 5s (+30% sprint speed; burns anything that touches you).',
+        cooldown: 12, distance: 6, duration: 5, speed: 0.3, contactRadius: 1.8, burnDps: 4,
       },
     ],
     ultimate: {
@@ -104,24 +107,24 @@ export const WIZARDS = [
     spells: [
       {
         id: 'tidal_surge', name: 'Tidal Surge', bot: 'target',
-        description: 'A surging wave across the floor. Chips health, slows by 40% for 4s, leaves a slick puddle that slows turning.',
-        cooldown: 9, range: 10, cone: 0.55, damage: 3, slow: 0.4, slowDuration: 4,
+        description: 'A crashing wave: 11 damage, slows by 40% for 4s, leaves a slick puddle that slows turning.',
+        cooldown: 7, range: 10, cone: 0.55, damage: 11, slow: 0.4, slowDuration: 4,
         turnSlow: 0.5, puddleRadius: 3, puddleDuration: 4,
       },
       {
         id: 'water_spear', name: 'Valkyrie Water Spear', bot: 'target',
-        description: 'A spiralling high-pressure lance that pierces and pins the Monster in place for 1.5s.',
-        cooldown: 9, range: 30, speed: 32, radius: 0.35, damage: 5, pin: 1.5,
+        description: 'A spiralling high-pressure lance: 19 damage, pierces, and pins its target for 1.5s.',
+        cooldown: 9, range: 30, speed: 32, radius: 0.35, damage: 19, pin: 1.5,
       },
       {
-        id: 'sea_cradle', name: 'Sea Dragon’s Cradle', bot: 'ally',
-        description: 'Swirling spheres of water around you and allies within 4u, each absorbing 40 damage for 10s.',
-        cooldown: 20, radius: 4, absorb: 40, duration: 10,
+        id: 'riptide_geyser', name: 'Riptide Geyser', bot: 'target',
+        description: 'A pillar of water erupts under your target: 16 damage to everything within 2.5u, lifting it for 1.5s.',
+        cooldown: 12, range: 14, cone: 0.5, radius: 2.5, damage: 16, lift: 1.5,
       },
       {
-        id: 'riptide_vortex', name: 'Riptide Vortex', bot: 'zone',
-        description: 'A water rune on the floor. When the Monster steps on it, a spinning geyser erupts and holds it for 2.5s.',
-        cooldown: 15, range: 8, trigger: 1.6, geyser: 2.5, damage: 3, life: 30,
+        id: 'slipstream', name: 'Sea Dragon’s Slipstream', bot: 'escape',
+        description: 'Utility: ride a hydro-jet 6u forward inside a bubble that absorbs 35 damage for 6s.',
+        cooldown: 14, distance: 6, absorb: 35, duration: 6,
       },
     ],
     ultimate: {
@@ -143,23 +146,23 @@ export const WIZARDS = [
     spells: [
       {
         id: 'terra_spike', name: 'Terra Spike', bot: 'target',
-        description: 'Jagged stone erupts: chip damage ahead and a 3-tile barricade that seals corridors and doorways for 5s.',
-        cooldown: 12, range: 6, cone: 0.4, damage: 3, wallDuration: 5, wallTiles: 3, wallDistance: 2, wallHits: 2,
+        description: 'Jagged stone spikes erupt ahead: 13 damage.',
+        cooldown: 6, range: 7, cone: 0.45, damage: 13,
       },
       {
         id: 'devils_snare', name: 'Devil’s Snare Briars', bot: 'target',
-        description: 'Thorned vines tear up through the floorboards and root the Monster for 2.5s.',
-        cooldown: 12, range: 10, cone: 0.55, radius: 3, root: 2.5, zoneDuration: 4,
+        description: 'Thorned vines tear up through the floor: rooted for 2.5s and crushed for 6 damage/s while inside.',
+        cooldown: 11, range: 10, cone: 0.55, radius: 3, root: 2.5, zoneDuration: 4, dps: 6,
       },
       {
         id: 'golem_boulder', name: 'Golem Boulder Toss', bot: 'target',
-        description: 'Hurl a boulder that shatters into a field of debris, slowing the Monster by 35% for 5s.',
-        cooldown: 10, range: 24, speed: 14, radius: 0.6, damage: 6, debrisRadius: 3, debrisDuration: 5, debrisSlow: 0.35,
+        description: 'Hurl an explosive boulder: 22 damage, shattering into debris that slows by 35% for 5s.',
+        cooldown: 10, range: 24, speed: 14, radius: 0.6, damage: 22, debrisRadius: 3, debrisDuration: 5, debrisSlow: 0.35,
       },
       {
-        id: 'granite_skin', name: 'Granite Skin', bot: 'ally',
-        description: 'Stone plates armour you and allies within 4u for 6s, cutting damage taken by 60%.',
-        cooldown: 18, radius: 4, duration: 6, reduction: 0.6,
+        id: 'earthen_rampart', name: 'Earthen Rampart', bot: 'ally',
+        description: 'Utility: raise a 3-tile stone barricade ahead (5s) and armour you and allies within 4u in granite (−60% damage, 6s).',
+        cooldown: 16, radius: 4, duration: 6, reduction: 0.6, wallDuration: 5, wallTiles: 3, wallDistance: 2, wallHits: 2,
       },
     ],
     ultimate: {
@@ -180,24 +183,24 @@ export const WIZARDS = [
     lightTint: '#e8fffa',
     spells: [
       {
-        id: 'gale_force', name: 'Gale Force', bot: 'target',
-        description: 'A howling tunnel of wind that hurls the Monster 5 units away from you. Walls still stop it.',
-        cooldown: 8, range: 9, cone: 0.6, damage: 0, knockback: 5, knockbackTime: 0.3,
+        id: 'gale_force', name: 'Gale Force Cannon', bot: 'target',
+        description: 'A high-velocity blast of wind: 11 damage and a 5u knockback. Walls still stop it.',
+        cooldown: 7, range: 9, cone: 0.6, damage: 11, knockback: 5, knockbackTime: 0.3,
       },
       {
         id: 'kamaitachi', name: 'Crescent Kamaitachi', bot: 'target',
-        description: 'Three curving wind blades that hunt the Monster, even around corners.',
-        cooldown: 7, blades: 3, interval: 0.15, speed: 20, range: 28, radius: 0.4, damage: 2, knock: 0.8,
-      },
-      {
-        id: 'zephyr_tailwind', name: 'Zephyr Tailwind', bot: 'ally',
-        description: 'A slipstream for 6s: you and allies within 5u move 45% faster and sprint without tiring.',
-        cooldown: 16, radius: 5, duration: 6, speed: 0.45,
+        description: 'Three curving wind blades that hunt their target even around corners: 6 damage each.',
+        cooldown: 7, blades: 3, interval: 0.15, speed: 20, range: 28, radius: 0.4, damage: 6, knock: 0.8,
       },
       {
         id: 'vacuum_tempest', name: 'Vacuum Tempest', bot: 'target',
-        description: 'An imploding vortex that lifts the Monster off its feet for 1.5s.',
-        cooldown: 12, range: 12, cone: 0.5, radius: 3, lift: 1.5,
+        description: 'An imploding vortex bomb: 15 damage, lifting everything within 3u off its feet for 1.5s.',
+        cooldown: 11, range: 12, cone: 0.5, radius: 3, lift: 1.5, damage: 15,
+      },
+      {
+        id: 'zephyr_glide', name: 'Zephyr Flash Glide', bot: 'escape',
+        description: 'Utility: a wind-tunnel dash 7u forward, then 4s of +45% speed with no stamina drain.',
+        cooldown: 10, distance: 7, duration: 4, speed: 0.45,
       },
     ],
     ultimate: {
@@ -218,24 +221,24 @@ export const WIZARDS = [
     lightTint: '#fffaf0',
     spells: [
       {
-        id: 'sacred_bind', name: 'Sacred Bind', bot: 'target',
-        description: 'A blinding golden burst that stuns and blinds the Monster in place for 3.5s. Passive: breaks the Cell lock twice as fast.',
-        cooldown: 20, range: 12, cone: 0.5, damage: 0, stun: 3.5,
+        id: 'sacred_bind', name: 'Sacred Judgment Ray', bot: 'target',
+        description: 'A blinding ray of judgment: 12 damage, and its target is stunned for 2.5s. Passive: breaks the cage lock twice as fast.',
+        cooldown: 9, range: 14, cone: 0.45, damage: 12, stun: 2.5,
       },
       {
         id: 'arrows_of_judgment', name: 'Arrows of Judgment', bot: 'target',
-        description: 'Five swords of light rise above you and fire one after another at the Monster.',
-        cooldown: 9, count: 5, interval: 0.15, speed: 22, range: 26, radius: 0.4, damage: 1.5, knock: 0.4,
+        description: 'Five homing swords of light, fired one after another: 4 damage each.',
+        cooldown: 8, count: 5, interval: 0.15, speed: 22, range: 26, radius: 0.4, damage: 4, knock: 0.4,
       },
       {
-        id: 'patronus_beacon', name: 'Patronus Beacon', bot: 'heal',
-        description: 'A radiant silver-gold guardian for 10s: lights the room and heals allies within 6u for 4 HP/s.',
-        cooldown: 22, duration: 10, radius: 6, heal: 4,
+        id: 'solar_nova', name: 'Solar Purging Nova', bot: 'target',
+        description: 'An expanding golden blast around you: 18 damage to everything within 6u, pushing it back.',
+        cooldown: 12, radius: 6, damage: 18, knock: 1.5, range: 6,
       },
       {
         id: 'flash_step', name: 'Flash Step', bot: 'escape',
-        description: 'Blink 6 units forward in a burst of gold, leaving a blinding afterimage (1.2s blind nearby).',
-        cooldown: 10, distance: 6, blind: 1.2, blindRadius: 7,
+        description: 'Utility: blink 6 units forward in a burst of gold, leaving a blinding afterimage (1.2s blind nearby).',
+        cooldown: 9, distance: 6, blind: 1.2, blindRadius: 7,
       },
     ],
     ultimate: {
@@ -257,24 +260,24 @@ export const WIZARDS = [
     lightTint: '#e6ebf0',
     spells: [
       {
+        id: 'black_divider', name: 'Black Divider Cleave', bot: 'target',
+        description: 'A heavy two-handed anti-magic cleave at mid range: 20 damage, and its windup is cut apart.',
+        cooldown: 7, range: 4.5, cone: 0.7, damage: 20,
+      },
+      {
+        id: 'black_slash', name: 'Black Slash Wave', bot: 'target',
+        description: 'A ranged crimson-black crescent: 13 damage, and it strips its target’s buffs (a Sin loses its enrage for 6s; the Keeper its own for 8s).',
+        cooldown: 9, range: 24, speed: 22, radius: 0.5, damage: 13, calm: 8, strip: 6,
+      },
+      {
+        id: 'bull_thrust', name: 'Nullifying Meteor Thrust', bot: 'target',
+        description: 'A piercing anti-magic lunge 5u forward: 17 damage to everything in its path, knocking it back 3u and drawing its rage to you.',
+        cooldown: 11, distance: 5, knock: 3, hitRadius: 2.5, taunt: 5, range: 6, damage: 17,
+      },
+      {
         id: 'aegis_void', name: 'Aegis of the Void', bot: 'ally',
-        description: 'A hexagonal dome of unmade space. For 3s every Monster attack against you and allies within 3u simply fails.',
-        cooldown: 18, range: 0, damage: 0, shieldDuration: 3, shieldRadius: 3,
-      },
-      {
-        id: 'black_slash', name: 'Black Slash', bot: 'target',
-        description: 'A crimson-black wave of anti-magic that cancels the Monster’s attack and strips its enrage for 8s.',
-        cooldown: 9, range: 9, cone: 0.5, damage: 3, calm: 8,
-      },
-      {
-        id: 'null_zone', name: 'Null Zone', bot: 'ally',
-        description: 'An anti-magic field for 6s: inside it, lights stop flickering and terror cannot touch you.',
-        cooldown: 18, radius: 6, duration: 6,
-      },
-      {
-        id: 'bull_thrust', name: 'Bull Thrust', bot: 'target',
-        description: 'A cloaked shoulder-charge 5u forward that knocks the Monster back 3u and draws its rage to you.',
-        cooldown: 12, distance: 5, knock: 3, hitRadius: 2.5, taunt: 5, range: 6,
+        description: 'Utility: a hexagonal dome of unmade space. For 3s every attack against you and allies within 3u simply fails.',
+        cooldown: 16, range: 0, damage: 0, shieldDuration: 3, shieldRadius: 3,
       },
     ],
     ultimate: {
@@ -291,14 +294,14 @@ export const WIZARD_BY_ID = Object.fromEntries(WIZARDS.map((w) => [w.id, w]));
 /** Every spell and ultimate by id. */
 export const ABILITY_BY_ID = Object.fromEntries(WIZARDS.flatMap((w) => [...w.spells, w.ultimate]).map((a) => [a.id, a]));
 
-/** Ultimate charge (0–100) sources. */
+/**
+ * Ultimates (Step 7): every wizard's charges strictly over 5 minutes of match
+ * time (+0.333%/s) and can be cast ONCE per game; after that the slot reads
+ * EXPENDED. (Greed's molten gold can still knock charge back.)
+ */
 export const ULT = {
   MAX: 100,
-  HIT: 8, // landing a normal spell on a monster
-  CHASED: 2, // per second while the Amalgam hunts you
-  HEART: 25, // team-wide, per destroyed Heart
-  RESCUE: 20, // breaking the lock with someone inside
-  PASSIVE: 0.4, // per second, once the Tome is read
+  CHARGE_TIME: 300, // seconds from 0% to READY
 };
 
 /** In the Archon phase every ability is available at this fraction of its cooldown. */

@@ -1,16 +1,23 @@
 // The in-game client: renderer, mansion, local wizard, teammates, HUD,
-// interactions, and the network glue for a running match.
+// interactions (crosshair raycast, outline, billboard), the full map, and the
+// network glue for a running match.
 
 import * as THREE from 'three';
 import { createCollisionWorld, addBarrier, removeBarrier, lineOfSight } from '/shared/collision.js';
 import { roomAt } from '/shared/mapgen.js';
-import { PHASE, INTERACT_RANGE, NET_SEND_RATE, FLOOR_Y, STAMINA, HP, LUMOS, INVIS, FLOOR, HEART_COUNT } from '/shared/constants.js';
-import { WIZARDS, WIZARD_BY_ID, ABILITY_BY_ID } from '/shared/wizards.js';
+import { PHASE, INTERACT_RANGE, NET_SEND_RATE, FLOOR_Y, STAMINA, HP, LUMOS, FLOOR, HEART_COUNT, footstepCloseness } from '/shared/constants.js';
+import { WIZARDS, WIZARD_BY_ID, ABILITY_BY_ID, ULT } from '/shared/wizards.js';
 import { PROP_LABELS } from '/shared/propdefs.js';
-import { TASKS, TASK_STEPS } from '/shared/lore.js';
+import { TASKS } from '/shared/lore.js';
+import { heartStatus, taskPrompt, promptLine, trackerText } from '/shared/heartinfo.js';
 import { SINS } from '/shared/sins.js';
 import { SpellInput } from './input/SpellInput.js';
-import { Minimap, FOOTSTEP_RANGE } from './ui/Minimap.js';
+import { Minimap } from './ui/Minimap.js';
+import { FullMap } from './ui/FullMap.js';
+import { DamageNumbers } from './ui/DamageNumbers.js';
+import { Interact } from './player/Interact.js';
+import { Tethers } from './world/Tethers.js';
+import { makeCarry } from './world/sinProps.js';
 import { SinDemonAvatar } from './entities/SinDemonAvatar.js';
 import { buildMansion } from './world/MansionBuilder.js';
 import { FirstPersonController } from './player/FirstPersonController.js';
@@ -25,7 +32,6 @@ import { PostFX } from './fx/PostFX.js';
 import { AudioEngine } from './audio/AudioEngine.js';
 import { AmalgamAvatar } from './entities/AmalgamAvatar.js';
 import { HUD } from './ui/hud.js';
-import { DebugMap } from './debug/DebugMap.js';
 
 const REMOTE_LIGHTS = 3;
 const LUMOS_COLOR = new THREE.Color(0xfff3dc);
@@ -52,7 +58,6 @@ export class GameClient {
     this.world = createCollisionWorld(this.map, (prop) => !this.propState[prop.id]?.open);
     this.interactables = this.map.props.filter((p) => p.interact);
     this.heartIds = new Set();
-    this.heartNames = new Map();
     this.destroyed = new Set(init.destroyed);
     this.tomeRead = !!init.tome;
     this.positions = new Map();
@@ -87,8 +92,12 @@ export class GameClient {
     this.scrapeAt = 0;
     this.pings = [];
     this.input = new SpellInput(); // 1–4 / R select; LMB / Q fire
-    this.invisUntil = 0;
-    this.invisReadyAt = 0;
+    this.invisOn = false; // V: an infinite toggle (Step 7)
+    this.ultExpended = false; // the Ultimate: once per game
+    this.carry = null; // 'ingot' | 'platter' while carrying a task item
+    this.tomeHearts = null; // the Tome's seven Hearts (Sin, room, tasks), once read
+    this.punch = 0; // camera punch on heavy casts
+    this.lastStep = null; // the Keeper's last footfall within earshot
     this.arenas = new Map(); // barrierId -> arena info
     this.visibleFloors = [FLOOR.GROUND, FLOOR.UPPER];
     this.captureUntil = 0;
@@ -137,18 +146,20 @@ export class GameClient {
     this.hud.lumos(false);
     this.hud.setWizard(this.wizard);
     this.hud.hp(HP.MAX);
+    this.dmg = new DamageNumbers($('hud'));
     if (init.tome) this.applyTome(init.tome, true);
     for (const id of this.destroyed) {
       this.heartIds.add(id);
       this.mansion.destroyHeart(id, true);
     }
 
-    this.debugMap = new DebugMap($('debug-map'), this.map, (floor, x, z) => this.debugTeleport(x, z, floor));
+    // The full map (M / Tab) is for everyone; only ?debug=1 games may click-teleport.
+    this.fullMap = new FullMap($('full-map'), this.map, debug ? (floor, x, z) => this.debugTeleport(x, z, floor) : null);
     this.minimap = new Minimap($('minimap'), this.map);
     // Hearts already broken open or destroyed (joining mid-game).
     for (const [id, st] of Object.entries(this.propState)) {
       if (st?.unsealed) this.unsealHeart(Number(id), true);
-      if (st?.done !== undefined || st?.turns !== undefined) this.mansion.setPropState(Number(id), st);
+      if (st) this.mansion.setPropState(Number(id), st);
     }
     for (const a of init.arenas ?? []) this.onArenaStart(a, true);
     $('debug-stats').classList.toggle('hidden', !debug);
@@ -200,6 +211,7 @@ export class GameClient {
 
     this.mansion = buildMansion(this.map);
     scene.add(this.mansion.group);
+    this.tethers = new Tethers(this.mansion);
 
     // Local wand: viewmodel + shadow-casting spotlight offset from the eye.
     const tint = new THREE.Color(this.wizard.lightTint);
@@ -294,6 +306,8 @@ export class GameClient {
       scene.add(l, l.target);
       this.remoteLights.push(l);
     }
+    // What the crosshair is on: outline + "[Hold E]" billboard.
+    this.interact = new Interact(scene, this.camera, this.map, this.mansion);
   }
 
   // ---- networking -------------------------------------------------------------
@@ -314,14 +328,18 @@ export class GameClient {
       // A Sin's ribbons or vacuum yank you along.
       'game:impulse': (d) => this.controller.impulse?.(d.vx, d.vz, d.duration),
       'game:invis': (d) => {
-        const now = performance.now();
         if (d.ok) {
-          this.invisUntil = now + d.duration * 1000;
-          this.invisReadyAt = now + d.readyIn * 1000;
-          if (d.late) this.hud.whisper('Too late. It has already seen you — it can still smell you out.', 3500);
-        } else if (d.reason === 'cooldown') {
-          this.invisReadyAt = now + d.readyIn * 1000;
+          this.invisOn = d.on;
+          this.hud.whisper(d.on ? 'You fade from sight. Hold still: moving near it gives you away. [V] to reappear.' : 'You let the charm go. They can see you again.', 2400);
+        } else {
           this.hud.denied('invis');
+          if (d.reason === 'seen') {
+            // In front of it: the charm fails, and it comes for you.
+            this.invisOn = false;
+            this.hud.banner('IT ALREADY SEES YOU', 'The charm fails in its sight. RUN.', 2600);
+            this.redPulse = Math.max(this.redPulse, 0.8);
+            this.shake = Math.max(this.shake, 0.5);
+          }
         }
       },
     };
@@ -339,7 +357,7 @@ export class GameClient {
       if (!av) {
         const info = this.roster.find((m) => m.id === p.id);
         if (!info) continue;
-        av = new WizardAvatar(info, WIZARD_BY_ID[info.wizardId]);
+        av = new WizardAvatar(info, WIZARD_BY_ID[info.wizardId], (kind) => makeCarry(this.mansion.kit, kind));
         const free = this.remoteLights.find((l) => !l.userData.owner);
         if (free) {
           free.userData.owner = p.id;
@@ -356,7 +374,10 @@ export class GameClient {
     if (me) {
       this.hp = me.hp ?? this.hp;
       this.ultCharge = me.u ?? 0;
+      this.ultExpended = !!me.ux;
       this.buffs = me.bf ?? [];
+      this.invisOn = this.buffs.includes('invis');
+      if ((me.cy ?? null) !== this.carry) this.setCarry(me.cy ?? null);
     }
     this.grimoire.syncProjectiles(s.prj ?? []);
     this.ents = s.ents ?? [];
@@ -406,6 +427,7 @@ export class GameClient {
       if (!d.ok) {
         this.hud.denied('ult');
         if (d.reason === 'no-target') this.hud.whisper('Your Ultimate finds nothing to strike.');
+        if (d.reason === 'expended') this.hud.whisper('Your Ultimate is spent. It comes only once a game.');
       }
       return;
     }
@@ -423,7 +445,11 @@ export class GameClient {
     const now = performance.now();
     const c = this.controller;
     if (slot === 'ult') {
-      if (this.ultCharge < 100) return this.hud.denied('ult');
+      if (this.ultExpended) {
+        this.hud.whisper('Your Ultimate is spent. It comes only once a game.', 2000);
+        return this.hud.denied('ult');
+      }
+      if (this.ultCharge < ULT.MAX) return this.hud.denied('ult');
       this.net.emit('p:cast', { yaw: c.yaw, pitch: c.pitch, slot: 'ult' });
       this.recoil = 1.4;
       return;
@@ -456,11 +482,23 @@ export class GameClient {
     this.cast(f.slot);
   }
 
-  /** V: the Disillusionment Charm. */
+  /** V: the Disillusionment Charm, on or off (no cooldown). */
   castInvis() {
     if (this.gameIsOver || this.captured || this.archonMode()) return;
-    if (performance.now() < this.invisReadyAt) return this.hud.denied('invis');
     this.net.emit('p:invis');
+  }
+
+  /** Carrying an ingot or a platter: it sits in your off hand, in view. */
+  setCarry(kind) {
+    this.carry = kind;
+    if (this.carryObj) this.camera.remove(this.carryObj);
+    this.carryObj = kind ? makeCarry(this.mansion.kit, kind) : null;
+    if (!this.carryObj) return;
+    this.carryObj.position.set(-0.22, -0.24, -0.55);
+    this.carryObj.rotation.set(0.5, 0.5, 0);
+    this.carryObj.scale.setScalar(kind === 'platter' ? 0.75 : 1.1);
+    this.carryObj.traverse((o) => { o.castShadow = false; });
+    this.camera.add(this.carryObj);
   }
 
   setRoster(players) {
@@ -544,6 +582,12 @@ export class GameClient {
           this.hud.banner(ABILITY_BY_ID[e.ability].name.toUpperCase(), `${who} an Ultimate.`, 3200);
         }
         if (e.ability === 'psychic_torment' && e.caster === this.selfId) this.chromaPulse = 1;
+        if (e.caster === this.selfId) {
+          // Camera punch on the heavy ones: Ultimates, big hits, dashes.
+          const a = ABILITY_BY_ID[e.ability];
+          if (e.ult) this.punch = 1;
+          else if ((a?.damage ?? 0) >= 16 || e.to) this.punch = Math.max(this.punch, 0.55);
+        }
         break;
       case 'impact':
         if (e.ability === 'ignis_blast') {
@@ -624,7 +668,14 @@ export class GameClient {
           this.monsters.get(e.id)?.showImmune?.();
           break;
         }
-        this.monsters.get(e.id)?.showDamage(e.amount, e.source);
+        {
+          const av = this.monsters.get(e.id);
+          av?.showDamage(e.amount, e.source);
+          // Element-coloured numbers (the Amalgam keeps its own, in the boss fight).
+          if (av && e.amount > 0 && !(av instanceof AmalgamAvatar) && av.snap.f === this.controller.floor) {
+            this.dmg.spawn(av.x, FLOOR_Y[av.snap.f] + (av.model?.height ?? 2.2) * 0.8, av.z, e.amount, e.source, this.camera);
+          }
+        }
         break;
       case 'monster:lockbroken': {
         if (e.reason === 'arena') break;
@@ -651,9 +702,37 @@ export class GameClient {
         this.mansion.setPropState(e.propId, e.state);
         this.propState[e.propId] = e.state;
         const t = TASKS[e.task];
-        this.hud.whisper(e.state.done ? `${t.done}. (${e.progress} of ${e.of})` : `The mirror turns, but not yet true.`, 2600);
+        const mine = e.by === this.self.name;
+        const item = t?.carry === 'ingot' ? 'gold ingot' : 'rotting platter';
+        if (e.took) {
+          if (mine) this.hud.whisper(`You take the ${item}. Bring it to the ${t.carry === 'ingot' ? 'scale' : 'furnace'}.`, 3200);
+        } else if (e.returned) {
+          this.hud.whisper(`The ${item} returns to where it was taken.`, 2600);
+        } else if (t) {
+          this.hud.whisper(`${mine ? '' : `${e.by}: `}${t.done}. (${e.progress} of ${e.of})`, 2600);
+        }
         const prop = this.map.props[e.propId];
-        this.audio.taskStep?.(wpos(prop.floor, prop.x, prop.z, 1), e.task, !!e.state.done);
+        this.audio.taskStep?.(wpos(prop.floor, prop.x, prop.z, 1), e.task, !e.took && !e.returned);
+        break;
+      }
+      case 'carry':
+        if (e.id === this.selfId && (e.kind ?? null) !== this.carry) this.setCarry(e.kind ?? null);
+        break;
+      case 'sin:enrage': {
+        const av = this.monsters.get(e.id);
+        av?.onEnrage?.(e);
+        const S = SINS[e.sin];
+        const inside = this.sinBarActive && av && this.inArenaOf(e.id);
+        if (e.stripped) {
+          if (inside) this.hud.caption(`[ the Black Slash Wave strips ${S.name}'s rage away ]`, 2400);
+          break;
+        }
+        this.audio.boom(wpos(e.floor, e.x, e.z), 55, 1.4, 1.1);
+        if (inside) {
+          this.hud.banner(`${S.name.toUpperCase()} IS ENRAGED`, 'Faster. Harder. Its signature attack grows.', 3200);
+          this.shake = Math.max(this.shake, 0.8);
+          this.redPulse = Math.max(this.redPulse, 0.7);
+        }
         break;
       }
       case 'heart:unsealed':
@@ -825,13 +904,24 @@ export class GameClient {
 
   applyTome(tome, silent) {
     this.tomeRead = true;
-    // Riddles only: a Heart shows itself when its room's wards are broken.
+    // Step 7: the Tome names every Heart: its Sin, its room, its three tasks.
+    this.tomeHearts = tome.hearts;
+    for (const h of tome.hearts) {
+      this.heartIds.add(h.propId);
+    }
+    this.mansion.revealHearts(tome.hearts.map((h) => h.propId));
+    this.tethers.build(tome.hearts);
+    this.taskHeart = new Map();
+    for (const h of tome.hearts) {
+      for (const id of h.tasks) this.taskHeart.set(id, h);
+      if (h.sink !== null && h.sink !== undefined) this.taskHeart.set(h.sink, h);
+    }
     this.hud.setJournal(tome);
     this.hud.setHearts(tome.hearts);
     for (const h of tome.hearts) if (h.destroyed) this.hud.heartDestroyed(h.type);
     if (!silent) {
       this.hud.banner('SOMETHING HAS AWOKEN', `${tome.by} read the Forbidden Convergence aloud.`, 5500);
-      setTimeout(() => this.hud.whisper('Seven hearts beat inside this house, each sealed by its room. Press J to read the riddles.', 6000), 3000);
+      setTimeout(() => this.hud.whisper('Seven hearts beat inside this house, each kept by a Sin. Press M for the map, J for the riddles.', 6000), 3000);
       this.shake = 1.2;
     }
   }
@@ -840,7 +930,6 @@ export class GameClient {
   unsealHeart(propId, silent = false) {
     this.heartIds.add(propId);
     const prop = this.map.props[propId];
-    this.heartNames.set(propId, prop ? `the ${PROP_LABELS[prop.kind] ?? prop.kind}` : 'the Heart');
     this.mansion.revealHearts([propId]);
     if (!this.destroyed.has(propId)) this.mansion.unsealHeart(propId);
     if (!silent && prop) this.audio.heartTell(wpos(prop.floor, prop.x, prop.z, 1.4), 1);
@@ -874,16 +963,28 @@ export class GameClient {
     }
   }
 
-  /** A Keeper footstep (from its walk cycle): loud, heavy, and on the map. */
+  /**
+   * A Keeper footstep (from its walk cycle): the only footsteps in the house.
+   * Heard from 28u, louder (exponentially) as it closes in; on the minimap and
+   * the HUD's footstep bar.
+   */
   onKeeperStep(a, hunting) {
     const c = this.controller;
     const d = a.floor === c.floor ? Math.hypot(a.x - c.x, a.z - c.z) : Infinity;
-    this.audio.monsterStep(wpos(a.floor, a.x, a.z, 0.2), hunting);
-    if (d <= FOOTSTEP_RANGE) {
-      this.minimap.footstep(a.x, a.z, a.floor);
-      // The floorboards tremble under you.
-      this.tremor = Math.max(this.tremor, 0.25 + (1 - d / FOOTSTEP_RANGE) * 0.75 * (hunting ? 1.3 : 1));
-    }
+    const k = footstepCloseness(d);
+    if (k <= 0) return;
+    this.audio.monsterStep(wpos(a.floor, a.x, a.z, 0.2), hunting, d);
+    this.minimap.footstep(a.x, a.z, a.floor);
+    this.lastStep = { at: this.time, k };
+    this.hud.footsteps(k, true);
+    // The floorboards tremble under you.
+    this.tremor = Math.max(this.tremor, 0.25 + k * 0.75 * (hunting ? 1.3 : 1));
+  }
+
+  /** Is the local wizard inside the arena of demon `id`? */
+  inArenaOf(id) {
+    return [...this.arenas.values()].some((a) => a.demonId === id && a.floor === this.controller.floor &&
+      roomAt(this.map, a.floor, this.controller.x, this.controller.z)?.id === a.roomId);
   }
 
   setPhase(phase) {
@@ -936,9 +1037,12 @@ export class GameClient {
           break;
         case 'Escape':
           if (this.hud.journalOpen) this.openJournal(false);
+          if (this.fullMap.visible) this.toggleFullMap(false);
           break;
         case 'KeyM':
-          if (this.debug) this.debugMap.toggle();
+        case 'Tab':
+          e.preventDefault();
+          this.toggleFullMap();
           break;
         case 'KeyQ':
           this.castSelectedSpell(); // alternate trigger (headless tests have no pointer lock)
@@ -976,16 +1080,14 @@ export class GameClient {
     this._unlockAudio = () => this.audio.unlock();
     window.addEventListener('keydown', this._unlockAudio);
     window.addEventListener('pointerdown', this._unlockAudio);
-    this.controller.onStep = (info) => {
-      this.audio.playerStep(this.controller.floor === FLOOR.BASEMENT, info.speed);
-      // Footsteps under the Charm give you away (the server judges it).
-    };
+    // (Step 7: wizards' footsteps are silent; only the Keeper's are heard.)
     this._onClick = () => {
+      if (this.fullMap.visible) return this.toggleFullMap(false);
       if (!this.hud.journalOpen && !this.epilogue) this.controller.lock();
     };
     this._onLockChange = () => {
       if (this.controller.locked) this.hidePause();
-      else if (!this.hud.journalOpen && !this.gameIsOver) this.showPause('Paused');
+      else if (!this.hud.journalOpen && !this.fullMap.visible && !this.gameIsOver) this.showPause('Paused');
     };
     window.addEventListener('keydown', this._onKeyDown);
     window.addEventListener('keyup', this._onKeyUp);
@@ -999,6 +1101,21 @@ export class GameClient {
   /** Solo-debug lobbies only; the server ignores this otherwise. */
   debugTeleport(x, z, floor = this.controller.floor, yaw = this.controller.yaw) {
     this.net.emit('debug:teleport', { x, z, floor, yaw });
+  }
+
+  /** M / Tab: the full map. The mouse is freed so its floor tabs can be clicked. */
+  toggleFullMap(open = !this.fullMap.visible) {
+    if (open && (this.hud.journalOpen || this.epilogue || this.gameIsOver)) return;
+    this.fullMap.toggle(open);
+    this.controller.enabled = !open && !this.jumpscare;
+    if (open) {
+      this._fullAt = 0;
+      if (this.channel) this.net.emit('p:cancel');
+      document.exitPointerLock?.();
+      this.hidePause();
+    } else {
+      this.controller.lock();
+    }
   }
 
   openJournal(open) {
@@ -1023,53 +1140,74 @@ export class GameClient {
 
   // ---- per-frame --------------------------------------------------------------
 
+  /**
+   * What the crosshair is on: a ray from the centre of the screen (6 units);
+   * failing that, whatever is right in front of you within reach.
+   */
   findTarget() {
     if (this.phase === PHASE.ARCHON) return null; // inside the Archon there is nothing to pick up
     const c = this.controller;
+    const pos = { x: c.x, z: c.z, floor: c.floor };
+    const live = this.interactables.filter((p) => !this.destroyed.has(p.id));
+    const hit = this.interact.pick(live, pos);
+    if (hit) {
+      this.targetDist = hit.dist;
+      return hit.prop;
+    }
     const fx = -Math.sin(c.yaw), fz = -Math.cos(c.yaw);
     let best = null;
-    for (const p of this.interactables) {
+    for (const p of live) {
       if (p.floor !== c.floor) continue;
-      if (this.destroyed.has(p.id)) continue;
       const dx = p.x - c.x, dz = p.z - c.z;
       const d = Math.hypot(dx, dz);
-      if (d > INTERACT_RANGE) continue;
+      if (d > INTERACT_RANGE + 0.6) continue; // the server's reach (+0.75 slack)
       const dot = d > 1e-3 ? (dx * fx + dz * fz) / d : 1;
       if (d > 0.9 && dot < 0.72) continue;
       const score = d * (2 - dot);
-      if (!best || score < best.score) best = { p, score };
+      if (!best || score < best.score) best = { p, score, d };
     }
     // The Tree of Life
     for (const e of this.ents) {
       if (e.k !== 'tree' || e.f !== c.floor || !(e.n > 0)) continue;
       const d = Math.hypot(e.x - c.x, e.z - c.z);
       if (d > 3.1) continue;
-      const score = d;
-      if (!best || score < best.score) best = { p: { entity: true, id: e.id, kind: 'tree', n: e.n }, score };
+      if (!best || d < best.score) best = { p: { entity: true, id: e.id, kind: 'tree', n: e.n }, score: d, d };
     }
+    this.targetDist = best?.d ?? 0;
     return best?.p ?? null;
   }
 
+  /** The Tome's Heart entry for a Heart prop, or for one of its task props. */
+  heartOf(propId) {
+    return this.tomeHearts?.find((h) => h.propId === propId) ?? this.taskHeart?.get(propId) ?? null;
+  }
+
+  /** { text, hold } for the billboard / prompt over p. */
   promptFor(p) {
-    if (p.entity) return [`Eat a golden fruit (${p.n} left)`, false];
+    if (p.entity) return { text: `Eat a golden fruit (${p.n} left)`, hold: false };
+    const lockdowns = new Set([...this.arenas.values()].map((a) => a.heartPropId));
     switch (p.interact) {
-      case 'tome': return this.tomeRead ? ['Open your journal', false] : ['Read the Forbidden Tome', true];
-      case 'curio':
-        if (this.heartIds.has(p.id) && !this.destroyed.has(p.id)) {
-          return [[...this.arenas.values()].some((a) => a.heartPropId === p.id) ? null : 'Break open the Cursed Heart (it will release its Sin)', !!p];
+      case 'tome': return this.tomeRead ? { text: 'Open your journal', hold: false } : { text: 'Read the Forbidden Tome', hold: true };
+      case 'curio': {
+        const h = this.heartIds.has(p.id) ? this.heartOf(p.id) : null;
+        if (h) {
+          const st = heartStatus(h, this.propState, this.destroyed, lockdowns);
+          if (st.state === 'lockdown' || st.state === 'slain') return { text: null, hold: false };
+          if (st.state === 'unsealed') return { text: `Break open the Heart of ${st.sinName} (it releases the Sin) (Progress ${st.of}/${st.of})`, hold: true };
+          return { text: `The Heart of ${st.sinName} is sealed: ${st.objective} (Progress ${st.done}/${st.of})`, hold: false };
         }
-        return [`Examine the ${PROP_LABELS[p.kind] ?? p.kind}`, false];
-      case 'task': {
-        const t = TASKS[p.task];
-        const st = this.propState[p.id];
-        if (st?.done) return [`${t.done}`, false];
-        if (t.turns) return [`${t.label} (${st?.turns ?? p.turns} more)`, true];
-        return [t.label, true];
+        return { text: `Examine the ${PROP_LABELS[p.kind] ?? p.kind}`, hold: false };
       }
-      case 'stairs': return [p.label ?? (p.kind === 'stairs_down' ? 'Descend the stair' : 'Climb the stair'), false];
-      case 'altar': return ['Approach the Ritual Altar', false];
-      case 'gate': return this.propState[p.id]?.open ? [null, false] : ['Break the ritual lock', true];
-      default: return [null, false];
+      case 'task': {
+        const h = this.taskHeart?.get(p.id);
+        if (!h) return { text: 'It means nothing to you yet', hold: false };
+        const pr = taskPrompt(p, h, this.propState, this.destroyed, { tomeRead: this.tomeRead, carry: this.carry });
+        return { text: promptLine({ ...pr, hold: false }), hold: pr.hold };
+      }
+      case 'stairs': return { text: p.label ?? (p.kind === 'stairs_down' ? 'Descend the stair' : 'Climb the stair'), hold: false };
+      case 'altar': return { text: 'Approach the Ritual Altar', hold: false };
+      case 'gate': return this.propState[p.id]?.open ? { text: null, hold: false } : { text: 'Break the ritual lock', hold: true };
+      default: return { text: null, hold: false };
     }
   }
 
@@ -1098,7 +1236,11 @@ export class GameClient {
       this.visibleFloors = this.mansion.visibleFloors(c.floor);
     }
 
-    // Camera shake (events), and the micro-tremor of the Keeper's footsteps.
+    // Camera punch (heavy casts), shake (events), and the Keeper's footsteps' tremor.
+    if (this.punch > 0) {
+      this.punch = Math.max(0, this.punch - dt * 3.2);
+      this.camera.rotation.x += this.punch * this.punch * 0.06;
+    }
     if (this.shake > 0) {
       this.shake = Math.max(0, this.shake - dt);
       const s = this.shake * 0.02;
@@ -1131,14 +1273,12 @@ export class GameClient {
     }
     // Lumos warns you: within 12u of a hunting Amalgam it strobes violently.
     if (this.lumos && amNear && am.snap.state === 'hunting' && amDist < 12) wandK *= Math.random() < 0.35 ? 0.05 : 0.6 + Math.random() * 0.6;
-    const nulled = this.grimoire.inNullZone(c.floor, c.x, c.z);
-    if (nulled) wandK = flicker; // Null Zone: the lights hold steady
-    this.mansion.setDread(nulled || this.dawnK > 0.5 ? 0 : dread);
+    this.mansion.setDread(this.dawnK > 0.5 ? 0 : dread);
     this.applyLumos(wandK, channelBoost);
     if (this.jumpscare) this.fillLight.intensity = 5; // its face, lit from the front
     this.wandTipMat.color.set(this.wizard.color).multiplyScalar(this.lumos ? 1.6 : 1);
     this.updateWandAura(dt);
-    this.updateInvis(now);
+    this.updateInvis();
     this.applyBuffs(c, dt);
     this.applyEnvironment(dt);
     // Cast recoil: the wand kicks up and back, the tip and light flare in the element colour.
@@ -1160,7 +1300,8 @@ export class GameClient {
     for (const m of this.monsters.values()) m.update(dt, this.time, m instanceof SinDemonAvatar ? this.visibleFloors : c.floor);
     am?.setHeartsLit(HEART_COUNT - this.destroyed.size);
     this.updateSinHud();
-    this.updateHorror(dt, now, c, am, amNear, amDist, nulled || this.dawnK > 0.5 ? 0 : dread, nulled);
+    this.updateHorror(dt, now, c, am, amNear, amDist, this.dawnK > 0.5 ? 0 : dread);
+    this.updateFootsteps(amNear, amDist);
     for (const m of this.monsters.values()) this.grimoire.monsterStatus(m, m.snap.st);
     this.updatePings(dt);
 
@@ -1175,15 +1316,19 @@ export class GameClient {
     this.fx.update(dt, this.time);
     this.grimoire.update(dt, this.time, c.floor, this.localPos());
     this.hud.cooldowns(this.slotCd.map((cd) => ({ remaining: Math.max(0, (cd.readyAt - now) / 1000), duration: cd.duration })));
-    this.hud.ult(this.ultCharge);
+    this.hud.ult(this.ultCharge, this.ultExpended);
     this.hud.hp(this.archonMode() && this.fin?.ar ? (this.fin.ar.hp / this.fin.ar.max) * 100 : this.hp);
     this.updateFinaleHud(dt);
     this.hud.buffs(this.buffs);
 
-    // Interaction
-    this.target = this.hud.journalOpen ? null : this.findTarget();
-    const [label, hold] = this.target ? this.promptFor(this.target) : [null, false];
-    this.hud.prompt(this.channel ? null : label, hold);
+    // Interaction: the crosshair's ray, a white outline and the billboard over it.
+    this.target = this.hud.journalOpen || this.fullMap.visible ? null : this.findTarget();
+    const pr = this.target ? this.promptFor(this.target) : { text: null, hold: false };
+    const reach = !!this.target && (this.target.entity || this.targetDist <= INTERACT_RANGE + 0.6);
+    const line = pr.text ? (reach ? `${pr.hold ? '[Hold E] ' : ''}${pr.text}` : `${pr.text} \u2014 come closer`) : null;
+    this.interact.hover(line && this.target && !this.target.entity ? this.target : null, line);
+    this.hud.crosshair(!!this.target && !!pr.text);
+    this.hud.prompt(this.channel || !this.target?.entity ? null : pr.text, pr.hold);
     if (this.channel && Number.isFinite(this.channel.duration)) this.hud.progress((now - this.channel.start) / this.channel.duration);
     if (this.grappleStage()) this.hud.prompt(this.grappling ? 'Soul Grapple: dragging it toward the rift\u2026' : 'Soul Grapple: drag it into the rift', true);
 
@@ -1192,6 +1337,10 @@ export class GameClient {
     // The other story is only drawn where you can see it: from the Foyer, or the balcony.
     this.mansion.setOverlook(!!room && (room.id === this.map.ids.foyer || room.id === this.map.ids.gallery));
     if (room) this.hud.room(room.name);
+    this.updateTracker(room);
+    this.tethers.update(dt, this.time, this.propState, this.destroyed);
+    this.dmg.update(dt, this.camera, window.innerWidth, window.innerHeight);
+    if (this.carryObj) this.carryObj.position.y = -0.24 + Math.sin(c.bobPhase * 2) * 0.008;
     if ((this._teamAt ?? 0) <= this.time) {
       this._teamAt = this.time + 0.5;
       this.hud.team(this.roster, this.positions, this.selfId, (p) => this.roomLabel(p));
@@ -1230,11 +1379,15 @@ export class GameClient {
       this.minimap.draw(mdt, this.time, { x: c.x, z: c.z, floor: c.floor, yaw: c.yaw }, others, [...this.arenas.values()]);
     }
 
-    if (this.debug) {
-      const me = { x: c.x, z: c.z, f: c.floor, yaw: c.yaw };
+    // The full map (M / Tab), ~10 Hz while open.
+    if (this.fullMap.visible && (this._fullAt ?? 0) <= this.time) {
+      this._fullAt = this.time + 0.1;
       const players = new Map(this.positions);
-      players.set(this.selfId, me);
-      this.debugMap.draw(c.floor, players, this.roster, this.heartIds, this.destroyed);
+      players.set(this.selfId, { x: c.x, z: c.z, f: c.floor, yaw: c.yaw });
+      this.fullMap.draw({
+        floor: c.floor, players, roster: this.roster, selfId: this.selfId,
+        hearts: this.tomeHearts, propState: this.propState, destroyed: this.destroyed, arenas: [...this.arenas.values()],
+      });
     }
 
     this.post.render(this.time);
@@ -1250,7 +1403,7 @@ export class GameClient {
 
   // ---- horror layer --------------------------------------------------------------
 
-  updateHorror(dt, now, c, am, amNear, amDist, dread, nulled = false) {
+  updateHorror(dt, now, c, am, amNear, amDist, dread) {
     // Terror: staring at it up close warps the view (a Null Zone shields you).
     let staring = false;
     if (amNear && amDist < 12 && !this.archonMode()) {
@@ -1258,13 +1411,13 @@ export class GameClient {
       const dx = am.x - c.x, dz = am.z - c.z;
       staring = (dx * fx + dz * fz) / Math.max(amDist, 1e-3) > 0.9 && lineOfSight(this.map, c.floor, c.x, c.z, am.x, am.z);
     }
-    this.terror = nulled ? 0 : clamp01(this.terror + (staring ? dt * 0.45 : -dt * 0.3));
+    this.terror = clamp01(this.terror + (staring ? dt * 0.45 : -dt * 0.3));
     this.chromaPulse = Math.max(0, this.chromaPulse - dt * 1.6);
     this.redPulse = Math.max(0, this.redPulse - dt * 0.7);
     const lunging = amNear && amDist < 6 && (am.snap.act === 'windup' || am.snap.act === 'lunge');
 
     const js = this.jumpscare ? (now - this.jumpscare.start) / 1000 : -1;
-    const fov = 72 + this.terror * 9 + (js >= 0 && js < 0.85 ? 18 : 0);
+    const fov = 72 + this.terror * 9 + (js >= 0 && js < 0.85 ? 18 : 0) - this.punch * 7;
     if (Math.abs(this.camera.fov - fov) > 0.05) {
       this.camera.fov += (fov - this.camera.fov) * Math.min(1, dt * 8);
       this.camera.updateProjectionMatrix();
@@ -1450,16 +1603,32 @@ export class GameClient {
     }
   }
 
-  /** The Disillusionment Charm on yourself: glassy hands, a chameleon shimmer, the HUD timer. */
-  updateInvis(now) {
-    const active = now < this.invisUntil && !this.captured;
+  /** The Disillusionment Charm on yourself: glassy hands, a chameleon shimmer, the HUD toggle. */
+  updateInvis() {
+    const active = this.invisOn && !this.captured;
     this.invisK = (this.invisK ?? 0) + ((active ? 1 : 0) - (this.invisK ?? 0)) * 0.15;
     const alpha = 1 - this.invisK * (0.8 - Math.sin(this.time * 6) * 0.08);
     for (const m of this.handMats) {
       m.transparent = this.invisK > 0.01;
       m.opacity = alpha;
     }
-    this.hud.invis(active, Math.max(0, (this.invisUntil - now) / 1000), Math.max(0, (this.invisReadyAt - now) / 1000));
+    this.hud.invis(active);
+    if (this.carryObj) this.carryObj.visible = this.invisK < 0.5;
+  }
+
+  /** The footstep bar: how close its last footfalls were (fades if it stops walking). */
+  updateFootsteps(amNear, amDist) {
+    const recent = this.lastStep && this.time - this.lastStep.at < 1.6;
+    this.hud.footsteps(recent ? (amNear ? footstepCloseness(amDist) : this.lastStep.k) : 0);
+  }
+
+  /** Top right: the task tracker of the Heart room you're standing in. */
+  updateTracker(room) {
+    const h = room && this.tomeHearts?.find((x) => x.roomId === room.id);
+    if (!h) return this.hud.tracker(null);
+    const lockdowns = new Set([...this.arenas.values()].map((a) => a.heartPropId));
+    const st = heartStatus(h, this.propState, this.destroyed, lockdowns);
+    this.hud.tracker(trackerText(st), st.color, st.state);
   }
 
   /** In a Sin's arena: its name and health across the top. */
@@ -1471,7 +1640,8 @@ export class GameClient {
     this.sinBarActive = !!av && !av.snap.dead;
     if (!this.sinBarActive) return;
     const S = SINS[av.sin];
-    this.hud.boss(av.snap.hp, av.snap.maxHp, false, S.blurb, `${S.name.toUpperCase()} · ${S.title.toUpperCase()}`, S.color);
+    const rage = av.snap.rage ? 'ENRAGED \u2014 ' : '';
+    this.hud.boss(av.snap.hp, av.snap.maxHp, false, `${rage}${S.blurb}`, `${S.name.toUpperCase()} · ${S.title.toUpperCase()}`, S.color, !!av.snap.rage);
   }
 
   addPing(e) {
@@ -1675,7 +1845,9 @@ export class GameClient {
     for (const id of [...this.avatars.keys()]) this.removeAvatar(id);
     this.hud.hide();
     this.hidePause();
-    $('debug-map').classList.add('hidden');
+    this.fullMap.toggle(false);
+    this.interact.dispose();
+    this.dmg.clear();
     $('debug-stats').classList.add('hidden');
     this.renderer.dispose();
   }

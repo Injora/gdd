@@ -14,6 +14,12 @@
 //            avatars, 1–4/R select + Q fires, the Disillusionment Charm (V),
 //            Sin arenas (lockdown, demon, slain → Heart destroyed), and the
 //            1.5s Scary Capture Screen → the Underground Iron Cage.
+//   Step 7   the crosshair ray (white outline + "[Hold E]" billboard), the
+//            Sins' thematic room tasks (a carry task too), tethers, the task
+//            tracker, the full map (M) in debug AND in a normal coven (no
+//            teleport there), V as an infinite toggle, the 5-minute / once-
+//            per-game Ultimate (EXPENDED), Sin telegraphs, enrage, damage
+//            numbers and the death dissolve, the footstep proximity bar.
 // Screenshots land in ./verify-output/ (git-ignored).
 //
 // Usage: npm run verify:browser    (CHROME_PATH=/path/to/chrome to override)
@@ -23,6 +29,7 @@ import { mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createGameServer } from '../server.js';
+import { PHASE } from '../shared/constants.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = path.join(root, 'verify-output');
@@ -318,7 +325,15 @@ async function main() {
     const inv = await page.evaluate(() => ({ hud: document.getElementById('hud-invis').classList.contains('active'), screen: document.getElementById('screen-invis').classList.contains('on') }));
     check(inv.hud && inv.screen, `invisibility HUD missing (${JSON.stringify(inv)})`);
     await shot('invis-1-disillusionment-charm');
-    console.log('V: Disillusionment Charm active (HUD timer, chameleon shimmer, teammates glassy)');
+    // Step 7: an infinite toggle; V again lets it go.
+    await sleep(1500);
+    const still = await page.evaluate(() => window.__game.buffs.includes('invis'));
+    await page.keyboard.press('KeyV');
+    const off = await page.waitForFunction(() => !window.__game.buffs.includes('invis') && !document.getElementById('hud-invis').classList.contains('active'), { timeout: 3000 })
+      .then(() => true).catch(() => false);
+    check(still && off, `V is not a toggle (still on: ${still}, off again: ${off})`);
+    for (const p of liveGame().players.values()) if (p.isBot && liveGame().spells.hasBuff(p, 'invis')) liveGame().onInvis(p.id);
+    console.log('V: Disillusionment Charm toggled on (chameleon shimmer, teammates glassy) and off again');
     await page.keyboard.press('KeyF'); // Nox
     await sleep(INVIS_WAIT);
 
@@ -514,6 +529,10 @@ async function main() {
       const fps = await measureFps();
       fpsSamples.push(fps);
       check(ok, `${wizardId}: Ultimate ${ultName} had no visible effect`);
+      const spent = await page.waitForFunction(() => document.querySelector('#hud-hotbar .slot.ult').classList.contains('expended') &&
+        document.querySelector('#hud-hotbar .slot.ult .pct').textContent === 'EXPENDED', { timeout: 3000 }).then(() => true).catch(() => false);
+      check(spent, `${wizardId}: the Ultimate slot does not show EXPENDED after use`);
+      if (i === 0) await shot('ult-0-expended');
       console.log(`${i + 1}. ${cast.join(' · ')}  ⟶  R: ${ultName} ${ok ? '✓' : '✗'}  fps≈${Math.round(fps)}`);
       await sleep(600);
     }
@@ -546,6 +565,94 @@ async function main() {
     console.log(`Bot casts: ${botCasts.join(', ') || 'none'}`);
     check(botCasts.length > 0, 'bots never cast at the husk');
     await toggleHusk();
+
+
+    // ------------------------------------------------------------------ Step 7: interaction, tasks, map
+    console.log('\n— Step 7: crosshair, Sin tasks, tethers, the full map —');
+    {
+      const g = liveGame();
+      if (!g.tomeReadBy) {
+        g.tomeReadBy = 'verify';
+        g.setPhase(PHASE.HEARTS);
+        g.emitAll({ type: 'tome', by: 'verify', tome: g.tomeInfo() });
+      }
+      g.monster.hideFor(1e6);
+    }
+    await page.waitForFunction(() => window.__game.tomeHearts?.length === 7, { timeout: 5000 }).catch(() => failures.push('the Tome never reached the client'));
+    /** Stand at a prop's front, facing it (the server moves us; the camera follows). */
+    const goTo = async (propId, pitch = -0.12) => {
+      const g = liveGame();
+      const prop = g.props[propId];
+      const spot = prop.front ?? { x: prop.x, z: prop.z };
+      g.teleport(g.players.get(self0), spot.x, spot.z, prop.floor, Math.atan2(-(prop.x - spot.x), -(prop.z - spot.z)));
+      await sleep(500);
+      await page.evaluate((pt) => { window.__game.controller.pitch = pt; }, pitch);
+      await sleep(350);
+    };
+    /** Hold E on what the crosshair is on until the server finishes the channel. */
+    const holdE = async (propId) => {
+      await page.evaluate(() => { window.__events.length = 0; });
+      await page.keyboard.down('KeyE');
+      const ev = await page.waitForFunction((id) => window.__events.find((e) => e.type === 'task' && e.propId === id), { timeout: 5000 }, propId)
+        .then((h) => h.jsonValue()).catch(() => null);
+      await page.keyboard.up('KeyE');
+      return ev;
+    };
+    const pride = liveGame().map.hearts.find((h) => h.sin === 'pride');
+    await goTo(pride.tasks[0]);
+    const look = await page.evaluate(() => {
+      const g = window.__game;
+      return { hovered: g.interact.hovered?.kind, text: g.interact.text, board: g.interact.board.visible, outline: g.interact.outlines.length,
+        cross: document.getElementById('hud-crosshair').classList.contains('active'), tethers: g.tethers.list.length,
+        tracker: document.getElementById('hud-tracker').textContent };
+    });
+    check(look.hovered === 'ego_mirror' && look.board && look.outline > 0 && look.cross, `crosshair / outline / billboard missing (${JSON.stringify(look)})`);
+    check(look.text === '[Hold E] Shatter Vanity Mirror (Progress 0/3)', `billboard text wrong: ${look.text}`);
+    check(look.tethers >= 21, `tethers missing (${look.tethers})`);
+    check(/GRAND BALLROOM \(PRIDE\).*0 \/ 3/.test(look.tracker), `task tracker wrong: ${look.tracker}`);
+    await shot('step7-1-crosshair-outline-billboard');
+    const shattered = await holdE(pride.tasks[0]);
+    check(shattered?.progress === 1 && shattered?.state?.done, `holding E did not shatter the mirror (${JSON.stringify(shattered)})`);
+    await sleep(500);
+    const after = await page.evaluate(() => ({ tracker: document.getElementById('hud-tracker').textContent, text: window.__game.interact.text }));
+    check(/1 \/ 3/.test(after.tracker), `tracker did not count the step (${after.tracker})`);
+    await shot('step7-2-mirror-shattered-tracker');
+    console.log(`crosshair → ${look.hovered}: "${look.text}" · ${look.outline} outline hulls · ${look.tethers} tethers · tracker "${after.tracker}"`);
+    // A carry task: Greed's ingot from a display case to Mammon's Scale.
+    const greed = liveGame().map.hearts.find((h) => h.sin === 'greed');
+    await goTo(greed.tasks[0], -0.3); // a low case: look down at it
+    const took = await holdE(greed.tasks[0]);
+    await page.waitForFunction(() => window.__game.carry === 'ingot' && window.__game.carryObj, { timeout: 3000 }).catch(() => {});
+    const carrying = await page.evaluate(() => window.__game.carry);
+    check(took?.took && carrying === 'ingot', `could not take the ingot (${JSON.stringify(took)}, carrying ${carrying})`);
+    await goTo(greed.sink, -0.05);
+    const scaleText = await page.evaluate(() => window.__game.interact.text);
+    await shot('step7-3-carrying-the-ingot-to-the-scale');
+    const weighed = await holdE(greed.sink);
+    check(weighed?.sink && weighed?.progress === 1 && !(await page.evaluate(() => window.__game.carry)), `the scale did not take the ingot (${JSON.stringify(weighed)})`);
+    console.log(`carry task: took the ingot → "${scaleText}" → weighed (${weighed?.progress}/3)`);
+    // Tethers in view: from a Heart across its room.
+    {
+      const heart = liveGame().props[greed.propId];
+      await goTo(greed.tasks[1], 0.05);
+      await page.evaluate((h) => { const g = window.__game; g.controller.yaw = Math.atan2(-(h.x - g.controller.x), -(h.z - g.controller.z)); }, { x: heart.x, z: heart.z });
+      await sleep(600);
+      await shot('step7-4-heart-tethers');
+    }
+    // The full map: M opens it (Tab too), with every Heart, its room and progress.
+    await page.keyboard.press('KeyM');
+    await sleep(500);
+    const map = await page.evaluate(() => {
+      const c = document.getElementById('full-map');
+      const px = c.getContext('2d').getImageData(c.width - 150, 80, 1, 1).data;
+      return { open: window.__game.fullMap.visible && !c.classList.contains('hidden'), teleport: !!window.__game.fullMap.onPick, w: c.getBoundingClientRect().width, ink: px[0] + px[1] + px[2] };
+    });
+    check(map.open && map.teleport && map.w > 600, `full map did not open (${JSON.stringify(map)})`);
+    await shot('step7-5-full-map');
+    await page.keyboard.press('Tab');
+    await sleep(300);
+    check(!(await page.evaluate(() => window.__game.fullMap.visible)), 'Tab did not close the full map');
+    console.log(`full map: open ${map.open}, debug teleport ${map.teleport}, ${Math.round(map.w)}px wide`);
 
     // ------------------------------------------------------------------ Step 6: the Sins
     console.log('\n— Step 6: Seven Hearts, room wards, the Seven Deadly Sins —');
@@ -587,11 +694,35 @@ async function main() {
         await faceDemon();
         await shot(`sin-${i + 1}b-${sin}-fight`);
       }
+      if (i === 0) {
+        // Step 7: red ground telegraphs, damage numbers, enrage at half health.
+        const tele = await page.waitForFunction((id) => (window.__game.monsters.get(id)?.telegraphs.length ?? 0) > 0, { timeout: 8000 }, start.demonId)
+          .then(() => true).catch(() => false);
+        check(tele, `${sin}: no ground telegraph during a windup`);
+        if (tele) await shot(`sin-${i + 1}c-${sin}-telegraph`);
+        const d = liveGame().demons.find((x) => x.id === start.demonId);
+        d.damage(Math.ceil(d.maxHp * 0.55), 'fire');
+        const rage = await page.waitForFunction((id) => window.__game.monsters.get(id)?.snap.rage && window.__game.monsters.get(id).aura.visible &&
+          document.getElementById('hud-boss').classList.contains('enraged'), { timeout: 3000 }, start.demonId).then(() => true).catch(() => false);
+        const nums = await page.evaluate(() => document.querySelectorAll('.dmg-layer .dmg').length);
+        check(rage, `${sin}: no enrage at half health`);
+        check(nums > 0, `${sin}: no damage numbers`);
+        await faceDemon();
+        await shot(`sin-${i + 1}d-${sin}-enraged`);
+        console.log(`${sin}: telegraph ${tele}, enraged ${rage}, ${nums} damage number(s)`);
+      }
       fpsSamples.push(await measureFps());
       await page.keyboard.press('KeyL'); // debug: slay it
       const heart = await waitEvent('heart', 4000);
       const end = await waitEvent('arena:end', 4000);
       check(heart?.sin === sin && end?.won, `${sin}: slaying it did not destroy its Heart / open the doors`);
+      if (i === 0) {
+        await faceDemon();
+        await sleep(700);
+        const dissolving = await page.evaluate((id) => window.__game.monsters.get(id)?.dissolve.value ?? -1, start.demonId);
+        check(dissolving > 0.1, `${sin}: no death dissolve (${dissolving})`);
+        await shot(`sin-${i + 1}e-${sin}-death-dissolve`);
+      }
       sinsShown.push(`${sin}${heart && end?.won ? '' : '✗'}`);
       await sleep(400);
     }
@@ -623,8 +754,10 @@ async function main() {
       console.log('  footsteps diagnostics:', JSON.stringify({ m: { st: m.state, hid: m.hidden, x: m.x, z: m.z, f: m.floor, mv: m.moving }, me: { x: me.x, z: me.z, f: me.floor, cap: me.captured } }),
         await page.evaluate(() => JSON.stringify({ cf: window.__game.controller.floor, snap: window.__game.monsters.get('amalgam')?.snap })));
     }
+    const bar = await page.waitForFunction(() => document.getElementById('hud-footsteps').classList.contains('show'), { timeout: 5000 }).then(() => true).catch(() => false);
+    check(bar, 'no footstep proximity bar on the HUD');
     await shot('minimap-2-keeper-footstep-ripples');
-    console.log(`Keeper footsteps: ${rippled ? 'ripples on the minimap, the floor trembles' : 'none heard'}`);
+    console.log(`Keeper footsteps: ${rippled ? 'ripples on the minimap, the floor trembles' : 'none heard'}; HUD proximity bar ${bar}`);
 
     const audio = await page.evaluate(() => ({ state: window.__game.audio.ctx?.state, played: window.__game.audio.played }));
     console.log(`audio: context ${audio.state}, ${audio.played} sounds synthesised`);
@@ -799,6 +932,48 @@ async function main() {
     check(replayed, 'Play Again did not start a fresh game');
     console.log(`Play Again → a fresh game: ${replayed}`);
     void before;
+
+    // ------------------------------------------------------------------ Step 7: a normal coven
+    console.log('\n— Step 7: a normal (non-debug) coven: the full map for everyone, no teleport —');
+    {
+      const p2 = await browser.newPage();
+      p2.on('console', (m) => { if (m.type() === 'error') errors.push(`[coven] ${m.text()}`); });
+      p2.on('pageerror', (e) => errors.push(`[coven] ${e}`));
+      await p2.goto(url.replace('?debug=1', ''), { waitUntil: 'networkidle0' });
+      await p2.type('#input-name', 'Verifier');
+      await p2.click('#btn-create');
+      await p2.waitForSelector('.wizard-card');
+      await p2.click('.wizard-card');
+      await sleep(300);
+      await p2.click('#btn-add-bot');
+      await sleep(300);
+      await p2.click('#btn-add-bot');
+      await sleep(400);
+      await p2.click('#btn-start');
+      await p2.waitForFunction(() => window.__game === undefined && document.getElementById('hud') && !document.getElementById('hud').classList.contains('hidden'), { timeout: 15000 })
+        .catch(() => failures.push('normal coven did not start'));
+      await sleep(1500);
+      await p2.evaluate(() => document.getElementById('pause').classList.add('hidden'));
+      await p2.keyboard.press('KeyM');
+      await sleep(600);
+      const m2 = await p2.evaluate(() => {
+        const c = document.getElementById('full-map');
+        return { open: !c.classList.contains('hidden'), teleport: c.classList.contains('teleport'), debugBody: document.body.classList.contains('debug') };
+      });
+      const covenGame = [...lobbies.lobbies.values()].find((l) => l.game && !l.game.debug && l.members.length === 3)?.game
+        ?? [...lobbies.lobbies.values()].filter((l) => l.game).at(-1)?.game;
+      const human = [...covenGame.players.values()].find((p) => !p.isBot);
+      const before2 = { x: human.x, z: human.z, f: human.floor };
+      const box = await p2.evaluate(() => { const r = document.getElementById('full-map').getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
+      await p2.mouse.click(box.x + box.w * 0.15, box.y + box.h * 0.8); // somewhere on the plan, far away
+      await sleep(800);
+      const moved = Math.hypot(human.x - before2.x, human.z - before2.z) > 3 || human.floor !== before2.f;
+      check(m2.open && !m2.teleport && !m2.debugBody, `full map not available in a normal coven (${JSON.stringify(m2)})`);
+      check(!moved, 'a click on the full map teleported a player in a normal coven');
+      await p2.screenshot({ path: path.join(outDir, 'step7-6-full-map-normal-coven.png') });
+      console.log(`normal coven: full map open ${m2.open}, click-teleport ${moved ? 'MOVED' : 'disabled'}`);
+      await p2.close();
+    }
 
 
     const avgFps = fpsSamples.reduce((a, b) => a + b, 0) / fpsSamples.length;

@@ -11,7 +11,6 @@ import { WIZARDS, WIZARD_BY_ID, ULT } from '../shared/wizards.js';
 import { isPassable } from '../shared/pathfinding.js';
 import { overlapsSolid, lineOfSight } from '../shared/collision.js';
 import { HP, PHASE, tileCenter, yawFromDir, worldToTile } from '../shared/constants.js';
-import { SIN_ULT_BONUS } from '../shared/sins.js';
 
 const EAST = yawFromDir(1, 0);
 
@@ -75,7 +74,7 @@ function amalgamAt(g, tx, ty) {
 // ---------------------------------------------------------------------------
 // The book itself
 
-test('35 spells: 7 wizards × (4 normal + 1 Ultimate), unique ids, all implemented', async () => {
+test('35 spells: 7 wizards × (3 attacks + 1 utility + 1 Ultimate), unique ids, all implemented', async () => {
   const { SpellSystem } = await import('../server/SpellSystem.js');
   const handlers = new SpellSystem({}).handlers;
   const ids = WIZARDS.flatMap((w) => [...w.spells, w.ultimate].map((s) => s.id));
@@ -86,6 +85,26 @@ test('35 spells: 7 wizards × (4 normal + 1 Ultimate), unique ids, all implement
     assert.equal(w.spells.length, 4);
     assert.ok(w.ultimate.ultimate);
     for (const s of w.spells) assert.ok(s.cooldown > 0 && s.name && s.description && s.bot, s.id);
+    // Slots 1–3 attack (they deal damage); slot 4 is mobility / utility.
+    w.spells.slice(0, 3).forEach((s) => {
+      assert.equal(s.kind, 'attack', s.id);
+      assert.ok((s.damage ?? 0) > 0 || (s.dps ?? 0) > 0, `${s.id} deals damage`);
+    });
+    assert.equal(w.spells[3].kind, 'utility', w.spells[3].id);
+    assert.ok(['escape', 'ally', 'self'].includes(w.spells[3].bot), w.spells[3].id);
+  }
+});
+
+test('every attack (slots 1–3) actually damages its target', () => {
+  for (const w of WIZARDS) {
+    for (let slot = 0; slot < 3; slot++) {
+      const { g, p, husk } = duel(w.id, slot === 0 && w.id === 'himanshu' ? 2 : 3, ['soham']);
+      p.yaw = EAST;
+      const res = g.spells.cast(p, EAST, 0, slot);
+      assert.ok(res.ok, `${w.spells[slot].id}: ${res.reason}`);
+      run(g, 2.2);
+      assert.ok(husk.hp < 100 || husk.dead, `${w.spells[slot].id} damaged the husk (hp ${husk.hp})`);
+    }
   }
 });
 
@@ -118,36 +137,31 @@ test('Ultimates need 100% charge, spend it, and refuse (free) without a target',
   assert.equal(p2.ult, 0);
 });
 
-test('Ultimate charge: +8 per landed spell (once per cast), +25 per Heart (+20 for its Sin), +20 per rescue, chases, passive', () => {
-  const { g, p } = duel('kartavian', 3);
-  g.spells.cast(p, EAST, 0, 1); // three Kamaitachi blades, one credit
-  run(g, 1.5);
-  assert.equal(Math.round(p.ult), ULT.HIT);
-
-  const g2 = makeGame(humans('parthius', 'soham'));
-  const a = g2.players.get('p0'), b = g2.players.get('p1');
-  g2.tomeReadBy = 'x';
-  g2.setPhase(PHASE.HEARTS);
-  g2.destroyHeart(g2.map.hearts[0], a.name); // (its Sin slain: see hearts.test.js)
-  assert.equal(Math.round(a.ult), ULT.HEART + SIN_ULT_BONUS);
-  assert.equal(Math.round(b.ult), ULT.HEART + SIN_ULT_BONUS, 'team-wide');
-
-  g2.capture(b, g2.monster);
-  run(g2, 1.6);
-  const before = a.ult;
-  g2.openGate(a.name, a);
-  assert.ok(Math.abs(a.ult - before - ULT.RESCUE) < 0.5);
-
-  const g3 = makeGame(humans('parthius'));
-  g3.tomeReadBy = 'x';
-  const q = g3.players.get('p0');
-  run(g3, 5);
-  assert.ok(Math.abs(q.ult - ULT.PASSIVE * 5) < 0.2, 'passive trickle after the Tome');
-  g3.monster.state = 'hunting';
-  g3.monster.targetId = 'p0';
-  const v = q.ult;
-  g3.updateVitals(1);
-  assert.ok(Math.abs(q.ult - v - ULT.CHASED - ULT.PASSIVE) < 0.01, 'surviving a chase');
+test('Ultimate: charges strictly over 5 minutes of match time, castable ONCE per game; debug U readies it again', () => {
+  const g = makeGame(humans('soham', 'parthius'));
+  const p = g.players.get('p0');
+  assert.equal(p.ult, 0, 'starts empty');
+  run(g, 150);
+  assert.ok(Math.abs(p.ult - 50) < 0.5, `half way at 2:30 (${p.ult})`);
+  // Nothing else charges it: hits, Hearts, rescues, chases.
+  const { g: g2, p: q } = duel('kartavian', 3);
+  g2.spells.cast(q, EAST, 0, 1);
+  run(g2, 1.5);
+  assert.ok(q.ult < 1, `hits do not charge it (${q.ult})`);
+  g2.destroyHeart(g2.map.hearts[0], q.name);
+  assert.ok(q.ult < 1, 'nor do Hearts');
+  run(g, 150.5);
+  assert.equal(Math.round(p.ult), ULT.MAX, 'READY at 5:00');
+  assert.equal(g.snapshot().players.find((x) => x.id === 'p0').u, 100);
+  assert.ok(g.spells.cast(p, EAST, 0, 'ult').ok, 'Dawn');
+  assert.ok(p.ultUsed);
+  run(g, 400);
+  assert.equal(p.ult, 0, 'it never charges again');
+  assert.equal(g.spells.cast(p, EAST, 0, 'ult').reason, 'expended');
+  assert.equal(g.snapshot().players.find((x) => x.id === 'p0').ux, true, 'the HUD shows EXPENDED');
+  g.debugUlt('p0');
+  assert.equal(p.ult, ULT.MAX);
+  assert.ok(!p.ultUsed, 'debug U: ready and un-spent');
 });
 
 // ---------------------------------------------------------------------------
@@ -272,57 +286,61 @@ test('Black: Dimension Slash shrinks its reach; Black Hole drags it in; Shadow S
   assert.equal(m.targetId, 'p0');
 });
 
-test('Fire: Calidus Brachium lands 3 fists; Sol Linea leaves a burning line; Phoenix Aura burns on contact', () => {
+test('Fire: Calidus Brachium lands 3 fists; Sol Linea leaves a burning line; Phoenix Cinder Dash bursts forward and burns on contact', () => {
   let { g, p, husk } = duel('parthius', 2);
   g.spells.cast(p, EAST, 0, 1);
   run(g, 0.7);
   assert.equal(evs(g, 'spell:hit').length, 3);
-  assert.equal(husk.hp, 94);
+  assert.equal(husk.hp, 100 - 3 * WIZARD_BY_ID.parthius.spells[1].damage);
 
   ({ g, p, husk } = duel('parthius', 6));
   g.spells.cast(p, EAST, 0, 2);
-  assert.ok(husk.isBurning() && husk.hp <= 94);
+  assert.ok(husk.isBurning() && husk.hp <= 80);
   assert.equal(g.spells.zones.filter((z) => z.kind === 'burnline').length, 1);
 
-  ({ g, p, husk } = duel('parthius', 1));
+  ({ g, p, husk } = duel('parthius', 5));
+  const x0 = p.x;
   g.spells.cast(p, EAST, 0, 3);
+  assert.ok(p.x > x0 + 3, 'dashed forward');
+  assert.ok(g.spells.hasBuff(p, 'phoenix'));
+  husk.x = p.x + 1;
+  husk.z = p.z;
   husk.st.burnUntil = 0;
   g.step(0.05);
   assert.ok(husk.isBurning(), 'touching the aura');
 });
 
-test('Water: Spear pins; Cradle shields allies; Riptide trap erupts when stepped on', () => {
+test('Water: Spear pins; Riptide Geyser erupts under it; Slipstream dashes inside a bubble shield', () => {
   let { g, p, husk } = duel('himandriel', 6);
   g.spells.cast(p, EAST, 0, 1);
   run(g, 0.5);
   assert.ok(husk.isPinned() && !husk.canMove());
 
-  ({ g, p, husk } = duel('himandriel', 3));
+  ({ g, p, husk } = duel('himandriel', 4));
   g.spells.cast(p, EAST, 0, 2);
-  assert.ok(g.spells.hasBuff(p, 'cradle'));
+  assert.ok(husk.isLifted());
+  assert.equal(husk.hp, 100 - WIZARD_BY_ID.himandriel.spells[2].damage);
+  assert.equal(evs(g, 'zone:trigger').length, 1);
 
   ({ g, p, husk } = duel('himandriel', 9));
+  const x0 = p.x;
   g.spells.cast(p, EAST, 0, 3);
-  const trap = g.spells.zones.find((z) => z.kind === 'riptide');
-  run(g, 0.3);
-  assert.ok(trap.armed, 'waits');
-  husk.x = trap.x;
-  husk.z = trap.z;
-  g.step(0.05);
-  assert.equal(evs(g, 'zone:trigger').length, 1);
-  assert.ok(husk.isLifted());
+  assert.ok(p.x > x0 + 3, 'rode the hydro-jet');
+  assert.ok(g.spells.hasBuff(p, 'cradle'));
 });
 
-test('Earth: Devil’s Snare roots; Golem Boulder leaves slowing debris; Granite Skin armours allies', () => {
+test('Earth: Devil’s Snare roots and crushes; Golem Boulder leaves slowing debris; Earthen Rampart armours allies', () => {
   let { g, p, husk } = duel('sushantus', 4);
   g.spells.cast(p, EAST, 0, 1);
   g.step(0.05);
   assert.ok(husk.isRooted());
+  run(g, 1.5);
+  assert.ok(husk.hp < 100, 'crushed by the thorns');
 
   ({ g, p, husk } = duel('sushantus', 5));
   g.spells.cast(p, EAST, 0, 2);
   run(g, 1);
-  assert.equal(husk.hp, 94);
+  assert.equal(husk.hp, 100 - WIZARD_BY_ID.sushantus.spells[2].damage);
   assert.ok(g.spells.zones.some((z) => z.kind === 'debris'));
   assert.ok(husk.isSlowed());
 
@@ -331,33 +349,34 @@ test('Earth: Devil’s Snare roots; Golem Boulder leaves slowing debris; Granite
   assert.ok(g.spells.hasBuff(p, 'granite'));
 });
 
-test('Wind: Kamaitachi blades home in; Tailwind hastes allies; Vacuum Tempest lifts', () => {
+test('Wind: Kamaitachi blades home in; Vacuum Tempest lifts and wounds; Zephyr Flash Glide dashes with tireless speed', () => {
   let { g, p, husk } = duel('kartavian', 5);
   g.spells.cast(p, yawFromDir(1, 0.6), 0, 1); // aimed off-target: they curve in
   run(g, 1.5);
   assert.equal(evs(g, 'impact').filter((e) => e.hit === 'husk').length, 3);
 
-  ({ g, p, husk } = duel('kartavian', 4));
-  g.spells.cast(p, EAST, 0, 2);
-  assert.ok(g.spells.hasBuff(p, 'tailwind'));
-
   ({ g, p, husk } = duel('kartavian', 5));
-  g.spells.cast(p, EAST, 0, 3);
+  g.spells.cast(p, EAST, 0, 2);
   assert.ok(husk.isLifted() && !husk.canAct());
+  assert.ok(husk.hp < 100);
+
+  ({ g, p, husk } = duel('kartavian', 9));
+  const x0 = p.x;
+  g.spells.cast(p, EAST, 0, 3);
+  assert.ok(p.x > x0 + 4, 'glided forward');
+  assert.ok(g.spells.hasBuff(p, 'tailwind'));
 });
 
-test('White: five Arrows of Judgment; Patronus heals 4/s; Flash Step blinks 6u and blinds', () => {
+test('White: five Arrows of Judgment; Solar Purging Nova blasts all around; Flash Step blinks 6u and blinds', () => {
   let { g, p, husk } = duel('soham', 6);
   g.spells.cast(p, EAST, 0, 1);
   run(g, 2);
   assert.equal(evs(g, 'impact').filter((e) => e.hit === 'husk').length, 5);
 
-  ({ g, p } = duel('soham', 6));
-  p.hp = 50;
-  p.lastHurtAt = g.time;
+  ({ g, p, husk } = duel('soham', 2));
+  husk.x = p.x - 4; // behind you: a nova doesn't care where you aim
   g.spells.cast(p, EAST, 0, 2);
-  run(g, 2);
-  assert.ok(p.hp >= 57 && p.hp <= 59, `healed ${p.hp}`);
+  assert.equal(husk.hp, 100 - WIZARD_BY_ID.soham.spells[2].damage);
 
   ({ g, p, husk } = duel('soham', 3, ['parthius']));
   const x0 = p.x;
@@ -366,33 +385,37 @@ test('White: five Arrows of Judgment; Patronus heals 4/s; Flash Step blinks 6u a
   assert.ok(husk.isStunned(), 'the afterimage blinds');
 });
 
-test('Anti-magic: Black Slash cancels the windup and strips enrage; Null Zone; Bull Thrust knocks back and taunts', () => {
+test('Anti-magic: Black Divider cuts the windup; Black Slash Wave strips enrage; Meteor Thrust knocks back and taunts; Aegis shields', () => {
   const g = makeGame(humans('himanshu', 'soham'));
   const p = g.players.get('p0');
   const other = g.players.get('p1');
   const row = openRow(g, 10);
   put(p, row.x, row.y);
   put(other, row.x + 9, row.y);
-  const m = amalgamAt(g, row.x + 3, row.y);
+  const m = amalgamAt(g, row.x + 2, row.y);
   for (const h of g.map.hearts.slice(0, 5)) g.destroyed.add(h.propId);
   const enraged = m.huntSpeed();
   m.hunt(p, 'test');
   m.startAttack('claw', p);
-  g.spells.cast(p, EAST, 0, 1);
+  g.spells.cast(p, EAST, 0, 0);
   assert.equal(m.action, null, 'windup cut');
-  assert.ok(m.isCalm() && m.huntSpeed() < enraged);
 
-  g.spells.cast(p, EAST, 0, 2);
-  assert.ok(g.spells.zones.some((z) => z.kind === 'null'));
+  m.st.staggerUntil = 0;
+  g.spells.cast(p, EAST, 0, 1);
+  run(g, 0.4);
+  assert.ok(m.isCalm() && m.huntSpeed() < enraged, 'enrage stripped');
 
   m.hunt(other, 'test');
   m.targetId = other.id;
   m.place({ x: tileCenter(row.x + 3), z: tileCenter(row.y), floor: 0 });
   const mx = m.x;
-  g.spells.cast(p, EAST, 0, 3);
+  g.spells.cast(p, EAST, 0, 2);
   assert.equal(m.targetId, p.id, 'taunted');
   run(g, 0.4);
   assert.ok(m.x > mx + 1.5, 'knocked back');
+
+  g.spells.cast(p, EAST, 0, 3);
+  assert.ok(g.spells.isShielded(p), 'Aegis of the Void');
 });
 
 // ---------------------------------------------------------------------------
@@ -529,7 +552,7 @@ test('At 4+ Hearts it smashes an Earth barricade in two hits, and conjures phant
   put(p, row.x, row.y);
   const m = amalgamAt(g, row.x + 4, row.y);
   for (const h of g.map.hearts.slice(0, 4)) g.destroyed.add(h.propId);
-  g.spells.cast(p, EAST, 0, 0); // wall 2 tiles ahead, between them
+  g.spells.cast(p, EAST, 0, 3); // Earthen Rampart: wall 2 tiles ahead, between them
   assert.equal(g.spells.barriers.length, 1);
   m.hunt(p, 'test');
   assert.ok(run(g, 4, () => evs(g, 'barrier:end').length > 0), 'barricade crumbled');

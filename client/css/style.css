@@ -283,14 +283,17 @@ input:focus { border-color: var(--gold); }
 }
 .hud-room.show { opacity: 0.75; }
 .hud-crosshair {
+  /* Step 7: a 6px white dot with a dark ring, always readable */
   position: absolute;
   left: 50%; top: 50%;
-  width: 4px; height: 4px;
-  margin: -2px 0 0 -2px;
+  width: 6px; height: 6px;
+  margin: -3px 0 0 -3px;
   border-radius: 50%;
-  background: rgba(230, 220, 200, 0.45);
+  background: #fff;
+  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.85), 0 0 4px rgba(0, 0, 0, 0.6);
+  transition: transform 0.12s, box-shadow 0.12s;
 }
-.hud-crosshair.active { background: var(--gold); box-shadow: 0 0 8px var(--gold); }
+.hud-crosshair.active { transform: scale(1.35); box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.9), 0 0 0 4px rgba(255, 255, 255, 0.35), 0 0 10px rgba(255, 255, 255, 0.6); }
 .hud-prompt {
   position: absolute;
   top: calc(50% + 28px);
@@ -650,18 +653,20 @@ body:not(.debug) .debug-only { display: none; }
 .journal-page li b { font-family: var(--display); font-size: 0.9rem; color: #4a0a0a; }
 .journal-page .muted { color: #5a4630; }
 
-#debug-map {
+/* Step 7: the full map (M / Tab), for everyone */
+.full-map {
   position: fixed;
-  right: 12px;
-  top: 64px;
-  z-index: 25; /* above the pause overlay so it can be clicked to teleport */
-  width: min(480px, 45vw);
-  image-rendering: pixelated;
-  cursor: crosshair;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 25; /* above the pause overlay */
+  width: min(1100px, 94vw, calc(92vh * 900 / 656));
   border: 1px solid var(--line);
-  background: #000;
-  opacity: 0.92;
+  box-shadow: 0 0 80px #000, 0 0 0 1px #000;
+  background: #050407;
+  cursor: default;
 }
+.full-map.teleport { cursor: crosshair; }
 #debug-stats {
   position: fixed;
   right: 12px;
@@ -754,3 +759,77 @@ body.archon .minimap { opacity: 0.55; }
 @keyframes capture-shake { 0% { transform: translate(0, 0); } 25% { transform: translate(-14px, 9px); } 50% { transform: translate(11px, -12px); } 75% { transform: translate(-8px, -6px); } 100% { transform: translate(12px, 10px); } }
 @keyframes vein-pulse { from { opacity: 0.65; } to { opacity: 1; } }
 @keyframes capture-text { 0% { transform: skewX(-12deg) scale(1.05); opacity: 1; } 100% { transform: skewX(10deg) scale(0.96); opacity: 0.6; } }
+
+
+/* ---------- Step 7 ---------- */
+
+/* Top right: the task tracker for the Heart room you're in */
+.hud-tracker {
+  position: absolute;
+  top: 120px;
+  right: 20px;
+  max-width: min(440px, 40vw);
+  padding: 8px 14px 8px 16px;
+  border-left: 3px solid var(--sin, var(--gold));
+  background: linear-gradient(90deg, rgba(10, 6, 8, 0.85), rgba(10, 6, 8, 0.55));
+  font-family: var(--display);
+  font-size: 0.82rem;
+  letter-spacing: 0.06em;
+  color: var(--ink);
+  text-shadow: 0 1px 3px #000;
+  opacity: 0;
+  transform: translateX(16px);
+  transition: opacity 0.4s, transform 0.4s;
+  pointer-events: none;
+}
+.hud-tracker.show { opacity: 1; transform: none; }
+.hud-tracker[data-state="lockdown"] { border-left-color: #ff2a2a; color: #ffb0a8; animation: tracker-alarm 0.9s ease-in-out infinite; }
+.hud-tracker[data-state="unsealed"] { color: #ffd0a0; }
+@keyframes tracker-alarm { 50% { box-shadow: 0 0 22px rgba(255, 30, 30, 0.45); } }
+
+/* The Keeper's footsteps: a proximity bar and a ripple on each footfall */
+.hud-footsteps {
+  position: absolute;
+  left: 50%;
+  bottom: 38px;
+  width: 200px;
+  margin-left: -100px;
+  text-align: center;
+  opacity: 0;
+  transition: opacity 0.6s;
+  pointer-events: none;
+}
+.hud-footsteps.show { opacity: 1; }
+.hud-footsteps b { display: block; font-family: var(--display); font-size: 0.62rem; letter-spacing: 0.35em; color: #c9a0a0; margin-bottom: 3px; }
+.hud-footsteps .bar { height: 4px; background: rgba(80, 0, 0, 0.45); border: 1px solid rgba(255, 60, 60, 0.25); }
+.hud-footsteps .bar i { display: block; height: 100%; width: 0; margin: 0 auto; background: linear-gradient(90deg, #6a0a0a, #ff2a2a, #6a0a0a); transition: width 0.25s; }
+.hud-footsteps.near b { color: #ff5a5a; animation: steps-near 0.5s ease-in-out infinite; }
+@keyframes steps-near { 50% { opacity: 0.4; } }
+.hud-footsteps .ripple {
+  position: absolute; left: 50%; top: 50%; width: 30px; height: 30px; margin: -15px 0 0 -15px;
+  border: 2px solid rgba(255, 40, 40, 0.8); border-radius: 50%; opacity: 0; pointer-events: none;
+}
+.hud-footsteps .ripple.go { animation: step-ripple 0.8s ease-out; }
+@keyframes step-ripple {
+  0% { opacity: var(--k, 1); transform: scale(0.4); }
+  100% { opacity: 0; transform: scale(calc(3 + var(--k, 1) * 4)); }
+}
+
+/* The Ultimate: MM:SS while it charges, then READY; EXPENDED once used */
+.slot.ult .pct { font-variant-numeric: tabular-nums; }
+.slot.ult.expended { filter: grayscale(1) brightness(0.55); border-color: rgba(255, 255, 255, 0.1); }
+.slot.ult.expended .pct { color: #9a8d78; font-size: 0.55rem; letter-spacing: 0.05em; }
+.slot.invis .time { font-size: 0.8rem; letter-spacing: 0.1em; }
+
+/* Damage numbers: element colours, drifting away from the centre */
+.dmg-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 2; }
+.dmg {
+  position: absolute; left: 0; top: 0;
+  font-family: var(--display); font-weight: 900; font-size: 1.35rem;
+  text-shadow: 0 0 3px #000, 0 2px 4px #000, 0 0 12px currentColor;
+  will-change: transform, opacity;
+  white-space: nowrap;
+}
+.dmg.big { font-size: 1.9rem; }
+.hud-boss.enraged { animation: tracker-alarm 0.7s ease-in-out infinite; }
+.hud-boss.enraged span { color: #ff6a50; }

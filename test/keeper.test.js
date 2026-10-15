@@ -133,7 +133,9 @@ test('spotted = locked: going invisible AFTER it has seen you does not work; it 
   assert.ok(run(g, 1, () => m.state === 'hunting'), 'spotted');
   assert.equal(evs(g, 'monster:hunt')[0].reason, 'sighted');
   const res = g.onInvis('p0');
-  assert.ok(res.ok && res.late, 'too late');
+  assert.deepEqual(res, { ok: false, reason: 'seen' }, 'too late: the charm fails');
+  assert.ok(evs(g, 'invis').at(-1).failed);
+  assert.ok(!g.spells.buffCodes(p).includes('invis'));
   assert.equal(m.state, 'hunting');
   // Run! (The wizard sprints east; it still knows exactly where they are.)
   let caught = false;
@@ -212,19 +214,29 @@ test('Devil Union: 30s immunity; the Keeper touching a wizard recoils, frozen 6s
   assert.equal(g.damagePlayer(p, 30, m, 'lunge'), 'immune');
 });
 
-test('V has a 12s duration and an 18s cooldown, for every wizard', () => {
+test('V is an infinite toggle with no cooldown, for every wizard', () => {
   for (const w of ['injorath', 'parthius', 'himandriel', 'sushantus', 'kartavian', 'soham', 'himanshu']) {
     const g = makeGame(humans(w));
     const p = g.players.get('p0');
-    assert.ok(g.onInvis('p0').ok, w);
-    assert.equal(evs(g, 'invis')[0].duration, INVIS.duration);
-    assert.equal(g.onInvis('p0').reason, 'cooldown');
-    run(g, INVIS.duration + 0.1);
-    assert.ok(!g.spells.buffCodes(p).includes('invis'), 'faded');
-    assert.equal(g.onInvis('p0').reason, 'cooldown');
-    run(g, INVIS.cooldown - INVIS.duration);
-    assert.ok(g.onInvis('p0').ok, 'ready again');
+    assert.deepEqual(g.onInvis('p0'), { ok: true, on: true }, w);
+    run(g, 120);
+    assert.ok(g.spells.buffCodes(p).includes('invis'), 'still invisible two minutes later');
+    assert.deepEqual(g.onInvis('p0'), { ok: true, on: false }, 'V again: visible');
+    assert.ok(!g.spells.buffCodes(p).includes('invis'));
+    assert.deepEqual(g.onInvis('p0'), { ok: true, on: true }, 'and straight back: no cooldown');
   }
+});
+
+test('V in front of the Keeper (it already sees you) fails: it locks on and charges', () => {
+  const { g, m, p, row } = setup();
+  prowl(m, row, 0, 1);
+  m.yaw = yawFromDir(1, 0); // facing you, but it has not looked yet
+  m.state = 'stalking';
+  assert.ok(m.wouldSee(p));
+  assert.equal(g.onInvis('p0').reason, 'seen');
+  assert.equal(m.targetId, 'p0');
+  assert.equal(m.state, 'hunting');
+  assert.equal(evs(g, 'monster:hunt').at(-1).reason, 'sighted');
 });
 
 test('the capture screen plays for 1.5s, then you wake up in the Underground Iron Cage', () => {
@@ -249,7 +261,7 @@ test('the capture screen plays for 1.5s, then you wake up in the Underground Iro
   assert.equal(p.hp, Math.max(p.hp, HP.CELL));
 });
 
-test('bots hide: with the Keeper prowling near, a bot casts V and freezes until it passes', () => {
+test('bots hide: with the Keeper prowling near and not looking, a bot toggles V on and freezes until it passes', () => {
   const g = makeGame([{ id: 'h', wizardId: 'parthius' }, { id: 'b', wizardId: 'soham', isBot: true }]);
   g.tomeReadBy = 't';
   g.setPhase(PHASE.HEARTS);
@@ -260,9 +272,14 @@ test('bots hide: with the Keeper prowling near, a bot casts V and freezes until 
   const b = g.players.get('b');
   const row = openRow(g, 12);
   put(b, row.x + 6, row.y);
+  // It prowls 12u off with its back turned: the moment to vanish (it has not seen us).
   prowl(m, { x: row.x, y: row.y }, 0, 11);
+  m.yaw = yawFromDir(-1, 0);
+  m.goal = { x: m.x, z: m.z, floor: 0, peek: false };
   run(g, 0.3);
   assert.ok(g.spells.buffCodes(b).includes('invis'), 'vanished');
+  // Now it turns and walks right past.
+  m.goal = { x: tileCenter(row.x + 11), z: tileCenter(row.y), floor: 0, peek: false };
   let moved = 0;
   const start = { x: b.x, z: b.z };
   for (let t = 0; t < 3; t += 0.05) {
