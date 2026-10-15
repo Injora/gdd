@@ -5,6 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Game } from '../server/Game.js';
+import { roomySeed } from './_seeds.js';
 import { TrainingHusk } from '../server/TrainingHusk.js';
 import { WIZARDS, WIZARD_BY_ID } from '../shared/wizards.js';
 import { findPath, isPassable } from '../shared/pathfinding.js';
@@ -21,6 +22,7 @@ function makeGame(wizardIds) {
   };
   const lobby = {
     room: 'test',
+    seed: roomySeed(),
     members: wizardIds.map((w, i) => ({ id: `p${i}`, name: `P${i}`, wizardId: w, isBot: false })),
   };
   const game = new Game(io, lobby);

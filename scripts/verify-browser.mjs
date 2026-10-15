@@ -264,7 +264,8 @@ async function main() {
     await page.keyboard.press('KeyE');
     await page.waitForFunction(() => window.__game.controller.floor === 0, { timeout: 4000 }).catch(() => failures.push('could not descend the grand staircase'));
     await standAndFace();
-    await page.evaluate(() => { window.__game.controller.yaw += Math.PI; }); // the lit side
+    await page.evaluate(() => { window.__game.controller.yaw += Math.PI; window.__game.controller.pitch = -0.05; }); // the lit side
+    await sleep(400); // (let the server hear where we're looking)
     const self0 = await page.evaluate(() => window.__game.selfId);
     {
       const g = liveGame();
@@ -273,14 +274,16 @@ async function main() {
       let i = 0;
       for (const p of g.players.values()) {
         if (!p.isBot) continue;
-        const side = i++ ? 0.8 : -0.8;
-        const x = me.x + fx * 2.4 + fz * side, z = me.z + fz * 2.4 - fx * side;
+        const side = i++ ? 0.75 : -0.75;
+        const x = me.x + fx * 2.6 + fz * side, z = me.z + fz * 2.6 - fx * side;
         g.teleport(p, x, z, me.floor, Math.atan2(-(me.x - x), -(me.z - z)));
       }
     }
+    await page.keyboard.press('KeyF'); // Nox: the plain wand glow (Lumos washes the robes out at this range)
     await sleep(700);
     await page.evaluate(() => { window.__game.controller.pitch = -0.05; });
     await shot('avatars-1-the-coven-in-their-robes');
+    await page.keyboard.press('KeyF'); // Lumos again
     const avatarCount = await page.evaluate(() => [...window.__game.avatars.values()].filter((a) => a.group.visible).length);
     check(avatarCount >= 2, `teammate avatars not visible (${avatarCount})`);
     // 4. The input rework: 1–4 / R only select; the trigger (Q here, LMB in play) fires.
@@ -604,7 +607,13 @@ async function main() {
       const me = g.players.get(self0);
       const m = g.monster;
       m.debugHeld = false;
-      m.place(m.hiddenSpot(me.floor, 14, 22));
+      const tile = m.tiles[me.floor].filter((tl) => {
+        const d = Math.hypot(tl.x - me.x, tl.z - me.z);
+        return d > 15 && d < 20;
+      })[0] ?? m.hiddenSpot(me.floor, 14, 22);
+      m.place({ x: tile.x, z: tile.z, floor: me.floor });
+      m.goal = { x: me.x, z: me.z, floor: me.floor, peek: false };
+      m.goalUntil = Infinity;
       m.hidden = false;
       m.setState('stalking');
     }

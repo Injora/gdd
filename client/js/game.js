@@ -220,10 +220,15 @@ export class GameClient {
     const cuff = new THREE.Mesh(new THREE.TorusGeometry(0.046, 0.008, 6, 16), cuffMat);
     cuff.position.set(0.035, -0.035, 0.03);
     rig.add(cuff);
-    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.03, 10, 8), skinMat);
-    hand.scale.set(1, 0.85, 1.25);
-    hand.position.set(0.01, -0.012, 0.0);
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.02, 10, 8), skinMat);
+    hand.scale.set(1, 0.8, 1.3);
+    hand.position.set(0.006, -0.01, 0.0);
     rig.add(hand);
+    for (let i = 0; i < 3; i++) { // fingers curled round the wand
+      const f = new THREE.Mesh(new THREE.CylinderGeometry(0.0045, 0.004, 0.022, 5).rotateZ(Math.PI / 2), skinMat);
+      f.position.set(-0.004, -0.004 + i * 0.002, -0.008 - i * 0.008);
+      rig.add(f);
+    }
     const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.006, 0.07, 8).rotateX(Math.PI / 2), woodMat);
     handle.position.z = -0.02;
     rig.add(handle);

@@ -4,6 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Game } from '../server/Game.js';
+import { roomySeed } from './_seeds.js';
 import { TrainingHusk } from '../server/TrainingHusk.js';
 import { AI } from '../server/Monster.js';
 import { WIZARDS, WIZARD_BY_ID, ULT } from '../shared/wizards.js';
@@ -18,7 +19,7 @@ function makeGame(members) {
   const events = [];
   const io = { to: () => ({ emit: (name, data) => events.push({ name, data }) }), sockets: { sockets: new Map() } };
   const game = new Game(io, {
-    room: 't', hostId: members[0].id,
+    room: 't', hostId: members[0].id, seed: roomySeed(),
     members: members.map((m) => ({ name: m.id.toUpperCase(), isBot: false, ...m })),
   });
   game.events = events;

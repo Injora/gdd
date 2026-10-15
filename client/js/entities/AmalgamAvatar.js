@@ -444,6 +444,7 @@ export class AmalgamAvatar {
     const forced = this.forced && performance.now() < this.forced.until;
     const visible = (!s.hid && s.f === visibleFloor) || forced; // (the capture screen always shows its face)
     this.group.visible = visible || this.rise > 0.01;
+    if (this.label) this.label.visible = !forced;
 
     if (!forced) {
       const k = 1 - Math.exp(-dt * (s.state === 'hunting' ? 14 : 9));

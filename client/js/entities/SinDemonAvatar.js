@@ -41,7 +41,8 @@ const MODELS = {
   pride() {
     const root = new THREE.Group();
     const robe = std(0xe8ecf4, 0.35, 0.1);
-    const mirror = std(0xc8d4e8, 0.04, 1, { envMapIntensity: 1 });
+    // (No environment map to reflect: a pale, bright, barely-rough mirror steel instead.)
+    const mirror = std(0xdfe8ff, 0.18, 0.55, { emissive: 0x3a4a66, emissiveIntensity: 0.6 });
     const gold = std(0xd8b048, 0.25, 0.9, { emissive: 0x6a4a10, emissiveIntensity: 0.4 });
     const body = new THREE.Group();
     body.position.y = 0.35; // it floats
@@ -275,46 +276,76 @@ const MODELS = {
     const root = new THREE.Group();
     const flesh = std(0x7a1410, 0.55, 0.1, { emissive: 0xff1a08, emissiveIntensity: 0.35 });
     const horn = std(0x1a0a08, 0.4);
-    const steel = std(0x4a4a50, 0.3, 0.9);
+    const steel = std(0x5a5a62, 0.28, 0.9);
+    const scar = std(0x200000, 0.6, 0, { emissive: 0xff4010, emissiveIntensity: 1.2 });
     const body = new THREE.Group();
     root.add(body);
+    const cap = (r, len) => new THREE.CapsuleGeometry(r, len, 6, 12);
     const legs = [-1, 1].map((s) => {
       const hip = new THREE.Group();
-      hip.position.set(s * 0.25, 1.0, 0);
-      addMesh(hip, new THREE.CylinderGeometry(0.12, 0.16, 1.0, 8), flesh, 0, -0.5, 0);
+      hip.position.set(s * 0.24, 1.0, 0);
+      addMesh(hip, cap(0.13, 0.42), flesh, 0, -0.25, 0);
+      const knee = new THREE.Group();
+      knee.position.y = -0.52;
+      addMesh(knee, cap(0.11, 0.38), flesh, 0, -0.22, 0.02);
+      addMesh(knee, new THREE.BoxGeometry(0.2, 0.08, 0.34), horn, 0, -0.46, 0.07);
+      hip.add(knee);
       body.add(hip);
-      return hip;
+      return { hip, knee };
     });
-    const chest = addMesh(body, new THREE.BoxGeometry(0.95, 0.85, 0.55), flesh, 0, 1.55, 0);
-    chest.rotation.x = 0.15;
-    addMesh(body, new THREE.BoxGeometry(0.6, 0.4, 0.45), flesh, 0, 1.05, 0);
+    addMesh(body, cap(0.26, 0.25), flesh, 0, 1.12, 0).scale.set(1.15, 1, 0.85); // gut
+    const chest = addMesh(body, cap(0.38, 0.35), flesh, 0, 1.62, 0);
+    chest.scale.set(1.25, 1, 0.8);
+    chest.rotation.x = 0.12;
+    // Glowing veins/scars across the chest.
+    for (let i = 0; i < 5; i++) {
+      const v = addMesh(body, new THREE.BoxGeometry(0.03, 0.4 + (i % 2) * 0.2, 0.02), scar, -0.3 + i * 0.15, 1.6, 0.31);
+      v.rotation.z = (i - 2) * 0.35;
+    }
+    for (const side of [-1, 1]) addMesh(body, new THREE.SphereGeometry(0.22, 12, 10), flesh, side * 0.5, 1.95, 0); // traps/shoulders
     const head = new THREE.Group();
-    head.position.set(0, 2.1, 0.15);
-    addMesh(head, new THREE.BoxGeometry(0.32, 0.36, 0.32), flesh);
+    head.position.set(0, 2.18, 0.12);
+    const skull = addMesh(head, new THREE.SphereGeometry(0.19, 14, 12), flesh);
+    skull.scale.set(1, 0.95, 1.05);
+    const jaw = addMesh(head, new THREE.BoxGeometry(0.26, 0.1, 0.2), flesh, 0, -0.14, 0.06);
+    for (let i = -2; i <= 2; i++) addMesh(head, new THREE.ConeGeometry(0.018, 0.06, 4), std(0xe8e0c0, 0.4), i * 0.05, -0.1, 0.16).rotation.x = Math.PI;
     for (const sx of [-1, 1]) {
-      const h = addMesh(head, new THREE.ConeGeometry(0.06, 0.45, 6), horn, sx * 0.2, 0.25, -0.05);
-      h.rotation.z = -sx * 0.6;
-      addMesh(head, new THREE.SphereGeometry(0.035, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffd020 }), sx * 0.08, 0.04, 0.17);
+      const h = new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.04, 6, 12, Math.PI * 0.8), horn);
+      h.position.set(sx * 0.16, 0.12, -0.02);
+      h.rotation.set(0, sx * 0.4, sx > 0 ? 0.3 : Math.PI - 0.3);
+      head.add(h);
+      addMesh(head, new THREE.SphereGeometry(0.035, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffd020 }), sx * 0.075, 0.03, 0.16);
     }
     body.add(head);
     const arms = [-1, 1].map((s) => {
       const sh = new THREE.Group();
-      sh.position.set(s * 0.6, 1.85, 0);
-      addMesh(sh, new THREE.CylinderGeometry(0.1, 0.13, 0.85, 8), flesh, 0, -0.42, 0);
-      const blade = addMesh(sh, new THREE.BoxGeometry(0.06, 1.1, 0.16), steel, 0, -1.25, 0.12);
-      blade.rotation.x = 0.2;
+      sh.position.set(s * 0.62, 1.9, 0);
+      addMesh(sh, cap(0.12, 0.38), flesh, 0, -0.26, 0);
+      const el = new THREE.Group();
+      el.position.y = -0.55;
+      addMesh(el, cap(0.1, 0.34), flesh, 0, -0.2, 0);
+      const blade = addMesh(el, new THREE.BoxGeometry(0.05, 1.1, 0.2), steel, 0, -0.85, 0.08);
+      blade.rotation.x = 0.15;
+      addMesh(el, new THREE.BoxGeometry(0.22, 0.05, 0.12), horn, 0, -0.38, 0.05);
+      sh.add(el);
       body.add(sh);
-      return { sh, s };
+      return { sh, el, s };
     });
     return {
       root, height: 2.5,
       animate(t, dt, k) {
         const fast = k.state === 'charge';
         const walk = k.moving ? Math.sin(t * (fast ? 16 : 9)) : 0;
-        legs.forEach((l, i) => { l.rotation.x = walk * 0.7 * (i ? 1 : -1); });
+        legs.forEach((l, i) => { l.hip.rotation.x = walk * 0.7 * (i ? 1 : -1); l.knee.rotation.x = Math.max(0, walk * (i ? -1 : 1)) * 0.8; });
         body.rotation.x = fast ? 0.45 : k.windup * 0.3;
-        arms.forEach(({ sh, s }) => { sh.rotation.x = -walk * 0.5 * s - k.windup * 2.4 + k.strike * 2.4; sh.rotation.z = s * 0.2; });
+        arms.forEach(({ sh, el, s }) => {
+          sh.rotation.x = -walk * 0.5 * s - k.windup * 2.4 + k.strike * 2.4;
+          sh.rotation.z = s * 0.25;
+          el.rotation.x = -0.4 - k.windup * 0.6;
+        });
+        jaw.position.y = -0.14 - (k.windup + k.strike) * 0.05;
         flesh.emissiveIntensity = 0.35 + (1 - k.hpK) * 1.2 + Math.sin(t * 10) * 0.08; // it burns hotter as it bleeds
+        scar.emissiveIntensity = 1.2 + (1 - k.hpK) * 2;
       },
     };
   },
@@ -589,7 +620,7 @@ export class SinDemonAvatar {
     this.deathK += ((s.dead ? 1 : 0) - this.deathK) * Math.min(1, dt * 1.5);
     const scale = up * (1 - this.deathK * 0.9);
     this.group.position.set(this.x, FLOOR_Y[s.f] - (1 - up) * 1.2, this.z);
-    this.group.rotation.y = this.yaw;
+    this.group.rotation.y = this.yaw + Math.PI; // models face +z; yaw 0 looks -z
     this.model.root.scale.setScalar(Math.max(0.01, scale));
     this.model.root.rotation.z = this.deathK * 0.6;
     const now = performance.now();

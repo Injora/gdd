@@ -112,16 +112,18 @@ export class WizardAvatar {
     // Outer cloak: open at the front, lined, trimmed; its skirt sways.
     this.skirt = new THREE.Group();
     this.skirt.position.y = 1.05;
-    const skirtGeo = lathe([[0.27, 0], [0.33, -0.45], [0.42, -0.85], [0.47, -1.02]], 24, Math.PI * 0.62, Math.PI * 1.76);
+    // Lathe angle 0 is the front (+z): leave the cloak open there.
+    const OPEN = Math.PI * 0.12;
+    const skirtGeo = lathe([[0.27, 0], [0.33, -0.45], [0.42, -0.85], [0.47, -1.02]], 24, OPEN, Math.PI * 2 - OPEN * 2);
     this.skirt.add(new THREE.Mesh(skirtGeo, cloakMat));
     this.skirt.add(new THREE.Mesh(skirtGeo, liningMat));
-    const hem = new THREE.Mesh(new THREE.TorusGeometry(0.47, 0.018, 5, 40, Math.PI * 1.76), trimMat);
+    const hem = new THREE.Mesh(new THREE.TorusGeometry(0.47, 0.018, 5, 40, Math.PI * 2 - OPEN * 2), trimMat);
     hem.rotation.x = Math.PI / 2;
-    hem.rotation.z = Math.PI * 0.62 - Math.PI / 2;
+    hem.rotation.z = Math.PI / 2 - (Math.PI * 2 - OPEN); // the trim follows the open hem
     hem.position.y = -1.02;
     this.skirt.add(hem);
     this.body.add(this.skirt);
-    const shoulders = new THREE.Mesh(lathe([[0.27, 1.05], [0.29, 1.28], [0.24, 1.42], [0.12, 1.5]], 24, Math.PI * 0.7, Math.PI * 1.6), cloakMat);
+    const shoulders = new THREE.Mesh(lathe([[0.27, 1.05], [0.29, 1.28], [0.24, 1.42], [0.12, 1.5]], 24, Math.PI * 0.2, Math.PI * 1.6), cloakMat);
     this.body.add(shoulders);
     for (const side of [-1, 1]) {
       const lapel = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.55, 0.012), trimMat);

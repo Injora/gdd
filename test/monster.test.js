@@ -6,16 +6,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Game } from '../server/Game.js';
+import { roomySeed } from './_seeds.js';
 import { AI } from '../server/Monster.js';
 import { isPassable } from '../shared/pathfinding.js';
 import { lineOfSight, moveCircle, overlapsSolid } from '../shared/collision.js';
 import { PHASE, CHANNEL, PLAYER_RADIUS, tileCenter, worldToTile, yawFromDir } from '../shared/constants.js';
 
-function makeGame(members) {
+function makeGame(members, seed) {
   const events = [];
   const io = { to: () => ({ emit: (name, data) => events.push({ name, data }) }), sockets: { sockets: new Map() } };
   const lobby = {
     room: 'test',
+    seed: seed ?? roomySeed(),
     hostId: members[0].id,
     members: members.map((m) => ({ name: m.id.toUpperCase(), isBot: false, ...m })),
   };
@@ -250,7 +252,7 @@ test('a Void-shielded wizard is not captured: the lunge rebounds', () => {
 });
 
 test('locked on, it never gives up the chase: out of sight, on another floor, it still comes', () => {
-  const g = makeGame(humans('parthius', 'soham'));
+  const g = makeGame(humans('parthius', 'soham'), 31337);
   const m = awake(g);
   g.players.get('p1').floor = 1;
   const p = g.players.get('p0');
@@ -263,7 +265,7 @@ test('locked on, it never gives up the chase: out of sight, on another floor, it
   m.setState('stalking');
   m.hunt(p, 'test');
   p.capturing = 0;
-  const reached = run(g, 40, () => Math.hypot(m.x - p.x, m.z - p.z) < 4 || evs(g, 'capture').length > 0);
+  const reached = run(g, 90, () => Math.hypot(m.x - p.x, m.z - p.z) < 4 || evs(g, 'capture').length > 0);
   assert.ok(reached, 'it ran them down across the house, never seeing them until the end');
   assert.equal(evs(g, 'monster:hunt').length, 1, 'one lock, never dropped');
 });

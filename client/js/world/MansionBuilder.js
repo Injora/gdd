@@ -154,6 +154,7 @@ export function buildMansion(map) {
           continue;
         }
         if (t === TILE_VOID) {
+          ceil.push([cx, 0, cz]); // the roof of the double-height hall
           // The balcony's edge: a balustrade (rail + balusters) and the slab's face.
           for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
             const n = tile(x + dx, y + dy);
@@ -235,7 +236,12 @@ export function buildMansion(map) {
   let staticLights = 0;
 
   for (const p of map.props) {
-    if (p.kind === 'chandelier' && p.floor === FLOOR.UPPER && upper.tiles[p.ty * upper.w + p.tx] === TILE_VOID) p.overVoid = true;
+    if (p.kind === 'chandelier' && p.floor === FLOOR.UPPER && upper.tiles[p.ty * upper.w + p.tx] === TILE_VOID) {
+      // The great chandelier hangs into the Foyer: its candlelight reaches both stories.
+      p.overVoid = true;
+      p.light = '#ffb060';
+      p.lightBoth = true;
+    }
     const obj = kit.build(p);
     obj.position.set(p.x, 0, p.z);
     obj.rotation.y = p.rot;
@@ -249,10 +255,11 @@ export function buildMansion(map) {
       staticLights++;
       // Lights live on the root (never hidden) so the light count stays constant
       // and switching floors doesn't trigger a shader recompile.
-      const light = new THREE.PointLight(p.light, 4, 9, 1.8);
-      light.position.set(p.x, map.floors[p.floor].y + 0.9, p.z);
+      const grand = !!p.lightBoth;
+      const light = new THREE.PointLight(p.light, grand ? 26 : 4, grand ? 18 : 9, grand ? 1.4 : 1.8);
+      light.position.set(p.x, grand ? FLOOR_Y[FLOOR.GROUND] + 3.2 : map.floors[p.floor].y + 0.9, p.z);
       root.add(light);
-      flickers.push({ light, floor: p.floor, base: 4, seed: p.id * 13.7 });
+      flickers.push({ light, floor: grand ? 'both' : p.floor, base: grand ? 26 : 4, seed: p.id * 13.7 });
     }
   }
 
@@ -492,7 +499,8 @@ export function buildMansion(map) {
         const n = Math.sin(t * 9 + f.seed) * 0.5 + Math.sin(t * 23.7 + f.seed * 2) * 0.3 + Math.sin(t * 3.1) * 0.2;
         // Near the Amalgam, candles gutter and drop out erratically.
         const gutter = dread > 0 ? (Math.random() < dread * 0.2 ? 0.04 : 1 - dread * 0.5 * Math.random()) : 1;
-        f.light.intensity = f.floor === activeFloor ? f.base * (0.8 + n * 0.18) * gutter : 0;
+        const on = f.floor === 'both' ? activeFloor !== FLOOR.BASEMENT : f.floor === activeFloor;
+        f.light.intensity = on ? f.base * (0.8 + n * 0.18) * gutter : 0;
       }
       // Moonbeams drift with passing clouds.
       for (const [i, beam] of windowBeams.entries()) beam.material.uniforms.uOpacity.value = 0.13 + Math.sin(t * 0.21 + i) * 0.04;
