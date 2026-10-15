@@ -7,6 +7,16 @@ import { PHASE, HEART_COUNT, STAMINA } from '/shared/constants.js';
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
+const ELEMENT_GLYPHS = {
+  Black: '\u263E',
+  Fire: '\u2668',
+  Water: '\u2652',
+  Earth: '\u25B2',
+  Wind: '\u2248',
+  White: '\u2600',
+  'Anti-magic': '\u2205',
+};
+
 const OBJECTIVES = {
   [PHASE.TOME]: ['Phase I · The Tome', 'Somewhere in this house is the Ritual Book. Find it. Read it.'],
   [PHASE.HEARTS]: ['Phase II · The Six Hearts', 'Find and destroy the six Hearts hidden among the mansion’s things. [J] Journal'],
@@ -134,6 +144,53 @@ export class HUD {
     $('journal-hearts').innerHTML = this.tome.hearts
       .map((h) => `<li class="${this.destroyed.has(h.propId) ? 'done' : ''}"><b>${esc(h.name)}.</b> ${esc(h.clue)}</li>`)
       .join('');
+  }
+
+  // ---- spell widget ---------------------------------------------------------------
+
+  setSpell(wizard) {
+    const el = $('hud-spell');
+    el.style.setProperty('--wiz', wizard.color);
+    el.querySelector('.spell-name').textContent = wizard.ability.name;
+    el.querySelector('.spell-wiz').textContent = `${wizard.title} \u00b7 ${wizard.element}`;
+    el.querySelector('.dial-glyph').textContent = ELEMENT_GLYPHS[wizard.element] ?? '\u2726';
+    el.title = wizard.ability.description;
+    this._cd = null;
+  }
+
+  /** remaining/duration in seconds; call every frame. */
+  cooldown(remaining, duration) {
+    const key = remaining > 0 ? Math.ceil(remaining * 10) : 0;
+    if (key === this._cd) return;
+    this._cd = key;
+    const el = $('hud-spell');
+    const frac = remaining > 0 && duration > 0 ? remaining / duration : 0;
+    el.querySelector('.arc').style.strokeDashoffset = `${175.93 * frac}`;
+    el.querySelector('.dial-time').textContent = remaining > 0 ? (remaining >= 10 ? Math.ceil(remaining) : remaining.toFixed(1)) : '';
+    el.classList.toggle('cooling', remaining > 0);
+    el.classList.toggle('ready', remaining <= 0);
+  }
+
+  denied() {
+    const el = $('hud-spell');
+    el.classList.remove('denied');
+    void el.offsetWidth;
+    el.classList.add('denied');
+  }
+
+  /** Full-screen flash: 'torment' | 'white' | 'hit' | 'blocked'. */
+  screen(kind, strength = 1) {
+    const el = $('screen-fx');
+    el.className = 'screen-fx';
+    void el.offsetWidth;
+    el.style.setProperty('--fx-strength', String(strength));
+    el.classList.add(kind);
+  }
+
+  caption(text, ms = 3000) {
+    const el = $('hud-caption');
+    el.textContent = text;
+    this.flash(el, 'show', ms);
   }
 
   toggleJournal(open = !this.journalOpen) {

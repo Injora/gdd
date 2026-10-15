@@ -26,7 +26,41 @@ export function createCollisionWorld(map, isActive = () => true) {
       }
     }
   }
-  return { map, floors, isActive };
+  return { map, floors, isActive, barriers: new Map() };
+}
+
+/**
+ * Add a temporary full-tile barrier (e.g. Terra Spike's barricade). It blocks
+ * movement through the collision world AND marks the floor's dynamic-blocked
+ * grid (`floor.dyn`) so findPath() routes around it until it is removed.
+ */
+export function addBarrier(world, floor, id, tiles) {
+  const fl = world.floors[floor];
+  const f = fl.f;
+  if (!f.dyn) f.dyn = new Array(f.w * f.h).fill(0);
+  const boxes = [];
+  for (const [tx, ty] of tiles) {
+    const k = ty * f.w + tx;
+    const box = { minX: tx * TILE, maxX: (tx + 1) * TILE, minZ: ty * TILE, maxZ: (ty + 1) * TILE, barrier: id };
+    if (!fl.cells.has(k)) fl.cells.set(k, []);
+    fl.cells.get(k).push(box);
+    f.dyn[k]++;
+    boxes.push([k, box]);
+  }
+  world.barriers.set(id, { floor, tiles, boxes });
+}
+
+export function removeBarrier(world, id) {
+  const b = world.barriers.get(id);
+  if (!b) return;
+  const fl = world.floors[b.floor];
+  for (const [k, box] of b.boxes) {
+    const list = fl.cells.get(k);
+    const i = list ? list.indexOf(box) : -1;
+    if (i >= 0) list.splice(i, 1);
+    fl.f.dyn[k] = Math.max(0, fl.f.dyn[k] - 1);
+  }
+  world.barriers.delete(id);
 }
 
 function isWall(f, tx, ty) {
@@ -70,7 +104,7 @@ function resolve(world, floor, x, z, r) {
         const boxes = fl.cells.get(ty * f.w + tx);
         if (!boxes) continue;
         for (const b of boxes) {
-          if (b.prop.collider.dynamic && !world.isActive(b.prop)) continue;
+          if (b.prop?.collider.dynamic && !world.isActive(b.prop)) continue;
           const res = pushOut(x, z, r, b.minX, b.maxX, b.minZ, b.maxZ);
           if (res) { [x, z] = res; moved = true; }
         }

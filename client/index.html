@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Six Hearts: The Forbidden Convergence</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23050405'/%3E%3Cpath d='M16 27 4.5 15.5A6.5 6.5 0 0 1 16 8a6.5 6.5 0 0 1 11.5 7.5Z' fill='%23d4222c'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&family=IM+Fell+English:ital@0;1&display=swap" rel="stylesheet">
@@ -85,7 +86,24 @@
     <ul id="hud-team" class="hud-team"></ul>
     <div id="hud-stamina" class="hud-stamina"><div></div></div>
     <div id="hud-light" class="hud-light"></div>
+    <div id="hud-caption" class="hud-caption"></div>
+    <div id="hud-spell" class="hud-spell">
+      <div class="dial">
+        <svg viewBox="0 0 64 64" aria-hidden="true">
+          <circle class="track" cx="32" cy="32" r="28"></circle>
+          <circle class="arc" cx="32" cy="32" r="28"></circle>
+        </svg>
+        <span class="dial-glyph"></span>
+        <span class="dial-time"></span>
+      </div>
+      <div class="spell-info">
+        <div class="spell-name"></div>
+        <div class="spell-wiz"></div>
+        <div class="spell-key"><kbd>LMB</kbd> / <kbd>Q</kbd></div>
+      </div>
+    </div>
   </section>
+  <div id="screen-fx" class="screen-fx"></div>
 
   <div id="journal" class="overlay hidden">
     <div class="journal-page">
@@ -105,10 +123,13 @@
         <tr><td>Mouse</td><td>Look</td></tr>
         <tr><td>Shift</td><td>Sprint (loud)</td></tr>
         <tr><td>C / Ctrl</td><td>Crouch (quiet)</td></tr>
-        <tr><td>E (hold)</td><td>Interact / destroy / read</td></tr>
+        <tr><td>LMB / Q</td><td>Cast your wizard's spell</td></tr>
+        <tr><td>E (hold)</td><td>Interact / destroy / read / break lock</td></tr>
         <tr><td>F</td><td>Wand light on / off</td></tr>
         <tr><td>J</td><td>Journal</td></tr>
-        <tr class="debug-only"><td>M</td><td>Debug map</td></tr>
+        <tr class="debug-only"><td>M</td><td>Debug map (click to teleport)</td></tr>
+        <tr class="debug-only"><td>P</td><td>Spawn / remove Test Monster Husk</td></tr>
+        <tr class="debug-only"><td>1 – 7</td><td>Hot-swap wizard</td></tr>
       </table>
     </div>
   </div>

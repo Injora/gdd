@@ -10,7 +10,12 @@ import {
 } from '../shared/constants.js';
 import { DECOY_LINES, TOME_TEXT } from '../shared/lore.js';
 import { PROP_LABELS } from '../shared/propdefs.js';
+import { WIZARD_BY_ID } from '../shared/wizards.js';
 import { Bot } from './Bot.js';
+import { SpellSystem } from './SpellSystem.js';
+import { TrainingHusk } from './TrainingHusk.js';
+
+const GATE_OPEN_TIME = 6;
 
 const r2 = (v) => Math.round(v * 100) / 100;
 const r3 = (v) => Math.round(v * 1000) / 1000;
@@ -19,9 +24,10 @@ const finite = (v, fallback) => (Number.isFinite(v) ? v : fallback);
 export class Game {
   constructor(io, lobby, onEnd) {
     this.io = io;
+    this.lobby = lobby;
     this.room = lobby.room;
     this.onEnd = onEnd;
-    this.seed = (Math.random() * 0xffffffff) >>> 0;
+    this.seed = Number.isInteger(lobby.seed) ? lobby.seed >>> 0 : (Math.random() * 0xffffffff) >>> 0;
     this.map = generateMansion(this.seed);
     this.clientMap = publicMap(this.map);
     this.props = this.map.props;
@@ -33,6 +39,10 @@ export class Game {
     this.tomeReadBy = null;
     this.destroyed = new Set();
     this.time = 0;
+    this.gateCloseAt = 0;
+    this.cooldownScale = 1; // the Archon (Step 5) casts at ARCHON_COOLDOWN_SCALE
+    this.spells = new SpellSystem(this);
+    this.husk = null; // debug Training Husk
 
     this.players = new Map();
     this.bots = [];
@@ -55,6 +65,8 @@ export class Game {
         tseq: 0,
         lastStateAt: Date.now(),
         channel: null,
+        cooldowns: {},
+        shieldUntil: 0,
       };
       this.players.set(m.id, p);
       if (m.isBot) this.bots.push(new Bot(this, p, this.bots.length));
@@ -117,7 +129,13 @@ export class Game {
       destroyed: [...this.destroyed],
       propState: this.propState,
       tome: this.tomeReadBy ? this.tomeInfo() : null,
+      barriers: this.spells.activeBarriers(),
     };
+  }
+
+  /** Every hostile body spells can target (the Keeper joins in Step 4). */
+  monsters() {
+    return this.husk ? [this.husk] : [];
   }
 
   snapshot() {
@@ -136,7 +154,9 @@ export class Game {
         li: p.light,
         mv: p.moving,
         ch: p.channel?.propId ?? null,
+        sh: this.spells.isShielded(p),
       })),
+      monsters: this.monsters().map((m) => m.snapshot()),
     };
   }
 
@@ -146,11 +166,17 @@ export class Game {
     const now = performance.now();
     const dt = Math.min(0.1, (now - this.lastTick) / 1000);
     this.lastTick = now;
+    this.step(dt);
+  }
+
+  /** Advance the simulation by dt seconds and broadcast a snapshot. */
+  step(dt) {
     this.time += dt;
-
     for (const bot of this.bots) if (this.players.has(bot.p.id)) bot.update(dt, this.time);
+    for (const m of this.monsters()) m.update(dt);
+    this.spells.update(dt);
     for (const p of this.players.values()) if (p.channel) this.updateChannel(p);
-
+    this.updateGate();
     this.io.to(this.room).emit('game:snap', this.snapshot());
   }
 
@@ -245,7 +271,8 @@ export class Game {
         break;
 
       case 'gate':
-        this.whisper(p, 'An iron lock carved with the ritual seal. It is cold. No one is held here… yet.');
+        if (this.propState[prop.id]?.open) this.whisper(p, 'The gate hangs open. It will not stay that way.');
+        else this.startChannel(p, prop, CHANNEL.gate / (WIZARD_BY_ID[p.wizardId]?.passive?.gateUnlockSpeed ?? 1));
         break;
     }
   }
@@ -276,6 +303,12 @@ export class Game {
   }
 
   completeInteraction(p, prop) {
+    if (prop.interact === 'gate') {
+      this.propState[prop.id] = { open: true };
+      this.gateCloseAt = this.time + GATE_OPEN_TIME;
+      this.emitAll({ type: 'gate', propId: prop.id, open: true, by: p.name });
+      return;
+    }
     if (prop.interact === 'tome' && !this.tomeReadBy) {
       this.tomeReadBy = p.name;
       this.setPhase(PHASE.HEARTS);
@@ -296,6 +329,68 @@ export class Game {
       });
       if (this.destroyed.size === HEART_COUNT) this.setPhase(PHASE.CONVERGENCE);
     }
+  }
+
+  // --- spells & debug ----------------------------------------------------------
+
+  onCast(id, d) {
+    const p = this.players.get(id);
+    if (!p || p.isBot) return;
+    if (p.channel) this.cancelChannel(p);
+    const res = this.spells.cast(p, Number(d?.yaw), Number(d?.pitch));
+    const ability = WIZARD_BY_ID[p.wizardId]?.ability;
+    this.socketOf(p)?.emit('game:cooldown', res.ok
+      ? { ok: true, ability: ability.id, readyIn: res.cooldown, duration: res.cooldown }
+      : { ok: false, ability: ability?.id, readyIn: res.remaining ?? 0, reason: res.reason });
+  }
+
+  /** Debug: spawn the Training Husk ~4 units in front of the player, or remove it. */
+  debugHusk(id) {
+    const p = this.players.get(id);
+    if (!p) return;
+    if (this.husk) {
+      this.husk = null;
+      this.emitAll({ type: 'husk:despawn' });
+      return;
+    }
+    const fx = -Math.sin(p.yaw), fz = -Math.cos(p.yaw);
+    let at = { x: p.x, z: p.z };
+    for (let d = 4; d >= 1.2; d -= 0.4) {
+      const x = p.x + fx * d, z = p.z + fz * d;
+      if (!overlapsSolid(this.world, p.floor, x, z, 0.5)) { at = { x, z }; break; }
+    }
+    this.husk = new TrainingHusk(this, at.x, at.z, p.floor);
+    this.husk.yaw = p.yaw + Math.PI;
+    this.emitAll({ type: 'husk:spawn' });
+  }
+
+  /** Debug: hot-swap a wizard. Whoever held that wizard takes yours. */
+  debugWizard(id, wizardId) {
+    const p = this.players.get(id);
+    if (!p || !WIZARD_BY_ID[wizardId] || p.wizardId === wizardId) return;
+    const holder = [...this.players.values()].find((o) => o.wizardId === wizardId);
+    if (holder) holder.wizardId = p.wizardId;
+    p.wizardId = wizardId;
+    for (const o of [p, holder]) {
+      if (!o) continue;
+      o.cooldowns = {};
+      const m = this.lobby.members.find((mm) => mm.id === o.id);
+      if (m) m.wizardId = o.wizardId;
+    }
+    this.emitAll({ type: 'roster', players: this.roster() });
+  }
+
+  updateGate() {
+    const gateId = this.map.ids.gate;
+    if (!this.propState[gateId]?.open || this.time < this.gateCloseAt) return;
+    const gate = this.props[gateId];
+    const { x, z, hx, hz } = gate.collider;
+    const bodies = [...this.players.values(), ...this.monsters()];
+    const blocked = bodies.some((b) => b.floor === gate.floor &&
+      Math.abs(b.x - x) < hx + 0.6 && Math.abs(b.z - z) < hz + 0.6);
+    if (blocked) return; // never slam it shut on someone
+    this.propState[gateId] = { open: false };
+    this.emitAll({ type: 'gate', propId: gateId, open: false });
   }
 
   setPhase(phase) {

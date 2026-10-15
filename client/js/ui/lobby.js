@@ -55,7 +55,7 @@ export class LobbyUI {
 
   async create(solo) {
     this.error('');
-    const res = await this.net.request('lobby:create', { name: this.name(), solo });
+    const res = await this.net.request('lobby:create', { name: this.name(), solo, debug: this.debug });
     if (!res?.ok) return this.error(res?.error);
     this.soloMode = solo;
     this.showLobby();

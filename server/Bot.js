@@ -3,11 +3,14 @@
 // A*, and nervously scan the dark when idle.
 
 import { findPath, pathToWorld } from '../shared/pathfinding.js';
-import { moveCircle } from '../shared/collision.js';
+import { moveCircle, lineOfSight } from '../shared/collision.js';
+import { WIZARD_BY_ID } from '../shared/wizards.js';
 import { SPEED, PLAYER_RADIUS, worldToTile, yawFromDir } from '../shared/constants.js';
 
 const FOLLOW_DISTANCE = 2.6;
 const SPRINT_DISTANCE = 10;
+const ENGAGE_RADIUS = 16; // notice monsters this close
+const ENGAGE_READY = 1.5; // close in when the spell is ready within this many seconds
 
 function turnToward(current, target, maxStep) {
   let d = target - current;
@@ -26,6 +29,40 @@ export class Bot {
     this.lookYaw = player.yaw;
     this.stuckCheckAt = 0;
     this.stuckFrom = { x: player.x, z: player.z };
+    this.castAt = 0;
+  }
+
+  /** Fire this bot's spell at a nearby monster when it makes sense. */
+  tryCast(t) {
+    const g = this.game, p = this.p;
+    if (t < this.castAt) return;
+    const ability = WIZARD_BY_ID[p.wizardId]?.ability;
+    if (!ability || g.spells.cooldownLeft(p, ability.id) > 0) return;
+    const m = g.monsters().find((mm) => !mm.dead && mm.floor === p.floor);
+    if (!m) return;
+    const d = Math.hypot(m.x - p.x, m.z - p.z);
+    let want;
+    if (ability.id === 'aegis_void') {
+      // Shield when the monster is close to anyone in shield range.
+      want = [...g.players.values()].some((o) => o.floor === p.floor &&
+        Math.hypot(o.x - p.x, o.z - p.z) <= ability.shieldRadius && Math.hypot(o.x - m.x, o.z - m.z) < 3);
+    } else {
+      want = d <= ability.range * 0.9;
+    }
+    if (!want || !lineOfSight(g.map, p.floor, p.x, p.z, m.x, m.z)) return;
+    p.yaw = yawFromDir(m.x - p.x, m.z - p.z);
+    p.pitch = 0;
+    g.spells.cast(p, p.yaw, 0);
+    this.castAt = t + 1.5 + Math.random() * 2;
+  }
+
+  /** A monster worth walking toward: same floor, near, and our spell is almost ready. */
+  engageTarget() {
+    const g = this.game, p = this.p;
+    const ability = WIZARD_BY_ID[p.wizardId]?.ability;
+    if (!ability || ability.id === 'aegis_void' || g.spells.cooldownLeft(p, ability.id) > ENGAGE_READY) return null;
+    const m = g.monsters().find((mm) => !mm.dead && mm.floor === p.floor && Math.hypot(mm.x - p.x, mm.z - p.z) < ENGAGE_RADIUS);
+    return m ? { m, range: Math.max(1.5, ability.range * 0.6) } : null;
   }
 
   leader() {
@@ -44,6 +81,7 @@ export class Bot {
     const leader = this.leader();
     p.moving = false;
     p.sprint = false;
+    this.tryCast(t);
     if (!leader) return;
 
     let goal;
@@ -57,9 +95,14 @@ export class Bot {
         return;
       }
     } else {
-      goal = leader;
-      if (Math.hypot(goal.x - p.x, goal.z - p.z) <= FOLLOW_DISTANCE + this.index * 0.6) {
-        this.idle(dt, t);
+      // Engage a nearby monster when our spell is (nearly) ready; otherwise follow.
+      const foe = this.engageTarget();
+      goal = foe?.m ?? leader;
+      const stop = foe ? foe.range : FOLLOW_DISTANCE + this.index * 0.6;
+      const d = Math.hypot(goal.x - p.x, goal.z - p.z);
+      if (d <= stop && (!foe || lineOfSight(g.map, p.floor, p.x, p.z, goal.x, goal.z))) {
+        if (foe) p.yaw = turnToward(p.yaw, yawFromDir(goal.x - p.x, goal.z - p.z), dt * 8);
+        else this.idle(dt, t);
         return;
       }
     }

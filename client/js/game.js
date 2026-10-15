@@ -2,14 +2,16 @@
 // interactions, and the network glue for a running match.
 
 import * as THREE from 'three';
-import { createCollisionWorld } from '/shared/collision.js';
+import { createCollisionWorld, addBarrier, removeBarrier } from '/shared/collision.js';
 import { roomAt } from '/shared/mapgen.js';
-import { PHASE, INTERACT_RANGE, NET_SEND_RATE } from '/shared/constants.js';
-import { WIZARD_BY_ID } from '/shared/wizards.js';
+import { PHASE, INTERACT_RANGE, NET_SEND_RATE, FLOOR_Y } from '/shared/constants.js';
+import { WIZARDS, WIZARD_BY_ID } from '/shared/wizards.js';
 import { PROP_LABELS } from '/shared/propdefs.js';
 import { buildMansion } from './world/MansionBuilder.js';
 import { FirstPersonController } from './player/FirstPersonController.js';
 import { WizardAvatar } from './entities/WizardAvatar.js';
+import { MonsterAvatar } from './entities/MonsterAvatar.js';
+import { SpellFX } from './fx/SpellFX.js';
 import { HUD } from './ui/hud.js';
 import { DebugMap } from './debug/DebugMap.js';
 
@@ -45,9 +47,22 @@ export class GameClient {
     this.shake = 0;
     this.time = 0;
     this.activeFloor = -1;
+    this.monsters = new Map();
+    this.cooldown = { readyAt: 0, duration: 1 };
+    this.recoil = 0;
 
     this.initRenderer();
     this.initScene();
+    this.fx = new SpellFX(this.scene, {
+      localId: this.selfId,
+      screen: (kind, strength) => this.hud.screen(kind, strength),
+      shake: (amount) => { this.shake = Math.max(this.shake, amount); },
+    });
+    this.fx.prewarm(this.renderer, this.camera);
+    for (const b of init.barriers ?? []) {
+      addBarrier(this.world, b.floor, b.id, b.tiles);
+      this.fx.barricade(b.id, b.floor, b.tiles, b.remaining);
+    }
 
     const idx = Math.max(0, this.roster.findIndex((m) => m.id === this.selfId));
     const sp = this.map.spawn.points[idx % this.map.spawn.points.length];
@@ -59,6 +74,7 @@ export class GameClient {
     this.hud.show();
     this.hud.setPhase(this.phase);
     this.hud.light(true);
+    this.hud.setSpell(this.wizard);
     if (init.tome) this.applyTome(init.tome, true);
     for (const id of this.destroyed) {
       this.mansion.destroyHeart(id, true);
@@ -129,6 +145,7 @@ export class GameClient {
     const tip = new THREE.Mesh(new THREE.SphereGeometry(0.008, 8, 6), this.wandTipMat);
     tip.position.z = -0.235;
     rig.add(tip);
+    this.wandTip = tip;
     this.camera.add(rig);
     this.wandRig = rig;
 
@@ -169,6 +186,7 @@ export class GameClient {
         this.tseq = d.tseq;
         this.controller.setPosition(d.x, d.z, d.floor, d.yaw);
       },
+      'game:cooldown': (d) => this.onCooldown(d),
       'game:channel': (d) => {
         this.channel = d.propId === null ? null : { propId: d.propId, start: performance.now(), duration: d.duration * 1000 };
         if (!this.channel) this.hud.progress(null);
@@ -200,6 +218,72 @@ export class GameClient {
       av.setSnapshot(p);
     }
     for (const id of [...this.avatars.keys()]) if (!seen.has(id)) this.removeAvatar(id);
+
+    const seenMonsters = new Set();
+    for (const m of s.monsters ?? []) {
+      seenMonsters.add(m.id);
+      let av = this.monsters.get(m.id);
+      if (!av) {
+        av = new MonsterAvatar(m, this.fx);
+        this.scene.add(av.group);
+        this.monsters.set(m.id, av);
+      }
+      av.setSnapshot(m);
+    }
+    for (const [id, av] of this.monsters) {
+      if (seenMonsters.has(id)) continue;
+      this.scene.remove(av.group);
+      av.dispose();
+      this.monsters.delete(id);
+    }
+  }
+
+  localPos() {
+    const c = this.controller;
+    return { x: c.x, z: c.z, floor: c.floor };
+  }
+
+  onCooldown(d) {
+    const now = performance.now();
+    if (d.ok) {
+      this.cooldown = { readyAt: now + d.readyIn * 1000, duration: d.duration };
+    } else {
+      if (d.reason === 'cooldown') this.cooldown.readyAt = now + d.readyIn * 1000;
+      this.hud.denied();
+    }
+  }
+
+  cast() {
+    if (this.hud.journalOpen) return;
+    const now = performance.now();
+    if (now < this.cooldown.readyAt) {
+      this.hud.denied();
+      return;
+    }
+    const c = this.controller;
+    this.net.emit('p:cast', { yaw: c.yaw, pitch: c.pitch });
+    // Optimistic: the server's game:cooldown reply re-syncs the dial.
+    this.cooldown = { readyAt: now + this.wizard.ability.cooldown * 1000, duration: this.wizard.ability.cooldown };
+    this.recoil = 1;
+  }
+
+  setRoster(players) {
+    const old = new Map(this.roster.map((m) => [m.id, m.wizardId]));
+    this.roster = players;
+    for (const m of players) {
+      if (old.get(m.id) === m.wizardId) continue;
+      if (m.id === this.selfId) {
+        this.wizard = WIZARD_BY_ID[m.wizardId];
+        const tint = new THREE.Color(this.wizard.lightTint);
+        this.wandLight.color.copy(tint);
+        this.fillLight.color.copy(tint);
+        this.hud.setSpell(this.wizard);
+        this.cooldown = { readyAt: 0, duration: 1 };
+        this.hud.whisper(`You now walk as ${this.wizard.name}, ${this.wizard.title}.`);
+      } else {
+        this.removeAvatar(m.id); // re-created with the new wizard on the next snapshot
+      }
+    }
   }
 
   removeAvatar(id) {
@@ -240,6 +324,65 @@ export class GameClient {
         this.removeAvatar(e.id);
         this.roster = this.roster.filter((m) => m.id !== e.id);
         this.hud.whisper(`${e.name} is gone from the mansion.`);
+        break;
+      case 'roster':
+        this.setRoster(e.players);
+        break;
+
+      // ---- spells
+      case 'cast':
+        if (e.caster !== this.selfId) this.avatars.get(e.caster)?.castPulse();
+        if (e.wall) addBarrier(this.world, e.floor, e.id, e.wall.tiles);
+        this.fx.onCast(e, this.localPos());
+        break;
+      case 'impact':
+        this.fx.onImpact(e);
+        break;
+      case 'barrier:end':
+        removeBarrier(this.world, e.id);
+        this.fx.onBarrierEnd(e.id);
+        break;
+      case 'gate':
+        this.propState[e.propId] = { open: e.open };
+        this.mansion.setGateOpen(e.propId, e.open);
+        if (e.open && e.by) this.hud.whisper(`${e.by} broke the ritual lock. The cell gate swings open.`);
+        break;
+
+      // ---- monsters (Training Husk now, the Keeper in Step 4)
+      case 'monster:damage':
+        this.monsters.get(e.id)?.showDamage(e.amount, e.source);
+        break;
+      case 'monster:scream': {
+        // Scream hook: Step 4 plays the procedural shriek here.
+        const c = this.controller;
+        const d = e.floor === c.floor ? Math.hypot(e.x - c.x, e.z - c.z) : Infinity;
+        if (d < 40) {
+          this.hud.caption('[ a shriek of agony tears through the walls ]', 2600);
+          this.shake = Math.max(this.shake, 0.5 * (1 - d / 40));
+        }
+        this.onScream?.(e);
+        break;
+      }
+      case 'husk:spawn':
+        this.hud.whisper('A Test Monster Husk claws its way up through the floorboards. [P] to dismiss.');
+        break;
+      case 'husk:despawn':
+        this.hud.whisper('The husk collapses into dust.');
+        break;
+      case 'husk:crumble':
+        this.hud.caption('[ the husk crumbles \u2014 it will re-form in 3s ]', 2500);
+        break;
+      case 'husk:hit':
+        if (e.targetId === this.selfId) {
+          this.hud.screen('hit', 1);
+          this.shake = Math.max(this.shake, 0.5);
+          this.hud.whisper('The husk\u2019s claws rake across you. (Captures arrive with the Monster in Step 4.)');
+        }
+        break;
+      case 'husk:blocked':
+        this.fx.shieldHit(e.targetId);
+        this.monsters.get(e.id)?.blocked();
+        if (e.targetId === this.selfId) this.hud.screen('blocked', 1);
         break;
     }
   }
@@ -289,7 +432,20 @@ export class GameClient {
         case 'KeyM':
           if (this.debug) this.debugMap.toggle();
           break;
+        case 'KeyQ':
+          this.cast();
+          break;
+        case 'KeyP':
+          if (this.debug) this.net.emit('debug:husk');
+          break;
+        default:
+          if (this.debug && /^Digit[1-7]$/.test(e.code)) {
+            this.net.emit('debug:wizard', { wizardId: WIZARDS[Number(e.code.slice(5)) - 1].id });
+          }
       }
+    };
+    this._onMouseDown = (e) => {
+      if (e.button === 0 && this.controller.locked) this.cast();
     };
     this._onKeyUp = (e) => {
       if (e.code === 'KeyE' && this.channel) this.net.emit('p:cancel');
@@ -304,6 +460,7 @@ export class GameClient {
     window.addEventListener('keydown', this._onKeyDown);
     window.addEventListener('keyup', this._onKeyUp);
     this.canvas.addEventListener('click', this._onClick);
+    document.addEventListener('mousedown', this._onMouseDown);
     $('pause').addEventListener('click', this._onClick);
     $('journal').addEventListener('click', this._onJournalClick = () => this.openJournal(false));
     document.addEventListener('pointerlockchange', this._onLockChange);
@@ -361,7 +518,7 @@ export class GameClient {
         return [`Examine the ${PROP_LABELS[p.kind] ?? p.kind}`, false];
       case 'stairs': return [p.kind === 'stairs_down' ? 'Descend the servants’ stair' : 'Climb back up the stair', false];
       case 'altar': return ['Approach the Ritual Altar', false];
-      case 'gate': return ['Inspect the cell gate', false];
+      case 'gate': return this.propState[p.id]?.open ? [null, false] : ['Break the ritual lock', true];
       default: return [null, false];
     }
   }
@@ -397,9 +554,30 @@ export class GameClient {
     this.wandLight.intensity = this.lightOn ? WAND_INTENSITY * flicker * channelBoost : 0;
     this.fillLight.intensity = this.lightOn ? 1.4 * flicker : 0.25;
     this.wandTipMat.color.set(this.wizard.color).multiplyScalar(this.lightOn ? 1 : 0.2);
-    this.wandRig.position.y = -0.2 + Math.sin(c.bobPhase * 2) * 0.006;
+    // Cast recoil: the wand kicks up and back, the tip and light flare in the element colour.
+    this.recoil = Math.max(0, this.recoil - dt * 4);
+    const r = this.recoil * this.recoil;
+    this.wandRig.position.y = -0.2 + Math.sin(c.bobPhase * 2) * 0.006 + r * 0.03;
+    this.wandRig.position.z = -0.36 + r * 0.09;
+    this.wandRig.rotation.x = 0.12 + r * 0.45;
+    this.wandTip.scale.setScalar(1 + r * 5);
+    if (r > 0.01) {
+      this.wandLight.intensity += WAND_INTENSITY * r * 1.5;
+      this.wandTipMat.color.set(this.wizard.color).multiplyScalar(1 + r * 2);
+    }
 
     for (const av of this.avatars.values()) av.update(dt, this.time, this.camera, c.floor);
+    for (const m of this.monsters.values()) m.update(dt, this.time, c.floor);
+
+    // Void shields: one dome per shielded wizard, following them.
+    for (const [id, p] of this.positions) {
+      const self = id === this.selfId;
+      const av = this.avatars.get(id);
+      const x = self ? c.x : av?.x ?? p.x, z = self ? c.z : av?.z ?? p.z, f = self ? c.floor : p.f;
+      this.fx.shield(id, !!p.sh && f === c.floor, x, FLOOR_Y[f], z);
+    }
+    this.fx.update(dt, this.time);
+    this.hud.cooldown(Math.max(0, (this.cooldown.readyAt - now) / 1000), this.cooldown.duration);
 
     // Interaction
     this.target = this.hud.journalOpen ? null : this.findTarget();
@@ -458,6 +636,7 @@ export class GameClient {
     window.removeEventListener('keyup', this._onKeyUp);
     window.removeEventListener('resize', this._onResize);
     this.canvas.removeEventListener('click', this._onClick);
+    document.removeEventListener('mousedown', this._onMouseDown);
     $('pause').removeEventListener('click', this._onClick);
     $('journal').removeEventListener('click', this._onJournalClick);
     document.removeEventListener('pointerlockchange', this._onLockChange);

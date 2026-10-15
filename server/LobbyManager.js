@@ -20,6 +20,7 @@ class Lobby {
     this.hostId = hostId;
     this.members = []; // { id, name, wizardId, ready, isBot }
     this.allowSolo = false;
+    this.debug = false; // enables debug:* commands (teleport, husk, wizard swap)
     this.game = null;
   }
 
@@ -89,6 +90,7 @@ export class LobbyManager {
       this.leave(socket);
       const lobby = new Lobby(this.newCode(), socket.id);
       lobby.allowSolo = !!data?.solo;
+      lobby.debug = !!(data?.solo || data?.debug);
       this.lobbies.set(lobby.code, lobby);
       this.join(socket, lobby, sanitizeName(data?.name));
       if (data?.solo) {
@@ -175,11 +177,16 @@ export class LobbyManager {
     socket.on('p:state', (data) => this.lobbyOf(socket)?.game?.onPlayerState(socket.id, data));
     socket.on('p:interact', (data) => this.lobbyOf(socket)?.game?.onInteract(socket.id, data?.propId));
     socket.on('p:cancel', () => this.lobbyOf(socket)?.game?.onCancel(socket.id));
-    // Debug override: teleport anywhere, only in lobbies with solo debug enabled.
-    socket.on('debug:teleport', (data) => {
+    socket.on('p:cast', (data) => this.lobbyOf(socket)?.game?.onCast(socket.id, data));
+
+    // Debug overrides, only in covens created as solo tests or with ?debug=1.
+    const debugGame = () => {
       const lobby = this.lobbyOf(socket);
-      if (lobby?.allowSolo) lobby.game?.debugTeleport(socket.id, data);
-    });
+      return lobby?.debug ? lobby.game : null;
+    };
+    socket.on('debug:teleport', (data) => debugGame()?.debugTeleport(socket.id, data));
+    socket.on('debug:husk', () => debugGame()?.debugHusk(socket.id));
+    socket.on('debug:wizard', (data) => debugGame()?.debugWizard(socket.id, data?.wizardId));
 
     socket.on('disconnect', () => this.leave(socket));
   }

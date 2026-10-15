@@ -1,13 +1,14 @@
 {
   "name": "six-hearts",
-  "version": "0.2.0",
-  "description": "SIX HEARTS: THE FORBIDDEN CONVERGENCE — 3-4 player co-op survival horror (browser prototype)",
+  "version": "0.3.0",
+  "description": "SIX HEARTS: THE FORBIDDEN CONVERGENCE \u2014 3-4 player co-op survival horror (browser prototype)",
   "type": "module",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "verify:browser": "node scripts/verify-browser.mjs"
   },
   "engines": {
     "node": ">=20"
@@ -20,6 +21,7 @@
     "three": "^0.186.1"
   },
   "devDependencies": {
+    "puppeteer-core": "^25.14.0",
     "socket.io-client": "^4.8.4"
   }
 }

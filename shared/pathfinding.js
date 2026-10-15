@@ -6,7 +6,7 @@ import { TILE, TILE_WALL, tileCenter } from './constants.js';
 export function isPassable(floor, x, y) {
   if (x < 0 || y < 0 || x >= floor.w || y >= floor.h) return false;
   const i = y * floor.w + x;
-  return floor.tiles[i] !== TILE_WALL && !floor.blocked[i];
+  return floor.tiles[i] !== TILE_WALL && !floor.blocked[i] && !floor.dyn?.[i];
 }
 
 class MinHeap {

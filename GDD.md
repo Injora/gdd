@@ -1,5 +1,5 @@
 # SIX HEARTS: THE FORBIDDEN CONVERGENCE
-### Game Design Document · v0.2 (prototype)
+### Game Design Document · v0.3 (prototype)
 
 > *Seven wizards. One mansion. Six hearts that must stop beating.*
 
@@ -56,7 +56,7 @@ The Monster never kills. It **takes** wizards to a cell in the basement. The hor
 - Destroying a Heart takes **2.5 seconds of channelling**. Destroyed Hearts burst into embers and are crossed out in the journal and on the HUD.
 - Examining a **decoy** gives a whisper. (Step 4: it also makes **noise**, which draws the Monster.)
 - **Capture (Step 4):** a Monster catch never kills. The victim is teleported into the **Basement Ritual Cell** behind an iron gate.
-  - A free teammate must reach the gate and **channel for 3 seconds** to break the ritual lock. Everyone inside is freed, and the gate re-seals after 5 seconds.
+  - A free teammate must reach the gate and **channel for 3 seconds** (Soham: 1.5s) to break the ritual lock. *Implemented in Step 3:* the gate swings open for 6 seconds, then re-seals, but never onto someone standing in it. Freeing prisoners arrives with captures in Step 4.
   - Caught players can still talk (proximity voice comes later) and watch through the bars.
   - **If every living wizard is in the Cell at the same time, it is Game Over.**
 - Destroying a Heart enrages the Monster and forces it into a **Hunt** toward the Heart's room.
@@ -84,15 +84,17 @@ The Monster never kills. It **takes** wizards to a cell in the basement. The hor
 
 | # | Wizard | Element | Title | Ability | Effect | CD |
 |---|---|---|---|---|---|---|
-| 1 | **Injorath Blackthorn** | Black | Heir of the Forbidden Arts | **Mental Torture** | 0 dmg. Monster shrieks (distorted audio), **chase interrupted 2s**, **silhouette visible through walls for all players 5s**. | 16s |
-| 2 | **Parthius Pyreborne** | Fire | Infernal Prodigy | **Fireball** | Projectile, **4 chip dmg**, leaves **burning embers = dynamic light for 8s**. | 5s |
-| 3 | **Himandriel Tidecrest** | Water | Lord of the Tidal Arts | **Tidal Wave** | **3 chip dmg**, **slow −40% for 4s**. | 9s |
-| 4 | **Sushantus Thornwick** | Earth | Warden of the Ancient Grounds | **Earth Wall / Tremor** | **3 chip dmg**, spawns a **stone barricade (4 units wide) for 5s** that blocks the Monster (and pathing). | 12s |
-| 5 | **Kartavian Windermere** | Wind | Tempest Sovereign | **Gale Push** | 0 dmg, **knockback 5 units** directly away from the caster. | 8s |
-| 6 | **Soham Everlight** | White | Luminary of the Sacred Order | **Sacred Flash** | **Stun + blind 3.5s** (Monster loses all targets). | 20s |
-| 7 | **Himanshu Nullgrave** | Anti-magic | The Unspellable | **Void Shield** | **Blocks Monster attacks/lunges for 3s** for the caster and allies within **6 units**. | 18s |
+| 1 | **Injorath Blackthorn** | Black | Heir of the Forbidden Arts | **Psychic Torment** | 0 dmg. Violet/crimson distortion wave (22u, aim cone). Monster is **Tormented 2s** (chase interrupted, writhes in place), **shrieks** (scream hook), and is **visible through walls for 6s** to everyone (depth-test-free silhouette + wireframe). Caster gets a chromatic screen-edge pulse. | 16s |
+| 2 | **Parthius Pyreborne** | Fire | Infernal Prodigy | **Ignis Blast** | Projectile (18 u/s, 30u) carrying a moving light through dark corridors. **4 dmg**, then **burning: 1 dmg/s for 3s and −15% speed**. Leaves a **glowing scorch mark (with light) for 4s**. Explodes on walls. | 5s |
+| 3 | **Himandriel Tidecrest** | Water | Lord of the Tidal Arts | **Tidal Surge** | Translucent wave across the floor (10u cone). **3 dmg**, **−40% speed for 4s**. Leaves a **slick puddle (r 3) for 4s**: anything inside is slowed 40% and **turns 50% slower**. | 9s |
+| 4 | **Sushantus Thornwick** | Earth | Warden of the Ancient Grounds | **Terra Spike** | A line of erupting stone spikes, **3 dmg** within 6u. Raises a **3-tile jagged barricade 2 tiles ahead for 5s**. It blocks players, bots and the Monster, and updates pathfinding, so it can seal a corridor or doorway. It never closes on anyone standing in its tiles. | 12s |
+| 5 | **Kartavian Windermere** | Wind | Tempest Sovereign | **Gale Force** | Swirling wind-tunnel ribbons (9u cone). 0 dmg, **knockback 5u** straight away from the caster over 0.3s, plus a 0.4s stagger. The push goes through collision, so **walls and props stop it** and it can never leave the map. | 8s |
+| 6 | **Soham Everlight** | White | Luminary of the Sacred Order | **Sacred Bind** | Golden beam and blinding burst (12u). **Stun + blind 3.5s** (target lost, golden sigil rings orbit it). **Passive:** breaks the Ritual Cell lock **2× faster** (1.5s instead of 3s). | 20s |
+| 7 | **Himanshu Nullgrave** | Anti-magic | The Unspellable | **Aegis of the Void** | Iridescent black-and-silver hexagonal dome on the caster and **every ally within 3u** for **3s**. Monster attacks and lunges against them **fail**: the attacker rebounds (Blocked plus a stagger). | 18s |
 
 Numbers live in `shared/wizards.js` and are the single source of truth for both the server and the HUD.
+
+**Casting:** Left Mouse or Q fires your wizard's spell toward where you're looking. The server checks the cooldown, range, aim cone and line of sight, then broadcasts the cast so every client renders the effect. Your wand kicks back and flares in your element's colour. The HUD dial counts down your cooldown and shows your ability, title and element.
 
 **Role notes:** Black and White are the "save a friend" tools. Fire lights the way and keeps chip damage flowing for Phase III. Earth controls space. Wind is the panic button. Anti-magic makes a rescue run possible. Water sets up every combo.
 
@@ -197,18 +199,21 @@ A tall, emaciated thing in the last lord's funeral clothes. It moves wrong.
 | W A S D / arrows | Move |
 | Shift | Sprint: loud, uses stamina (drains in about 4s, recovers in about 7s) |
 | C (toggle) / Ctrl (hold) | Crouch: slow and quiet |
+| Left Mouse / Q | Cast your wizard's spell |
 | E (hold) | Interact: read, destroy, examine, use stairs, break the lock |
 | F | Wand light on or off. Darkness hides you from the Monster but blinds you too. |
 | J | Journal (the Tome's text and clues) |
 | 1–7 (Phase III) | Archon element radial |
-| Q / RMB (Step 3) | Cast your wizard's ability |
-| M (debug) | Top-down debug map. In solo-debug lobbies, click it to teleport. |
+| M (debug) | Top-down debug map. Click it to teleport. |
+| P (debug) | Spawn or remove the Test Monster Husk |
+| 1–7 (debug) | Hot-swap your wizard (whoever held it gets yours) |
 
 ---
 
 ## 10. Debug & testing affordances
 - **Solo test** button: creates a coven with solo debug enabled and two bot teammates.
-- **Bots:** server-side teammates that follow the nearest human using A*, take the stairs when you change floor, sprint to catch up, and scan the dark when idle. A human picking a bot's wizard makes the bot switch.
+- **Bots:** server-side teammates that follow the nearest human using A*, take the stairs when you change floor, sprint to catch up, and scan the dark when idle. A human picking a bot's wizard makes the bot switch. When a monster is within 16u and their spell is nearly ready, they **move into range and cast it**. Aegis bots shield when the monster closes on someone near them.
+- **Test Monster Husk** (P, debug only): a slow, harmless husk with 100 HP that patrols, shambles after the nearest wizard it can see, and telegraphs a claw swipe (0.7s windup, every 3s). A floating panel shows HP and every status (Stunned, Tormented, Slowed, Burning, Knocked Back, Blocked, Visible Through Walls), along with damage numbers. It crumbles at 0 HP and re-forms after 3s. It uses the same `MonsterBody` as the Step 4 Monster, so every spell verified on it works on the real thing.
 - `?debug=1` shows the FPS, draw call and position HUD, enables the M map, and exposes `window.__game`.
 - `?join=CODE` pre-fills the join code (useful for shareable links).
 
@@ -220,6 +225,6 @@ A tall, emaciated thing in the last lord's funeral clothes. It moves wrong.
 |---|---|---|
 | 1 | Project, server, client shell, GDD/Architecture | ✅ Done |
 | 2 | Mansion generator, rendering, movement, lobby, bots, Tome/Hearts/stairs interactions | ✅ Done |
-| 3 | Wizard abilities: casting, cooldown UI, VFX, server-side effects | ⏳ Next |
-| 4 | Monster AI, post-processing, procedural audio, Cell capture and rescue | ⏳ |
+| 3 | Seven spells (server-side), cooldown HUD, procedural VFX, Earth barricades in collision and pathfinding, gate unlocking, Training Husk, bot casting, debug wizard swap | ✅ Done |
+| 4 | Monster AI, post-processing, procedural audio, Cell capture and rescue | ⏳ Next |
 | 5 | Forbidden Spell, the Archon, Hell Portal, Epilogue | ⏳ |

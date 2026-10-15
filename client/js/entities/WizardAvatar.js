@@ -103,8 +103,12 @@ export class WizardAvatar {
     this.walk = 0;
     this.crouchK = 0;
     this.initialized = false;
+    this.castK = 0;
     this._tipWorld = new THREE.Vector3();
   }
+
+  /** Wand recoil + flare when this wizard casts. */
+  castPulse() { this.castK = 1; }
 
   attachLight(light) {
     this.light = light;
@@ -146,11 +150,12 @@ export class WizardAvatar {
     this.body.rotation.z = sway * 0.03;
     const crouchScale = 1 - this.crouchK * (1 - CROUCH_EYE_HEIGHT / EYE_HEIGHT);
     this.body.scale.y = crouchScale;
-    this.arm.rotation.x = this.pitch;
+    this.castK = Math.max(0, this.castK - dt * 3);
+    this.arm.rotation.x = this.pitch + this.castK * 0.6;
 
     // Channelling makes the wand flare.
     const channel = this.state.ch !== null && this.state.ch !== undefined;
-    const glow = channel ? 1.6 + Math.sin(t * 30) * 0.4 : 1;
+    const glow = (channel ? 1.6 + Math.sin(t * 30) * 0.4 : 1) + this.castK * 3;
     this.tip.scale.setScalar(glow);
 
     const dist = camera.position.distanceTo(this.group.position);
