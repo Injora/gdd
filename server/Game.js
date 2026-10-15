@@ -23,10 +23,22 @@ import { FINALE } from '../shared/finale.js';
 
 const FINALE_BOSS_HP = FINALE.BOSS_HP;
 import { botName } from './names.js';
+import { zoneAt, nearCorridor } from '../shared/roomgraph.js';
 
 const GATE_OPEN_TIME = 6;
 const CAPTURE_DELAY = 1.5; // the victim's capture screen plays before the cage
 const DEMON_LINGER = 3; // a slain Sin's body stays this long
+/**
+ * Step 8: activity pings send the Keeper to investigate (higher outranks lower
+ * while it is already on its way somewhere).
+ */
+export const ACTIVITY = {
+  task: 5, gate: 5, help: 5, // a Sin task step; the cage breaking open; a prisoner's call
+  spell: 4,
+  sprint: 3, lumos: 3, // only near a corridor
+  movement: 2, // (the Keeper's own sense: Monster.senseMovement)
+};
+const ACTIVITY_COOLDOWN = 2; // per wizard, for sprint / Lumos pings
 const PING_COOLDOWN = 3;
 const DEBUG_MODES = ['husk', 'haunt', 'stalk', 'hunt', 'capture', 'auto'];
 
@@ -97,6 +109,8 @@ export class Game {
         noiseAt: 0,
         pingAt: 0,
         actAt: -Infinity, // last cast (gives an invisible wizard away)
+        zone: null, // the room (or -1, a corridor) they were in last tick
+        activityAt: -Infinity, // last sprint / Lumos ping
         impulseUntil: 0, // being yanked by a Sin (the speed check relaxes)
         impulse: null, // bots: { vx, vz, until }
       };
@@ -239,6 +253,7 @@ export class Game {
     this.finale.update(dt);
     this.updateVitals(dt);
     for (const p of this.players.values()) if (p.channel) this.updateChannel(p);
+    this.updateCrossings();
     this.updateCaptures();
     this.updateGate();
     this.io.to(this.room).emit('game:snap', this.snapshot());
@@ -278,11 +293,56 @@ export class Game {
     p.pitch = Math.max(-1.5, Math.min(1.5, finite(Number(d.pitch), 0)));
     p.crouch = !!d.cr;
     p.sprint = !!d.sp;
-    p.light = !!d.li;
+    const lit = !!d.li;
+    // F, near a corridor: the Keeper notices (only real toggles, not the first state we hear).
+    if (p.lightKnown && lit !== p.light) this.nearCorridorActivity(p, 'lumos');
+    p.lightKnown = true;
+    p.light = lit;
     p.moving = !!d.mv;
-    if (p.sprint && p.moving && this.time >= p.noiseAt) {
-      p.noiseAt = this.time + 0.5;
-      this.noise(p, 10, 'sprint');
+    if (p.sprint && p.moving && this.time >= p.noiseAt) this.sprintNoise(p);
+  }
+
+  /** Sprinting is loud: a 10u noise, and an activity ping near a corridor. */
+  sprintNoise(p) {
+    p.noiseAt = this.time + 0.5;
+    this.noise(p, 10, 'sprint');
+    this.nearCorridorActivity(p, 'sprint');
+  }
+
+  nearCorridorActivity(p, kind) {
+    if (this.time < p.activityAt || !nearCorridor(this.map, p.floor, p.x, p.z)) return false;
+    p.activityAt = this.time + ACTIVITY_COOLDOWN;
+    return this.activity(kind, p, p);
+  }
+
+  /**
+   * Step 8: something happened at `at` ({ x, z, floor }). Unless it is inside
+   * a sealed Sin lockdown, the Keeper drops its patrol and comes to look.
+   * @param extra passed to Monster.investigate (look: where it inspects; enter: false to stay at the doorway)
+   */
+  activity(kind, at, by = null, extra = {}) {
+    const m = this.monster;
+    if (!m || (by && this.inArena(by))) return false;
+    const room = zoneAt(this.map, at.floor, at.x, at.z);
+    if (room >= 0 && this.arenaRoom(room)) return false;
+    this.lastActivity = { kind, x: at.x, z: at.z, floor: at.floor, roomId: room, by: by?.id ?? null, at: this.time };
+    return m.investigate({ x: at.x, z: at.z, floor: at.floor, kind, priority: ACTIVITY[kind] ?? 1, by: by?.id, ...extra });
+  }
+
+  /** Doorway crossings: a wizard stepping into another room (Monster.crossed biases its patrol there). */
+  updateCrossings() {
+    for (const p of this.players.values()) {
+      if (p.captured || p.capturing) { p.zone = null; continue; }
+      const zone = zoneAt(this.map, p.floor, p.x, p.z);
+      const was = p.zone;
+      p.zone = zone;
+      if (was === null || was === undefined || zone === was || zone < 0 || this.inArena(p)) continue;
+      // The doorway they came through: the room's door nearest to them.
+      let door = null;
+      for (const d of this.monster?.rooms[p.floor].doors.get(zone) ?? []) {
+        if (!door || Math.hypot(d.x - p.x, d.z - p.z) < Math.hypot(door.x - p.x, door.z - p.z)) door = d;
+      }
+      this.monster?.crossed(p, zone, door ?? { x: p.x, z: p.z });
     }
   }
 
@@ -461,23 +521,25 @@ export class Game {
       const placed = heart.tasks.filter((id) => this.propState[id]?.done).length;
       this.propState[prop.id] = { count: placed };
       this.emitAll({ type: 'task', propId: prop.id, task: heart.sin, by: p.name, state: this.propState[prop.id], progress: placed, of: TASK_STEPS, sink: true });
+      this.activity('task', prop, p);
     } else if (T.carry) {
       // Take the ingot / the platter (one at a time).
       if (st.done || st.taken || p.carry) return;
       this.propState[prop.id] = { taken: true };
       this.setCarry(p, { kind: T.carry, from: prop.id });
       this.emitAll({ type: 'task', propId: prop.id, task: heart.sin, by: p.name, state: this.propState[prop.id], progress: this.tasksDone(heart), of: TASK_STEPS, took: true });
+      this.activity('task', prop, p);
       return;
     } else {
       if (st.done) return;
       this.propState[prop.id] = { done: true };
+      this.activity('task', prop, p);
     }
     const done = this.tasksDone(heart);
     this.emitAll({ type: 'task', propId: stepId, task: heart.sin, by: p.name, state: this.propState[stepId], progress: done, of: TASK_STEPS });
     if (done < TASK_STEPS) return;
     this.propState[heart.propId] = { unsealed: true };
     this.emitAll({ type: 'heart:unsealed', propId: heart.propId, name: heart.name, room: heart.roomName, sin: heart.sin, by: p.name });
-    this.noise(p, 12, 'decoy'); // the seal breaks loudly: it comes to look
   }
 
   /** What p carries (an ingot, a platter), or null; everyone sees it in their hands. */
@@ -779,6 +841,8 @@ export class Game {
     this.propState[gateId] = { open: true };
     this.gateCloseAt = this.time + GATE_OPEN_TIME;
     this.emitAll({ type: 'gate', propId: gateId, open: true, by });
+    const gate = this.props[gateId];
+    this.activity('gate', gate.front ? { ...gate.front, floor: gate.floor } : gate, rescuer ?? null, { look: gate.front ?? gate, enter: false });
     const freed = this.prisoners();
     for (const p of freed) p.captured = false;
     if (freed.length) this.emitAll({ type: 'freed', ids: freed.map((p) => p.id), names: freed.map((p) => p.name), by });
@@ -1004,6 +1068,11 @@ export class Game {
     if (!p || this.time < p.pingAt) return;
     p.pingAt = this.time + PING_COOLDOWN;
     this.emitAll({ type: 'ping', id: p.id, name: p.name, floor: p.floor, x: r2(p.x), z: r2(p.z), captured: p.captured });
+    if (p.captured) {
+      // A prisoner's cry carries: it comes to the cage to look in (it can't go inside).
+      const gate = this.props[this.map.ids.gate];
+      this.activity('help', { ...(gate.front ?? gate), floor: gate.floor }, null, { look: gate.front ?? gate, enter: false });
+    }
   }
 
   /** Debug P: cycle Husk → Haunt → Stalk → Hunt → Capture test → Auto. */

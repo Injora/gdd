@@ -1,7 +1,7 @@
 {
-  "name": "seven-hearts",
-  "version": "3.0.0",
-  "description": "SEVEN HEARTS: THE FORBIDDEN CONVERGENCE \u2014 3-4 player co-op survival horror (browser prototype)",
+  "name": "horcrux",
+  "version": "3.1.0",
+  "description": "HorCrux \u2014 3-4 player co-op survival horror (browser prototype)",
   "type": "module",
   "main": "server.js",
   "scripts": {

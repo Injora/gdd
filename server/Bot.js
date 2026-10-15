@@ -126,7 +126,7 @@ export class Bot {
   hide(dt, t) {
     const g = this.game, p = this.p, m = g.monster;
     const invisible = g.spells.hasBuff(p, 'invis');
-    const prowling = m && !m.hidden && m.floor === p.floor && ['stalking', 'searching'].includes(m.state) && g.phase !== PHASE.TOME;
+    const prowling = m && !m.hidden && m.floor === p.floor && ['stalking', 'searching', 'investigating'].includes(m.state) && g.phase !== PHASE.TOME;
     const d = prowling ? Math.hypot(m.x - p.x, m.z - p.z) : Infinity;
     if (!invisible && d < HIDE_RADIUS && !m.wouldSee(p)) g.onInvis(p.id);
     else if (invisible && d > HIDE_RADIUS + 12 && t >= (this.hideToggleAt ?? 0)) {
@@ -325,10 +325,7 @@ export class Bot {
     p.sprint = far;
     p.yaw = turnToward(p.yaw, yawFromDir(dx, dz), dt * 7);
     p.pitch *= 0.9;
-    if (far && t >= p.noiseAt) {
-      p.noiseAt = t + 0.5;
-      g.noise(p, 10, 'sprint');
-    }
+    if (far && t >= p.noiseAt) g.sprintNoise(p);
 
     // Unstick: if we've barely moved in a second, throw the path away.
     if (t >= this.stuckCheckAt) {

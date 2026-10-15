@@ -1,4 +1,4 @@
-// SEVEN HEARTS: THE FORBIDDEN CONVERGENCE — game server.
+// HorCrux — game server.
 // Serves the browser client and runs authoritative lobbies/games over Socket.io.
 
 import express from 'express';
@@ -39,7 +39,7 @@ if (isMain) {
     throw err;
   });
   httpServer.listen(PORT, () => {
-    console.log(`\n  SEVEN HEARTS server listening`);
+    console.log(`\n  HorCrux server listening`);
     console.log(`  Local:   http://localhost:${PORT}`);
     for (const addrs of Object.values(networkInterfaces())) {
       for (const a of addrs ?? []) {

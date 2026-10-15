@@ -116,6 +116,7 @@ export class SpellSystem {
     }
     this.game.emitAll(event);
     this.game.noise?.(p, 14, 'spell'); // magic is loud
+    this.game.activity?.('spell', p, p); // ...and it comes to see what it was
     return { ok: true, event, cooldown };
   }
 

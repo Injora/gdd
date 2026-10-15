@@ -20,6 +20,8 @@
 //            teleport there), V as an infinite toggle, the 5-minute / once-
 //            per-game Ultimate (EXPENDED), Sin telegraphs, enrage, damage
 //            numbers and the death dissolve, the footstep proximity bar.
+//   Step 8   activity: a spell sends the Keeper marching to your room (loud
+//            footsteps first); V + standing still survives its inspection.
 // Screenshots land in ./verify-output/ (git-ignored).
 //
 // Usage: npm run verify:browser    (CHROME_PATH=/path/to/chrome to override)
@@ -30,6 +32,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createGameServer } from '../server.js';
 import { PHASE } from '../shared/constants.js';
+import { oneRoomAway } from '../shared/roomgraph.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = path.join(root, 'verify-output');
@@ -758,6 +761,71 @@ async function main() {
     check(bar, 'no footstep proximity bar on the HUD');
     await shot('minimap-2-keeper-footstep-ripples');
     console.log(`Keeper footsteps: ${rippled ? 'ripples on the minimap, the floor trembles' : 'none heard'}; HUD proximity bar ${bar}`);
+
+    // ------------------------------------------------------------------ Step 8: activity
+    console.log('\n— Step 8: the Keeper comes when you do something —');
+    {
+      const g = liveGame();
+      const me = g.players.get(self0);
+      const m = g.monster;
+      // The bots wait in the basement, quietly (their sprinting would be activity too); the Keeper patrols
+      // well away (not 1 room away, not in earshot of the cast).
+      for (const p of g.players.values()) {
+        if (!p.isBot) continue;
+        p.activityAt = Infinity;
+        const tl = m.tiles[g.map.cell.floor].find((t) => t.roomId !== g.map.cell.roomId && t.roomId >= 0);
+        g.teleport(p, tl.x, tl.z, tl.floor, 0);
+      }
+      // The spot (not 1 room away, out of earshot) whose walk to the player is nearest 30 units.
+      let spot = null, best = Infinity;
+      for (const tl of m.tiles[me.floor]) {
+        if (tl.roomId < 0 || Math.hypot(tl.x - me.x, tl.z - me.z) < 18) continue;
+        if (oneRoomAway(m.rooms, g.map, me.floor, tl.x, tl.z, me.x, me.z, 18)) continue;
+        m.place(tl);
+        const d = m.routeLength({ x: me.x, z: me.z, floor: me.floor });
+        if (d < 1e6 && Math.abs(d - 30) < best) { best = Math.abs(d - 30); spot = tl; }
+      }
+      if (!check(!!spot, 'no patrol spot far from the player')) throw new Error('no patrol spot');
+      m.place(spot);
+      m.hidden = false;
+      m.debugHeld = false;
+      m.setState('stalking');
+      m.goal = { x: spot.x, z: spot.z, floor: spot.floor, peek: false };
+      m.goalUntil = Infinity;
+    }
+    await page.evaluate(() => { window.__events.length = 0; });
+    await page.keyboard.press('Digit1');
+    await page.keyboard.press('KeyQ'); // a spell: activity
+    const investigate = await waitEvent('monster:investigate', 3000);
+    check(investigate?.kind === 'spell', `a spell did not send the Keeper to investigate (${JSON.stringify(investigate)})`);
+    await page.keyboard.press('KeyV'); // hide BEFORE it gets here…
+    await page.waitForFunction(() => window.__game.invisOn, { timeout: 3000 }).catch(() => failures.push('V did not turn on before the Keeper arrived'));
+    const heard = await page.waitForFunction(() => document.getElementById('hud-footsteps').classList.contains('show') && window.__game.monsters.get('amalgam')?.snap.ip === 'approach',
+      { timeout: 12000 }).then(() => true).catch(() => false);
+    check(heard, 'the Keeper\'s march toward the room was not heard');
+    const inspecting = await page.waitForFunction(() => window.__game.monsters.get('amalgam')?.snap.ip === 'inspect', { timeout: 25000 }).then(() => true).catch(() => false);
+    if (inspecting) {
+      await faceAmalgam();
+      await sleep(300);
+      await shot('activity-1-keeper-inspects-the-room');
+    }
+    // Done looking: it walks out (or straight off to the next thing it heard, e.g. a bot sprinting upstairs).
+    const walkedOut = await page.waitForFunction(() => window.__game.monsters.get('amalgam')?.snap.ip !== 'inspect', { timeout: 15000 }).then(() => true).catch(() => false);
+    const survived = !liveGame().players.get(self0).captured && liveGame().monster.targetId !== self0;
+    check(investigate && inspecting && walkedOut && survived, `V + still did not survive the inspection (inspecting ${inspecting}, walked out ${walkedOut}, survived ${survived})`);
+    console.log(`spell → investigating (eta ${investigate?.eta}s) · footsteps heard ${heard} · it looked around ${inspecting} · left without you ${survived}`);
+    await page.keyboard.press('KeyV'); // visible again
+    {
+      // The bots come back up beside the player (the chant needs every wizard at the altar).
+      const g = liveGame();
+      const me = g.players.get(self0);
+      for (const p of g.players.values()) {
+        if (!p.isBot) continue;
+        p.activityAt = 0;
+        g.teleport(p, me.x, me.z, me.floor, me.yaw);
+      }
+    }
+    await sleep(400);
 
     const audio = await page.evaluate(() => ({ state: window.__game.audio.ctx?.state, played: window.__game.audio.played }));
     console.log(`audio: context ${audio.state}, ${audio.played} sounds synthesised`);

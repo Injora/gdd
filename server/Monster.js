@@ -28,12 +28,27 @@
 // While anyone is held in the Cage, stalking goals favour the basement
 // (guarding the prisoner) without camping the gate. It can never enter a
 // Sin's locked arena.
+//
+// Activity (Step 8). It hunts down whatever the coven DOES:
+//   - Activity pings (Game.activity): a Sin task step, a spell, sprinting or
+//     Lumos near a corridor, the cage gate breaking, a prisoner's call (G).
+//   - Movement 1 room away: anyone moving in a room next to its own (the room
+//     graph, shared/roomgraph.js) or within ADJACENT_RANGE units.
+//   Either sends it from its patrol into INVESTIGATING: a brisk march to the
+//   room's doorway (paced so its footsteps are heard for at least
+//   INVESTIGATE_WARN seconds), in toward the spot, a 3–4s look around, and
+//   back out. Its senses never change: whoever it sees is locked on, an
+//   invisible wizard who moves (or keeps working a task) within INVIS.sense
+//   is sensed. Toggle V before it steps in and stand completely still, and it
+//   leaves without you.
+//   - Crossing a doorway into another room only biases its patrol there.
 
 import { MonsterBody } from './MonsterBody.js';
 import { findPath, pathToWorld, isPassable } from '../shared/pathfinding.js';
 import { lineOfSight, moveCircle } from '../shared/collision.js';
 import { stairToward } from '../shared/nav.js';
 import { PHASE, TILE_WALL, TILE_DOOR, HP, LUMOS, INVIS, tileCenter, worldToTile } from '../shared/constants.js';
+import { buildRoomGraph, zoneAt, oneRoomAway } from '../shared/roomgraph.js';
 import { FINALE } from '../shared/finale.js';
 
 export const AI = {
@@ -100,6 +115,17 @@ export const AI = {
   GUARD_CHANCE: 0.65, // chance a stalking goal pulls it down to the basement
   GUARD_STAY_CHANCE: 0.85, // ...and that it keeps prowling once it is down there
   GUARD_GATE_DIST: 6,
+  // Step 8: activity and room movement
+  INVESTIGATE_SPEED: 4.2, // the brisk march toward activity
+  INVESTIGATE_WARN: 4, // at least this many seconds of footsteps before it reaches the doorway
+  INVESTIGATE_MIN_SPEED: 1.6, // (it slows to keep that window, never below this)
+  INVESTIGATE_ENTER: 1.8, // it stops this far from the activity's spot to look around
+  INSPECT_MIN: 3,
+  INSPECT_MAX: 4,
+  INVESTIGATE_MAX: 40, // gives up on an unreachable room
+  ADJACENT_RANGE: 18, // "1 room away" also means within this many units
+  MOVE_SENSE_COOLDOWN: 3, // per wizard, between movement pings
+  OVERRIDE_AFTER: 8, // a lower-priority ping can redirect its march after this long (not once it is in the room)
 };
 
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -143,6 +169,10 @@ export class Monster extends MonsterBody {
     this.tauntUntil = 0;
     this.spotting = new Map(); // playerId -> seconds in continuous sight
     this.blindUntil = 0;
+    this.rooms = buildRoomGraph(game.map); // Step 8: who is "1 room away"
+    this.ping = null; // the activity it is investigating
+    this.movedSensedAt = new Map(); // playerId -> last movement ping
+    this.disturbance = null; // the last doorway someone crossed (biases its patrol)
   }
 
   /** Unkillable until the Hearts are gone (as the Unbound boss it has HP). */
@@ -177,6 +207,7 @@ export class Monster extends MonsterBody {
   // ---- helpers ------------------------------------------------------------------
 
   setState(state) {
+    if (state !== 'investigating') this.ping = null;
     this.state = state;
     this.stateAt = this.t;
     this.path = [];
@@ -467,7 +498,7 @@ export class Monster extends MonsterBody {
 
   /** A noise at a player's position; `radius` = how far it carries (Infinity = everywhere). */
   hear(p, radius, kind) {
-    if (!['stalking', 'searching'].includes(this.state) || this.hidden || !this.canAct()) return;
+    if (!['stalking', 'searching', 'investigating'].includes(this.state) || this.hidden || !this.canAct()) return;
     const sameFloor = p.floor === this.floor;
     if (kind === 'heart') {
       // A Heart died: it goes to see (it never knows who).
@@ -489,13 +520,14 @@ export class Monster extends MonsterBody {
    * walks right past.
    */
   updateSenses(dt) {
-    if (this.hidden || !['stalking', 'searching'].includes(this.state) || !this.canAct()) return;
+    if (this.hidden || !['stalking', 'searching', 'investigating'].includes(this.state) || !this.canAct()) return;
     for (const p of this.freePlayers()) {
       if (p.floor !== this.floor) continue;
       if (this.isInvisible(p)) {
         this.spotting.delete(p.id);
         const d = this.dist(p);
-        const acted = this.t - (p.actAt ?? -Infinity) < 0.6;
+        // Casting, or still working a task / a lock with your hands, gives you away too.
+        const acted = this.t - (p.actAt ?? -Infinity) < 0.6 || !!p.channel;
         if (d <= INVIS.sense && (p.moving || acted) && this.t >= this.blindUntil) return this.hunt(p, 'sensed');
         continue;
       }
@@ -635,6 +667,7 @@ export class Monster extends MonsterBody {
     }
     this.updateStares(dt);
     this.updateSenses(dt);
+    this.senseMovement();
     if (!this.canAct() && this.state !== 'retreating' && this.state !== 'dormant') {
       this.action = this.isConfused() ? 'confused' : null;
       this.attack = null;
@@ -646,6 +679,7 @@ export class Monster extends MonsterBody {
       case 'stalking': return this.updateStalking(dt);
       case 'hunting': return this.updateHunting(dt);
       case 'searching': return this.updateSearching(dt);
+      case 'investigating': return this.updateInvestigating(dt);
       case 'retreating': return this.updateRetreating(dt);
     }
   }
@@ -937,6 +971,147 @@ export class Monster extends MonsterBody {
     if (this.travelTo(this.searchPoints[0], AI.SEARCH_SPEED, dt) < 1.2) this.searchPoints.shift();
   }
 
+  // ---- Step 8: activity, room movement, investigation ---------------------------------
+
+  /** Patrolling (not locked on, not busy with something louder). */
+  idle() {
+    return !this.hidden && this.canAct() && ['stalking', 'searching'].includes(this.state) && this.game.phase !== PHASE.TOME;
+  }
+
+  /**
+   * Something happened at `ping` = { x, z, floor, kind, priority, by?, look? }:
+   * drop the patrol and go and check that room. Returns true if it goes.
+   */
+  investigate(ping) {
+    if (this.hidden || !this.canAct() || this.game.phase === PHASE.TOME) return false;
+    if (!['stalking', 'searching', 'investigating'].includes(this.state)) return false;
+    const roomId = zoneAt(this.game.map, ping.floor, ping.x, ping.z);
+    if (roomId >= 0 && this.game.arenaRoom?.(roomId)) return false; // a sealed lockdown: none of its business
+    const cur = this.ping;
+    if (this.state === 'investigating' && cur) {
+      if (roomId >= 0 && roomId === cur.roomId && ping.floor === cur.floor) {
+        // Same room: it just listens harder for the new spot.
+        Object.assign(cur, { x: ping.x, z: ping.z, look: ping.look ?? { x: ping.x, z: ping.z }, kind: ping.kind, by: ping.by ?? cur.by });
+        cur.priority = Math.max(cur.priority, ping.priority);
+        return true;
+      }
+      // Something quieter can turn it while it is still on its way (after a while), never once it has stepped in.
+      if (ping.priority < cur.priority && (cur.stage !== 'approach' || this.t - cur.at < AI.OVERRIDE_AFTER)) return false;
+    }
+    const entry = this.entryFor(ping, roomId);
+    const route = this.routeLength(entry);
+    this.setState('investigating');
+    this.targetId = null;
+    this.ping = {
+      x: ping.x, z: ping.z, floor: ping.floor, roomId, kind: ping.kind, priority: ping.priority, by: ping.by ?? null,
+      look: ping.look ?? { x: ping.x, z: ping.z }, enter: ping.enter !== false, at: this.t, entry, stage: 'approach', stageAt: this.t,
+      // Paced: its footsteps are heard for at least INVESTIGATE_WARN seconds before it reaches the doorway.
+      speed: Math.max(AI.INVESTIGATE_MIN_SPEED, Math.min(AI.INVESTIGATE_SPEED, route / AI.INVESTIGATE_WARN)),
+    };
+    this.game.emitAll({
+      type: 'monster:investigate', kind: ping.kind, floor: ping.floor, x: r2(ping.x), z: r2(ping.z), roomId,
+      room: roomId >= 0 ? this.game.map.rooms[roomId].name : null, by: ping.by ?? null,
+      eta: r2(route / this.ping.speed),
+    });
+    return true;
+  }
+
+  /** The doorway it will come through: the room's door nearest to it (or the spot itself, in a corridor). */
+  entryFor(ping, roomId) {
+    if (roomId < 0) return { x: ping.x, z: ping.z, floor: ping.floor };
+    const doors = this.rooms[ping.floor].doors.get(roomId) ?? [];
+    let best = null;
+    for (const d of doors) {
+      const score = ping.floor === this.floor ? Math.hypot(d.x - this.x, d.z - this.z) : Math.hypot(d.x - ping.x, d.z - ping.z);
+      if (!best || score < best.score) best = { d, score };
+    }
+    return best ? { x: best.d.x, z: best.d.z, floor: ping.floor, door: true } : { x: ping.x, z: ping.z, floor: ping.floor };
+  }
+
+  /** Walking distance to `pt` on its own floor (Infinity on another floor or unreachable). */
+  routeLength(pt) {
+    if (pt.floor !== this.floor) return Infinity;
+    const tiles = findPath(this.game.map.floors[this.floor], worldToTile(this.x), worldToTile(this.z), worldToTile(pt.x), worldToTile(pt.z), 6000);
+    if (!tiles?.length) return Math.hypot(pt.x - this.x, pt.z - this.z);
+    let len = 0;
+    const w = pathToWorld(tiles);
+    for (let i = 1; i < w.length; i++) len += Math.hypot(w[i].x - w[i - 1].x, w[i].z - w[i - 1].z);
+    return len + Math.hypot(w[0].x - this.x, w[0].z - this.z);
+  }
+
+  /** March to the doorway, step in toward the spot, look around, leave. */
+  updateInvestigating(dt) {
+    const pg = this.ping;
+    const t = this.t;
+    if (!pg || t - pg.at > AI.INVESTIGATE_MAX) return this.endInvestigation();
+    const stage = (s) => { pg.stage = s; pg.stageAt = t; };
+    switch (pg.stage) {
+      case 'approach': {
+        this.action = null;
+        if (this.travelTo(pg.entry, pg.speed, dt) < 0.8) {
+          if (pg.enter) return stage('enter');
+          stage('inspect'); // (the cage: it looks in from the gate)
+          pg.until = t + rand(AI.INSPECT_MIN, AI.INSPECT_MAX);
+        }
+        return;
+      }
+      case 'enter': {
+        const left = this.travelTo({ ...pg.look, floor: pg.floor }, AI.STALK_SPEED, dt);
+        if (left < AI.INVESTIGATE_ENTER || t - pg.stageAt > 8) {
+          stage('inspect');
+          pg.until = t + rand(AI.INSPECT_MIN, AI.INSPECT_MAX);
+        }
+        return;
+      }
+      case 'inspect': {
+        // It looks around the spot: its head (and its sight) sweep the room.
+        this.action = 'listen';
+        pg.baseYaw ??= Math.atan2(-(pg.look.x - this.x), -(pg.look.z - this.z));
+        this.yaw = pg.baseYaw + Math.sin((t - pg.stageAt) * 1.7) * 1.2;
+        if (t >= pg.until) this.endInvestigation();
+        return;
+      }
+      default: return this.endInvestigation();
+    }
+  }
+
+  /** Nothing there: back out the way it came, and on with its patrol. */
+  endInvestigation() {
+    const pg = this.ping;
+    this.ping = null;
+    this.setState('stalking');
+    if (pg?.entry && pg.entry.floor === this.floor) {
+      this.goal = { x: pg.entry.x, z: pg.entry.z, floor: pg.entry.floor, peek: false };
+      this.goalUntil = this.t + 8;
+    }
+    this.lastInvestigation = { roomId: pg?.roomId ?? -1, floor: pg?.floor, at: this.t, stage: pg?.stage };
+  }
+
+  /** Anyone moving 1 room away (or within ADJACENT_RANGE) is heard: it goes to check. */
+  senseMovement() {
+    if (!this.idle()) return;
+    for (const p of this.freePlayers()) {
+      if (p.floor !== this.floor || !p.moving || this.game.inArena?.(p)) continue;
+      if (this.t - (this.movedSensedAt.get(p.id) ?? -Infinity) < AI.MOVE_SENSE_COOLDOWN) continue;
+      if (!oneRoomAway(this.rooms, this.game.map, this.floor, this.x, this.z, p.x, p.z, AI.ADJACENT_RANGE)) continue;
+      this.movedSensedAt.set(p.id, this.t);
+      if (this.investigate({ x: p.x, z: p.z, floor: p.floor, kind: 'movement', priority: 2, by: p.id })) return;
+    }
+  }
+
+  /**
+   * A wizard crossed a doorway into another room: a faint disturbance there.
+   * If it is patrolling this floor, it turns its patrol toward that room.
+   */
+  crossed(p, roomId, door) {
+    this.disturbance = { roomId, floor: p.floor, x: door.x, z: door.z, at: this.t, by: p.id };
+    if (this.state !== 'stalking' || this.hidden || !this.canAct() || p.floor !== this.floor) return false;
+    this.goal = { x: door.x, z: door.z, floor: p.floor, peek: true, disturbance: true };
+    this.goalUntil = this.t + 10;
+    this.peekUntil = 0;
+    return true;
+  }
+
   updateRetreating(dt) {
     const t = this.t;
     if (!this.hidden) {
@@ -957,6 +1132,7 @@ export class Monster extends MonsterBody {
       ...super.snapshot(),
       state: this.state,
       hid: this.hidden,
+      ...(this.ping ? { ip: this.ping.stage } : {}),
       tg: this.targetId,
       x: r2(this.x),
       z: r2(this.z),

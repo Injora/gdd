@@ -1,4 +1,4 @@
-# Architecture — SEVEN HEARTS: THE FORBIDDEN CONVERGENCE (v3.0)
+# Architecture — HorCrux (v3.0)
 
 ## Quick start
 
@@ -89,6 +89,7 @@ test/
   monster.test.js         AI states, haunting, noise, stare, locked chase, immunity, capped CC, capture → Cage, rescue, game over, bot rescue, debug
   keeper.test.js          Keeper rules: unkillable, V before sight + still, moving/casting within 14u, V fails in its sight, V an infinite toggle, Dawn/Mind Fracture/Union break the lock, 1.5s capture → cage, bots hide
   hearts.test.js          Sin tasks in the Sin's room, carry tasks (one at a time, returned on capture), lockdown (no exit, Keeper out), scaled HP, each Sin's kit + telegraphs, Pride reflects, enrage + strip, coven scaling, slay → Heart destroyed + doors open, withdrawal, all 7 → Convergence, debug L
+  activity.test.js        the room graph; a task step / a spell / movement 1 room away → investigating that room (routed to its doorway); lockdowns ignored; crossings bend the patrol; V + still survives the inspection; moving / working the task / visible → locked on; every ping kind
   step7.test.js           the Tome's Hearts, heart status + tracker, billboard prompts agree with the server, footstep falloff
   _tasks.js, _seeds.js    helpers: do a Heart's tasks (incl. carry); a roomy seed
   input.test.js           1–4 / R only select; the trigger fires the selection; Archon Masteries
@@ -214,6 +215,15 @@ SpellSystem.update(dt): projectiles (substepped, impact on monster/solid) → `i
   - **Controller buffs:** the controller takes `speedMul`, `noStamina` and `ignoreProps`.
   - **Server speed check:** validation widens with active speed buffs.
   - **Lumos:** retunes the single shadowed wand spotlight (angle 0.44→0.85, range 28, intensity ×2.4), so no lights are added.
+
+### Activity & room movement (Step 8)
+- **`shared/roomgraph.js`:** `buildRoomGraph(map)` per floor: `doors` (roomId → doorway tiles leading in) and `adj` (roomId → rooms reachable through doorways / corridor tiles, i.e. `roomId -1`, within `HOPS` = 8 tiles, never through another room). `zoneAt()`, `roomsAround()`, `oneRoomAway(…, range)` (adjacent room, same room, or within `range` units) and `nearCorridor()` (2 tiles). Built once by the `Monster` (`this.rooms`).
+- **Pings:** `Game.activity(kind, at, by, extra)` drops anything from or inside a sealed arena, records `lastActivity` and calls `Monster.investigate({ x, z, floor, kind, priority: ACTIVITY[kind], by, look?, enter? })`. Sources: `completeTask` (every step, incl. take / place), `SpellSystem.cast` (after the old 14u noise, which still locks on to a visible caster that close), `sprintNoise()` (humans and bots) and Lumos toggles via `nearCorridorActivity()` (2s per wizard; the first state message is not a toggle), `openGate` and a prisoner's `onPing` (`enter: false`, looking in from the gate). The unseal's old 12u "decoy" noise is gone (the step's ping covers it).
+- **`Monster.investigate()`:** allowed from `stalking` / `searching` / `investigating` (not hunting, hidden, held, or in Phase I). Same room: it just refreshes the spot. A lower priority can't redirect it for `OVERRIDE_AFTER` (8s). It picks the room's doorway nearest to it (`entryFor`), measures the A* route (`routeLength`) and paces its march so it lasts at least `INVESTIGATE_WARN` (4s): `speed = clamp(route / 4, 1.6, 4.2)`. Emits `monster:investigate { kind, roomId, room, by, eta }`.
+- **`updateInvestigating()`:** `approach` (travelTo the doorway) → `enter` (at stalk speed toward `look`, stopping 1.8u off) → `inspect` (`INSPECT_MIN`–`MAX` s, its yaw sweeping ±1.2 rad around the spot) → `endInvestigation()` (back to stalking with the doorway as its goal; `lastInvestigation`). `updateSenses()` runs in this state too: sight locks on; an invisible wizard within `INVIS.sense` who moves, casts or is channelling (`p.channel`) is sensed.
+- **Movement:** `senseMovement()` (only while idle) pings `movement` (priority 2) for anyone on its floor moving `oneRoomAway` (18u), once per `MOVE_SENSE_COOLDOWN` (3s) per wizard.
+- **Crossings:** `Game.updateCrossings()` tracks `p.zone` each tick; entering a different room calls `Monster.crossed(p, roomId, door)`, which sets `disturbance` and, if it is stalking on that floor, a `{ disturbance, peek }` patrol goal at that doorway.
+- **Client:** the snapshot carries `ip` (the investigation stage); `AmalgamAvatar` walks and steps like a hunt during `approach`, so the footsteps (and the HUD bar / minimap ripples) are heavy and loud. Bots treat `investigating` as prowling and hide.
 
 ### The Amalgam (Step 4)
 
@@ -359,5 +369,6 @@ SpellSystem.update(dt): projectiles (substepped, impact on monster/solid) → `i
 | **4 · Monster** | ✅ Done. See *The Amalgam* above. |
 | **5 · Archon** | ✅ Done. See *The finale* above. |
 | **6 · v2.0** | ✅ Done. See the Amalgam notes above. |
+| **8 · v3.1** | ✅ Done. See *Activity & room movement* above. |
 | **7 · v3.0** | ✅ Done. See *Hearts, Sin tasks and the Sins*, *The Disillusionment Charm*, *The client (Steps 6–7)* and *The grimoire* above. |
 | **Next** | Mixing by ear with real players, real-multiplayer balance of the sight-lock, mobile controls. |

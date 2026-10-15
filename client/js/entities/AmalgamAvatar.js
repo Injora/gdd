@@ -330,7 +330,8 @@ export class AmalgamAvatar {
     const s = this.snap;
     const forced = this.forced && performance.now() < this.forced.until ? this.forced.pose : null;
     const act = forced ?? s.act;
-    const hunting = s.state === 'hunting';
+    // The march toward activity (Step 8) is as heavy and loud as a hunt.
+    const hunting = s.state === 'hunting' || (s.state === 'investigating' && s.ip === 'approach');
     const twitching = this.has('stun') || this.has('torment') || this.has('confused');
     const moving = s.mv && !forced;
 

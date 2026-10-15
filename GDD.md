@@ -1,4 +1,4 @@
-# SEVEN HEARTS: THE FORBIDDEN CONVERGENCE
+# HorCrux
 ### Game Design Document · v3.0 (prototype)
 
 > *Seven wizards. Seven Sins. Seven hearts that must stop beating.*
@@ -8,6 +8,8 @@
 ## 1. High concept
 
 A 3–4 player online co-op survival horror game played in first person in the browser. A coven of wizards enters a procedurally generated Gothic mansion in near-total darkness. They find and read a forbidden Tome, which wakes the mansion's Keeper (the Monster), an unkillable stalker that locks on to the first wizard it sees. Then, across two stories, they hunt down seven Hearts, one in each Sin's room, do the Sin's three-part task that seals each one, and slay the Demon of the Seven Deadly Sins that erupts from it, locked in a room with it. Finally they cast a spell that fuses their bodies into a single seven-element being, the **Archon**, to drag the Monster into Hell.
+
+The mansion's last lord cut his heart into seven and hid each piece in a thing his family loved: seven **horcruxes** that keep him, and his Keeper, from ever being unmade. Destroying them is the whole game.
 
 The Monster never kills. It **takes** wizards to an iron cage under the basement. The horror comes from slowly losing teammates, and the hope comes from going back down into the dark to get them.
 
@@ -188,7 +190,20 @@ Every wizard has **three attacks (1–3)**, **one mobility / utility spell (4)**
      - **Devil Union (Anti-magic):** **30s** of complete immunity for the coven; if it touches an immune wizard it recoils and freezes for **6s**.
      - When one lands, its lock is wiped (and it is blind for 1.5s after it is released). Get out of its sight, cast V, and hold still.
   - A taunt (Bull Thrust) can still redirect a lock onto the wizard who struck it.
-- **Bots** hide too: with the Keeper prowling within 18u and not looking at them, they toggle V on and freeze until it has passed (and off again once it is 30u away). They save Dawn, Mind Fracture and Devil Union to rescue a teammate it is about to catch.
+### It comes when you DO something (v3.1)
+- **Activity pings.** Each of these, anywhere outside a sealed Sin lockdown, sends the Keeper to that room:
+  1. completing any step of a Sin task (1/3, 2/3, 3/3; taking and placing an ingot or platter count);
+  2. casting any spell;
+  3. sprinting, or toggling Lumos (F), in or within 2 tiles of a corridor / doorway;
+  4. the cage gate breaking open, or a prisoner calling for help (G).
+- **Movement 1 room away.** Anyone moving in a room next to its own (a shared doorway or a short hall: the room graph) or within **18 units** is heard, and it goes to look.
+- **Crossing a doorway** into another room leaves a faint disturbance there: if it is patrolling that floor, its patrol bends toward that doorway (it doesn't rush).
+- **The investigation.** It drops its patrol and **marches to the room's doorway at 4.2 u/s**, its footsteps loud and heavy (the HUD bar and the minimap ripples climb with them). It is paced so you hear it coming for **at least 4 seconds** (closer, it walks slower; from 28u away that's about 7s). It steps in toward the spot (the task object, the caster), **looks around for 3–4 seconds**, and walks back out.
+  - A louder ping (a task beats a spell beats sprinting beats movement) redirects it on the way; a quieter one doesn't, for 8s.
+  - At the cage it never goes in: it looks in from the gate.
+- **Hide or be caught.** Hear it coming, tap **V** *before* it walks in, and stand **completely still**: it looks around the task and leaves. Keep moving, keep working the task (hands on it count), stay visible, or press V once it is through the door and sees you (the charm fails): it locks on, and its catch is a capture.
+
+- **Bots** hide too: with the Keeper prowling (or investigating) within 18u and not looking at them, they toggle V on and freeze until it has passed (and off again once it is 30u away). They save Dawn, Mind Fracture and Devil Union to rescue a teammate it is about to catch.
 
 ---
 
@@ -403,5 +418,6 @@ Three levels (1 tile = 2 m): **Floor 1** (ground, 60 × 60 tiles), **Floor 2** (
 | 4 | Malphas Amalgam (model, stop-motion, AI states, haunting, noise, stare), procedural audio, post-processing, Lights Out, terror, capture/rescue/ping/game over, bot rescue | ✅ Done |
 | 4.5 | Lumos, 35-spell grimoire + Ultimates and charge, player HP, tougher Amalgam (attacks, tendrils, smashing, phantoms), bots using the grimoire | ✅ Done |
 | 5 | Forbidden Spell (group chant), Soul Merge, the Archon (7 Masteries, crown), the Unbound Amalgam (volleys, shockwaves, charges, wards), Hell Portal + Soul Grapple, sunlit Epilogue with families + Play Again | ✅ Done |
+| 8 (v3.1) | The Keeper hunts activity: the room graph; activity pings (Sin task steps, spells, sprint / Lumos near corridors, the gate, prisoners' calls); movement 1 room away; doorway crossings bias its patrol; the investigation (a paced 4.2 u/s march, step in, a 3–4s look around, out) with V-and-still as the way to survive it; the project renamed **HorCrux** | ✅ Done |
 | 7 (v3.0) | The full map for everyone (M / Tab); only the Keeper's footsteps are heard (28u, exponential, heartbeat, HUD proximity bar); V as an infinite toggle that fails in its sight; crosshair dot, centre raycast, white outlines and "[Hold E]" billboards; tethers from each Heart; seven thematic Sin tasks (two carry tasks) in the Sins' own rooms; Sins scaled to the coven with telegraphs and an enrage phase; kits of 3 attacks + 1 utility; a 5-minute, once-per-game Ultimate; damage numbers, hit-flash, camera punch, death dissolve, the task tracker | ✅ Done |
 | 6 (v2.0) | Select-then-fire input; 2-story mansion + basement (Balcony Gallery over the Foyer, dual spiral staircases, family stair); top-left Marauder's-Map minimap with footstep ripples; PBR-style procedural materials, Gothic arches, stained-glass moonbeams, moving paintings, sconces, chandeliers; robed Harry-Potter-style wizard avatars; 7 Hearts with 3-part room wards; the Seven Deadly Sins in locked arenas; the unkillable Keeper with sight-lock, heavy footsteps, the Disillusionment Charm (V) and the three-Ultimate escape; the 1.5s Scary Capture Screen and the Underground Iron Cage | ✅ Done |
