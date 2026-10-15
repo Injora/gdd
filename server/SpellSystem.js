@@ -18,7 +18,7 @@
 import { WIZARD_BY_ID, ULT } from '../shared/wizards.js';
 import { lineOfSight, overlapsSolid, addBarrier, removeBarrier, moveCircle } from '../shared/collision.js';
 import { findPath, pathToWorld } from '../shared/pathfinding.js';
-import { DIRS, TILE, TILE_WALL, PLAYER_RADIUS, HP, worldToTile, tileCenter } from '../shared/constants.js';
+import { DIRS, TILE, TILE_WALL, TILE_VOID, PLAYER_RADIUS, HP, worldToTile, tileCenter } from '../shared/constants.js';
 
 const r2 = (v) => Math.round(v * 100) / 100;
 const SUBSTEPS = 4;
@@ -40,6 +40,8 @@ export class SpellSystem {
     this.barriers = [];
     this.entities = [];
     this.scheduled = [];
+    this.caster = null; // the wizard whose spell is resolving right now
+    this.casterFrom = null; // ...and where it came from (projectiles)
   }
 
   get t() { return this.game.time; }
@@ -96,9 +98,12 @@ export class SpellSystem {
       yaw: Math.round(yaw * 1000) / 1000,
       pitch: Number.isFinite(pitch) ? Math.round(pitch * 1000) / 1000 : 0,
     };
-    if (this.handlers[spell.id].call(this, p, spell, dir, event) === false) {
-      return { ok: false, reason: 'no-target' };
-    }
+    // Whoever is casting right now (Pride reflects spells cast at its face).
+    this.caster = p;
+    const refused = this.handlers[spell.id].call(this, p, spell, dir, event) === false;
+    this.caster = null;
+    if (refused) return { ok: false, reason: 'no-target' };
+    p.actAt = this.t; // casting gives an invisible wizard away
     const cooldown = ult ? 0 : spell.cooldown * (this.game.cooldownScale ?? 1);
     if (ult) p.ult = 0;
     else {
@@ -137,14 +142,19 @@ export class SpellSystem {
     return best?.m ?? null;
   }
 
-  /** Nearest targetable monster on p's floor, optionally within range + sight. */
-  nearestMonster(p, range = Infinity, needLos = false) {
+  /**
+   * Nearest targetable monster on p's floor, optionally within range + sight.
+   * Bodies that can actually be hurt (Sin demons, the husk) come before the
+   * invulnerable Keeper — except for the Ultimates that exist to stop it.
+   */
+  nearestMonster(p, range = Infinity, needLos = false, preferKeeper = false) {
     let best = null;
     for (const m of this.game.monsters()) {
       if (m.floor !== p.floor) continue;
       const d = Math.hypot(m.x - p.x, m.z - p.z);
       if (d > range || (needLos && !lineOfSight(this.game.map, p.floor, p.x, p.z, m.x, m.z))) continue;
-      if (!best || d < best.d) best = { m, d };
+      const score = d + ((m.kind === 'amalgam') !== preferKeeper ? 200 : 0);
+      if (!best || score < best.score) best = { m, score };
     }
     return best?.m ?? null;
   }
@@ -217,9 +227,9 @@ export class SpellSystem {
       ev.duration = a.duration;
     },
     abyssal_mind_fracture(p, a, dir, ev) {
-      const m = this.nearestMonster(p, a.range, true);
+      const m = this.nearestMonster(p, a.range, true, true);
       if (!m) return false;
-      m.confuse(a.duration, a.selfDps);
+      m.confuse(a.duration, a.selfDps, 'fracture'); // one of the three things that break the Keeper's lock
       m.st.revealUntil = Math.max(m.st.revealUntil, this.t + a.duration);
       ev.hit = m.id;
       ev.to = { x: r2(m.x), z: r2(m.z) };
@@ -373,7 +383,7 @@ export class SpellSystem {
       const f = this.game.map.floors[p.floor];
       const i = tz * f.w + tx;
       const occupied = [...this.game.players.values()].some((o) => o.floor === p.floor && worldToTile(o.x) === tx && worldToTile(o.z) === tz);
-      const solid = f.tiles[i] === TILE_WALL || f.blocked[i] || f.dyn?.[i] || occupied;
+      const solid = f.tiles[i] === TILE_WALL || f.tiles[i] === TILE_VOID || f.blocked[i] || f.dyn?.[i] || occupied;
       const fruits = this.game.players.size;
       const tree = {
         id: ev.id, kind: 'tree', floor: p.floor, x: tileCenter(tx), z: tileCenter(tz), yaw: 0,
@@ -486,7 +496,7 @@ export class SpellSystem {
     },
     dawn_sacred_order(p, a, dir, ev) {
       this.game.dawn = { until: this.t + a.duration };
-      for (const m of this.game.bodies()) m.freeze(a.duration);
+      for (const m of this.game.bodies()) m.freeze(a.duration, 'dawn'); // breaks the Keeper's lock
       ev.duration = a.duration;
     },
 
@@ -575,7 +585,7 @@ export class SpellSystem {
         const tx = cx + px * k, tz = cz + pz * k;
         if (tx < 0 || tz < 0 || tx >= floor.w || tz >= floor.h) continue;
         const i = tz * floor.w + tx;
-        if (floor.tiles[i] === TILE_WALL || floor.blocked[i] || floor.dyn?.[i]) continue;
+        if (floor.tiles[i] === TILE_WALL || floor.tiles[i] === TILE_VOID || floor.blocked[i] || floor.dyn?.[i]) continue;
         const occupied = bodies.some((b) => b.floor === p.floor &&
           b.x + b.r > tx * TILE && b.x - b.r < (tx + 1) * TILE && b.z + b.r > tz * TILE && b.z - b.r < (tz + 1) * TILE);
         if (!occupied) tiles.push([tx, tz]);
@@ -656,7 +666,7 @@ export class SpellSystem {
   }
 
   steerHoming(pr, dt) {
-    const m = this.game.monsters().find((mm) => mm.floor === pr.floor);
+    const m = this.nearestMonster(pr, Infinity, false);
     if (!m) return;
     let tx = m.x, tz = m.z;
     if (!lineOfSight(this.game.map, pr.floor, pr.x, pr.z, m.x, m.z)) {
@@ -692,7 +702,12 @@ export class SpellSystem {
           Math.hypot(mm.x - pr.x, mm.z - pr.z) < mm.radius + pr.radius);
         if (m) {
           pr.hitIds.add(m.id);
-          pr.onHit?.(m);
+          this.caster = pr.owner; // (a projectile flies from where it was cast)
+          this.casterFrom = { x: pr.x - pr.vx * 0.05, z: pr.z - pr.vz * 0.05 };
+          const reflected = m.reflects?.(pr);
+          if (!reflected) pr.onHit?.(m);
+          this.caster = null;
+          this.casterFrom = null;
           hit = m.id;
           if (!pr.pierce) done = true;
         }
@@ -785,7 +800,7 @@ export class SpellSystem {
     const players = [...this.game.players.values()].filter((p) => p.floor === floor);
     let best = null;
     for (const r of map.rooms) {
-      if (r.floor !== floor || r.type === 'cell') continue;
+      if (r.floor !== floor || r.type === 'cell' || this.game.arenaRoom?.(r.id)) continue;
       const pt = { x: tileCenter(r.cx), z: tileCenter(r.cy) };
       if (overlapsSolid(this.game.world, floor, pt.x, pt.z, 0.6)) continue;
       const near = Math.min(Math.hypot(from.x - pt.x, from.z - pt.z), ...players.map((p) => Math.hypot(p.x - pt.x, p.z - pt.z)));

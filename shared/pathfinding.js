@@ -1,12 +1,13 @@
 // A* over a floor's tile grid (8-way, no corner cutting). Used by bot
 // teammates now and by the Monster in Step 4.
 
-import { TILE, TILE_WALL, tileCenter } from './constants.js';
+import { TILE, TILE_WALL, TILE_VOID, tileCenter } from './constants.js';
 
 export function isPassable(floor, x, y) {
   if (x < 0 || y < 0 || x >= floor.w || y >= floor.h) return false;
   const i = y * floor.w + x;
-  return floor.tiles[i] !== TILE_WALL && !floor.blocked[i] && !floor.dyn?.[i];
+  const t = floor.tiles[i];
+  return t !== TILE_WALL && t !== TILE_VOID && !floor.blocked[i] && !floor.dyn?.[i];
 }
 
 class MinHeap {

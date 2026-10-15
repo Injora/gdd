@@ -3,12 +3,15 @@
 // the server bounds-checks and corrects. See ARCHITECTURE.md.
 
 import { performance } from 'node:perf_hooks';
-import { generateMansion, publicMap } from '../shared/mapgen.js';
-import { createCollisionWorld, overlapsSolid } from '../shared/collision.js';
+import { generateMansion, publicMap, roomAt } from '../shared/mapgen.js';
+import { createCollisionWorld, overlapsSolid, addBarrier, removeBarrier, moveCircle } from '../shared/collision.js';
 import {
-  PHASE, CHANNEL, INTERACT_RANGE, TICK_RATE, SPEED, HEART_COUNT, TILE, TILE_WALL, PLAYER_RADIUS, HP,
+  PHASE, CHANNEL, INTERACT_RANGE, TICK_RATE, SPEED, HEART_COUNT, TILE, TILE_WALL, TILE_VOID, PLAYER_RADIUS, HP, INVIS,
+  tileCenter,
 } from '../shared/constants.js';
-import { DECOY_LINES, TOME_TEXT } from '../shared/lore.js';
+import { DECOY_LINES, TOME_TEXT, TASKS, TASK_STEPS, HEART_TYPES } from '../shared/lore.js';
+import { SINS, SIN_ULT_BONUS } from '../shared/sins.js';
+import { SinDemon } from './SinDemon.js';
 import { PROP_LABELS } from '../shared/propdefs.js';
 import { WIZARD_BY_ID, ULT } from '../shared/wizards.js';
 import { Bot } from './Bot.js';
@@ -22,7 +25,8 @@ const FINALE_BOSS_HP = FINALE.BOSS_HP;
 import { botName } from './names.js';
 
 const GATE_OPEN_TIME = 6;
-const CAPTURE_DELAY = 0.9; // the victim's jumpscare plays before the teleport
+const CAPTURE_DELAY = 1.5; // the victim's capture screen plays before the cage
+const DEMON_LINGER = 3; // a slain Sin's body stays this long
 const PING_COOLDOWN = 3;
 const DEBUG_MODES = ['husk', 'haunt', 'stalk', 'hunt', 'capture', 'auto'];
 
@@ -41,6 +45,9 @@ export class Game {
     this.clientMap = publicMap(this.map);
     this.props = this.map.props;
     this.heartByProp = new Map(this.map.hearts.map((h) => [h.propId, h]));
+    this.heartByTask = new Map(this.map.hearts.flatMap((h) => h.tasks.map((id) => [id, h])));
+    this.arenas = new Map(); // heart propId -> { heart, room, tiles, barrierId, demon, by, startedAt }
+    this.demons = [];
     this.propState = {}; // propId -> { open?, destroyed? }
     this.world = createCollisionWorld(this.map, (prop) => !this.propState[prop.id]?.open);
 
@@ -88,6 +95,9 @@ export class Game {
         capturing: 0, // game time at which the jumpscare ends and the teleport happens
         noiseAt: 0,
         pingAt: 0,
+        actAt: -Infinity, // last cast (gives an invisible wizard away)
+        impulseUntil: 0, // being yanked by a Sin (the speed check relaxes)
+        impulse: null, // bots: { vx, vz, until }
       };
       this.players.set(m.id, p);
       if (m.isBot) this.bots.push(new Bot(this, p, this.bots.length));
@@ -138,7 +148,8 @@ export class Game {
     return {
       by: this.tomeReadBy,
       text: TOME_TEXT,
-      hearts: this.map.hearts.map(({ id, type, name, propId, clue }) => ({ id, type, name, propId, clue })),
+      // Riddles only: which object is the Heart, you find out by breaking its room's wards.
+      hearts: this.map.hearts.map(({ id, type, name, sin, propId, clue }) => ({ id, type, name, sin, clue, destroyed: this.destroyed.has(propId) })),
     };
   }
 
@@ -153,12 +164,13 @@ export class Game {
       propState: this.propState,
       tome: this.tomeReadBy ? this.tomeInfo() : null,
       barriers: this.spells.activeBarriers(),
+      arenas: [...this.arenas.values()].map((a) => this.arenaInfo(a)),
     };
   }
 
   /** Every hostile body in the game, visible or not. */
   bodies() {
-    return [this.husk, this.monster].filter(Boolean);
+    return [this.husk, this.monster, ...this.demons].filter(Boolean);
   }
 
   /** Hostile bodies spells can currently hit. */
@@ -215,7 +227,9 @@ export class Game {
   step(dt) {
     this.time += dt;
     for (const bot of this.bots) if (this.players.has(bot.p.id)) bot.update(dt, this.time);
+    this.updateImpulses(dt);
     for (const m of this.bodies()) m.update(dt);
+    this.updateArenas();
     this.spells.update(dt);
     this.finale.update(dt);
     this.updateVitals(dt);
@@ -229,7 +243,8 @@ export class Game {
     const f = this.map.floors[floor];
     const tx = Math.floor(x / TILE), ty = Math.floor(z / TILE);
     if (tx < 0 || ty < 0 || tx >= f.w || ty >= f.h) return true;
-    return f.tiles[ty * f.w + tx] === TILE_WALL;
+    const t = f.tiles[ty * f.w + tx];
+    return t === TILE_WALL || t === TILE_VOID;
   }
 
   onPlayerState(id, d) {
@@ -246,7 +261,8 @@ export class Game {
     // Speed buffs (Shadow Step, Phoenix Aura, Tailwind) raise the allowance.
     const boost = 1 + (this.spells.hasBuff(p, 'shadow') ? 0.4 : 0) + (this.spells.hasBuff(p, 'phoenix') ? 0.3 : 0) +
       (this.spells.hasBuff(p, 'tailwind') ? 0.45 : 0);
-    if (moved > SPEED.sprint * 1.5 * boost * dt + 0.75 || this.insideWall(p.floor, x, z)) {
+    const yanked = this.time < p.impulseUntil ? 14 : 0; // a Sin's ribbons / vacuum
+    if (moved > (SPEED.sprint * 1.5 * boost + yanked) * dt + 0.75 || this.insideWall(p.floor, x, z)) {
       this.teleport(p, p.x, p.z, p.floor, p.yaw);
       return;
     }
@@ -309,6 +325,11 @@ export class Game {
           this.whisper(p, 'Silent now. Only ash and cold remain.');
         } else if (heart && this.phase === PHASE.TOME) {
           this.whisper(p, 'Something beneath the surface throbs against your palm. You do not yet know how to silence it.');
+        } else if (heart && this.arenas.has(prop.id)) {
+          this.whisper(p, `${SINS[heart.sin].name} is loose. Kill it, and the Heart dies with it.`);
+        } else if (heart && !this.propState[prop.id]?.unsealed) {
+          const left = TASK_STEPS - this.tasksDone(heart);
+          this.whisper(p, `It beats behind a seal. ${TASKS[heart.task].intro} ${left} of ${TASK_STEPS} still hold it shut.`);
         } else if (heart) {
           this.startChannel(p, prop, CHANNEL.heart);
         } else {
@@ -322,6 +343,22 @@ export class Game {
       case 'stairs':
         this.useStairs(p, prop);
         break;
+
+      case 'task': {
+        const heart = this.heartByTask.get(prop.id);
+        const st = this.propState[prop.id];
+        if (!heart) break;
+        if (this.phase === PHASE.TOME) {
+          this.whisper(p, 'Old runes, cold and meaningless. Not until the Tome has been read.');
+        } else if (this.destroyed.has(heart.propId) || this.propState[heart.propId]?.unsealed) {
+          this.whisper(p, `${TASKS[prop.task].done}. The ward is broken.`);
+        } else if (st?.done) {
+          this.whisper(p, `${TASKS[prop.task].done}.`);
+        } else {
+          this.startChannel(p, prop, TASKS[prop.task].time);
+        }
+        break;
+      }
 
       case 'altar':
         if (this.phase === PHASE.TOME) {
@@ -381,22 +418,200 @@ export class Game {
       this.monster.awaken();
       return;
     }
+    if (prop.interact === 'task') return this.completeTask(p, prop);
     const heart = this.heartByProp.get(prop.id);
-    if (heart && !this.destroyed.has(prop.id) && this.phase === PHASE.HEARTS) {
-      this.destroyed.add(prop.id);
-      this.propState[prop.id] = { destroyed: true };
-      for (const o of this.players.values()) this.addUlt(o, ULT.HEART);
-      this.emitAll({
-        type: 'heart',
-        propId: prop.id,
-        heartType: heart.type,
-        name: heart.name,
-        by: p.name,
-        count: this.destroyed.size,
-      });
-      if (this.destroyed.size === HEART_COUNT) this.setPhase(PHASE.CONVERGENCE);
-      this.noise(p, Infinity, 'heart'); // the Amalgam feels every heart die
+    if (heart && !this.destroyed.has(prop.id) && this.phase === PHASE.HEARTS && this.propState[prop.id]?.unsealed && !this.arenas.has(prop.id)) {
+      this.startArena(heart, p);
     }
+  }
+
+  // --- Hearts: room tasks, the Sin's arena, destruction ------------------------------
+
+  tasksDone(heart) {
+    return heart.tasks.filter((id) => this.propState[id]?.done).length;
+  }
+
+  /** One step of a room task (a brazier lit, a mirror turned, a pedestal wound, a coin placed). */
+  completeTask(p, prop) {
+    const heart = this.heartByTask.get(prop.id);
+    if (!heart || this.phase !== PHASE.HEARTS || this.propState[heart.propId]?.unsealed || this.destroyed.has(heart.propId)) return;
+    const st = this.propState[prop.id] ?? {};
+    if (st.done) return;
+    if (TASKS[prop.task].turns) {
+      const turns = (st.turns ?? prop.turns) - 1;
+      this.propState[prop.id] = turns <= 0 ? { done: true, turns: 0 } : { turns };
+    } else {
+      this.propState[prop.id] = { done: true };
+    }
+    const done = this.tasksDone(heart);
+    this.emitAll({ type: 'task', propId: prop.id, task: prop.task, by: p.name, state: this.propState[prop.id], progress: done, of: TASK_STEPS });
+    if (done < TASK_STEPS) return;
+    this.propState[heart.propId] = { unsealed: true };
+    this.emitAll({ type: 'heart:unsealed', propId: heart.propId, name: heart.name, room: heart.roomName, sin: heart.sin, by: p.name });
+    this.noise(p, 12, 'decoy'); // the seal breaks loudly: it comes to look
+  }
+
+  /** Walkable tiles just outside a room's doorways: where the blood-runes seal it. */
+  arenaTiles(room) {
+    const f = this.map.floors[room.floor];
+    const at = (x, y) => (x < 0 || y < 0 || x >= f.w || y >= f.h ? -2 : f.roomIds[y * f.w + x]);
+    const out = [];
+    for (let y = room.y - 1; y <= room.y + room.h; y++) {
+      for (let x = room.x - 1; x <= room.x + room.w; x++) {
+        if (x < 0 || y < 0 || x >= f.w || y >= f.h || at(x, y) === room.id) continue;
+        const t = f.tiles[y * f.w + x];
+        if (t === TILE_WALL || t === TILE_VOID) continue;
+        if ([[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => at(x + dx, y + dy) === room.id)) out.push([x, y]);
+      }
+    }
+    return out;
+  }
+
+  arenaInfo(a) {
+    return { heartPropId: a.heart.propId, roomId: a.room.id, floor: a.room.floor, sin: a.heart.sin, barrierId: a.barrierId, tiles: a.tiles };
+  }
+
+  /** Is p locked inside a Sin's arena? */
+  inArena(p) {
+    for (const a of this.arenas.values()) if (a.demon.inArena(p)) return true;
+    return false;
+  }
+
+  /** Is room `roomId` sealed right now? */
+  arenaRoom(roomId) {
+    for (const a of this.arenas.values()) if (a.room.id === roomId) return true;
+    return false;
+  }
+
+  /**
+   * The Heart is broken open: its doors slam shut behind blood-runes and its
+   * Sin erupts. Nobody leaves, and the Keeper can't come in, until it dies.
+   */
+  startArena(heart, p) {
+    const room = this.map.rooms[heart.roomId];
+    const tiles = this.arenaTiles(room);
+    // Anyone standing in a doorway is pulled inside first.
+    for (const o of this.players.values()) {
+      if (o.captured || o.capturing || o.floor !== room.floor) continue;
+      const tx = Math.floor(o.x / TILE), ty = Math.floor(o.z / TILE);
+      if (!tiles.some(([x, y]) => x === tx && y === ty)) continue;
+      const inside = [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dy]) => [tx + dx, ty + dy])
+        .find(([x, y]) => this.map.floors[room.floor].roomIds[y * this.map.floors[room.floor].w + x] === room.id);
+      if (inside) this.teleport(o, tileCenter(inside[0]), tileCenter(inside[1]), room.floor, o.yaw);
+    }
+    const barrierId = `arena:${heart.id}`;
+    addBarrier(this.world, room.floor, barrierId, tiles);
+    const demon = new SinDemon(this, heart, room);
+    this.demons.push(demon);
+    const arena = { heart, room, tiles, barrierId, demon, by: p.name, startedAt: this.time };
+    this.arenas.set(heart.propId, arena);
+    this.propState[heart.propId] = { unsealed: true, arena: true };
+    const inside = [...this.players.values()].filter((o) => demon.inArena(o));
+    // The Keeper can't stay in here, and loses anyone who is.
+    const m = this.monster;
+    if (m.floor === room.floor && !m.hidden && roomAt(this.map, m.floor, m.x, m.z)?.id === room.id && m.state !== 'boss') m.hideFor(8);
+    if (m.state === 'hunting' && inside.some((o) => o.id === m.targetId)) m.breakLock('arena');
+    for (const o of inside) if (o.channel) this.cancelChannel(o);
+    const S = SINS[heart.sin];
+    this.emitAll({
+      type: 'arena:start', ...this.arenaInfo(arena), name: heart.name, demonId: demon.id,
+      title: `${S.name.toUpperCase()}: ${S.title.toUpperCase()}`, blurb: S.blurb, by: p.name, inside: inside.map((o) => o.id),
+    });
+  }
+
+  updateArenas() {
+    for (const a of [...this.arenas.values()]) {
+      if (a.demon.dead) continue; // (onDemonSlain ends it)
+      if (!this.players.size || [...this.players.values()].some((o) => a.demon.inArena(o))) continue;
+      // Everyone inside was taken: the Sin withdraws into its Heart, the doors open.
+      this.endArena(a, false);
+    }
+    for (let i = this.demons.length - 1; i >= 0; i--) {
+      const d = this.demons[i];
+      if (d.removeAt && this.time >= d.removeAt) this.demons.splice(i, 1);
+    }
+  }
+
+  onDemonSlain(demon) {
+    const a = [...this.arenas.values()].find((x) => x.demon === demon);
+    demon.removeAt = this.time + DEMON_LINGER;
+    if (a) this.endArena(a, true);
+  }
+
+  endArena(a, won) {
+    this.arenas.delete(a.heart.propId);
+    removeBarrier(this.world, a.barrierId);
+    if (!won) {
+      const i = this.demons.indexOf(a.demon);
+      if (i >= 0) this.demons.splice(i, 1);
+      this.propState[a.heart.propId] = { unsealed: true };
+    }
+    this.emitAll({ type: 'arena:end', heartPropId: a.heart.propId, barrierId: a.barrierId, won, sin: a.heart.sin, demonId: a.demon.id });
+    if (won) this.destroyHeart(a.heart, a.by);
+  }
+
+  /** A Heart dies for good (its Sin is slain). */
+  destroyHeart(heart, by) {
+    if (this.destroyed.has(heart.propId)) return;
+    this.destroyed.add(heart.propId);
+    this.propState[heart.propId] = { destroyed: true };
+    for (const o of this.players.values()) this.addUlt(o, ULT.HEART + SIN_ULT_BONUS);
+    this.emitAll({
+      type: 'heart',
+      propId: heart.propId,
+      heartType: heart.type,
+      name: heart.name,
+      sin: heart.sin,
+      by,
+      count: this.destroyed.size,
+    });
+    if (this.destroyed.size === HEART_COUNT) this.setPhase(PHASE.CONVERGENCE);
+    const prop = this.props[heart.propId];
+    // The Amalgam feels every heart die, and comes to see.
+    this.monster.hear({ x: prop.x, z: prop.z, floor: prop.floor }, Infinity, 'heart');
+  }
+
+  // --- Sins pulling wizards around --------------------------------------------------
+
+  /** Yank p along (vx, vz) for `duration` seconds (a Sin's ribbons, a vacuum). */
+  impulse(p, vx, vz, duration) {
+    if (!p || p.captured || p.capturing) return;
+    p.impulseUntil = this.time + duration + 0.4;
+    if (p.isBot) p.impulse = { vx, vz, until: this.time + duration };
+    else this.socketOf(p)?.emit('game:impulse', { vx: Math.round(vx * 100) / 100, vz: Math.round(vz * 100) / 100, duration });
+  }
+
+  updateImpulses(dt) {
+    for (const p of this.players.values()) {
+      const im = p.impulse;
+      if (!im) continue;
+      if (this.time >= im.until) { p.impulse = null; continue; }
+      const r = moveCircle(this.world, p.floor, p.x, p.z, im.vx * dt, im.vz * dt, PLAYER_RADIUS);
+      p.x = r.x;
+      p.z = r.z;
+    }
+  }
+
+  // --- the Disillusionment Charm (V) --------------------------------------------------
+
+  /** Every wizard's invisibility: 12s unseen, 18s cooldown. */
+  onInvis(id) {
+    const p = this.players.get(id);
+    if (!p || p.captured || p.capturing || this.finale.active) return { ok: false, reason: 'unavailable' };
+    const left = (p.cooldowns.invis ?? 0) - this.time;
+    let res;
+    if (left > 0) {
+      res = { ok: false, reason: 'cooldown', readyIn: Math.round(left * 10) / 10 };
+    } else {
+      this.spells.addBuff(p, 'invis', INVIS.duration);
+      p.cooldowns.invis = this.time + INVIS.cooldown;
+      // Too late if it has already locked on: it still tracks you.
+      const late = this.monster.lockedOn(p);
+      this.emitAll({ type: 'invis', id: p.id, duration: INVIS.duration, late });
+      res = { ok: true, duration: INVIS.duration, readyIn: INVIS.cooldown, late };
+    }
+    if (!p.isBot) this.socketOf(p)?.emit('game:invis', res);
+    return res;
   }
 
   // --- spells & debug ----------------------------------------------------------
@@ -472,10 +687,15 @@ export class Game {
   capture(p, monster) {
     if (!p || p.captured || p.capturing) return false;
     p.capturing = this.time + CAPTURE_DELAY;
+    p.impulse = null;
     if (p.channel) this.cancelChannel(p);
+    // The capture screen always shows the Keeper's face, even when a Sin broke you.
+    const by = monster?.kind === 'amalgam' ? monster : null;
+    const yaw = by ? by.yaw : p.yaw + Math.PI;
     this.emitAll({
-      type: 'capture', id: p.id, name: p.name,
-      floor: monster.floor, mx: r2(monster.x), mz: r2(monster.z), myaw: r3(monster.yaw),
+      type: 'capture', id: p.id, name: p.name, by: monster?.id ?? null, sin: monster?.sin ?? null,
+      floor: p.floor, mx: r2(by ? by.x : p.x - Math.sin(yaw) * -1.1), mz: r2(by ? by.z : p.z - Math.cos(yaw) * -1.1), myaw: r3(yaw),
+      duration: CAPTURE_DELAY,
     });
     return true;
   }
@@ -487,6 +707,7 @@ export class Game {
       p.captured = true;
       p.hp = Math.max(p.hp, HP.CELL); // prisoners stabilise
       p.buffs = {};
+      p.impulse = null;
       this.closeGate();
       const held = this.prisoners().length - 1;
       const spot = this.map.cell.points[held % this.map.cell.points.length];
@@ -543,6 +764,7 @@ export class Game {
       this.teleport(p, sp.x, sp.z, this.map.spawn.floor, this.map.spawn.yaw);
     }
     this.closeGate();
+    for (const a of [...this.arenas.values()]) this.endArena(a, false);
     this.setPhase(this.phaseBefore ?? PHASE.HEARTS);
     if (this.phase === PHASE.TOME) this.monster.resume();
     else this.monster.hideFor(10);
@@ -565,8 +787,11 @@ export class Game {
   damagePlayer(p, amount, attacker, kind) {
     if (this.finale.active) return this.finale.damageArchon(amount, kind); // one shared body
     if (!p || p.captured || p.capturing || this.phase === PHASE.GAMEOVER) return 'none';
+    const keeper = attacker?.kind === 'amalgam';
+    if (keeper && this.inArena(p)) return 'none'; // behind a Sin's blood-runes
     if (this.spells.hasBuff(p, 'union')) {
-      attacker?.block?.();
+      if (keeper) attacker.recoilFromUnion?.(p);
+      else attacker?.block?.();
       this.emitAll({ type: 'player:immune', id: p.id, attacker: attacker?.id });
       return 'immune';
     }
@@ -575,10 +800,12 @@ export class Game {
       this.emitAll({ type: 'monster:blocked', id: attacker?.id, targetId: p.id });
       return 'blocked';
     }
-    // The heavy telegraphed lunge always drags you away; other hits do when you're at ≤ 40 HP.
-    if (kind === 'lunge') return this.capture(p, attacker) ? 'captured' : 'none';
-    const splash = kind === 'shockwave';
-    if (!splash && p.hp <= HP.CAPTURE_AT) return this.capture(p, attacker) ? 'captured' : 'none';
+    if (kind !== 'sin') {
+      // The Keeper: the heavy lunge always drags you away; other hits do when you're at ≤ 40 HP.
+      if (kind === 'lunge') return this.capture(p, attacker) ? 'captured' : 'none';
+      const splash = kind === 'shockwave';
+      if (!splash && p.hp <= HP.CAPTURE_AT) return this.capture(p, attacker) ? 'captured' : 'none';
+    }
     let dmg = amount;
     if (this.spells.hasBuff(p, 'granite')) dmg *= 1 - WIZARD_BY_ID.sushantus.spells[3].reduction;
     let absorbed = 0;
@@ -591,7 +818,8 @@ export class Game {
     }
     p.hp = Math.max(0, p.hp - dmg);
     p.lastHurtAt = this.time;
-    this.emitAll({ type: 'player:hit', id: p.id, amount: Math.round(dmg), absorbed: Math.round(absorbed), hp: Math.ceil(p.hp), kind });
+    this.emitAll({ type: 'player:hit', id: p.id, amount: Math.round(dmg), absorbed: Math.round(absorbed), hp: Math.ceil(p.hp), kind, by: attacker?.id });
+    // Broken by a Sin (or the Keeper): the Keeper drags you down to the cage.
     if (p.hp <= 0) return this.capture(p, attacker) ? 'captured' : 'hit';
     return 'hit';
   }
@@ -634,9 +862,10 @@ export class Game {
     if (p) this.finale.setGrapple(p, !!d?.on);
   }
 
-  /** Debug H: skip to the Convergence (Tome read, all six Hearts destroyed). */
+  /** Debug H: skip to the Convergence (Tome read, all seven Hearts destroyed). */
   debugFinale() {
     if (this.finale.active) return;
+    for (const a of [...this.arenas.values()]) this.endArena(a, false);
     this.tomeReadBy ??= 'debug';
     for (const h of this.map.hearts) {
       if (this.destroyed.has(h.propId)) continue;
@@ -661,6 +890,55 @@ export class Game {
     if (!this.finale.inFight()) return;
     m.bossHp = Math.min(m.bossHp, FINALE_BOSS_HP * 0.25);
     this.finale.wardsUsed = 2;
+  }
+
+  /**
+   * Debug L: break open the nearest sealed Heart (its room task done for you),
+   * pull the coven into its room and start the Sin's lockdown. Pressed inside
+   * a live arena, it slays the Sin instead. `d.sin` picks a specific Sin.
+   */
+  debugArena(id, d) {
+    const p = this.players.get(id);
+    if (!p || this.finale.active) return;
+    const live = [...this.arenas.values()].find((a) => a.demon.inArena(p));
+    if (live) return live.demon.damage(9999, 'debug');
+    if (this.phase === PHASE.TOME) {
+      this.tomeReadBy = 'debug';
+      this.setPhase(PHASE.HEARTS);
+      this.emitAll({ type: 'tome', by: this.tomeReadBy, tome: this.tomeInfo() });
+      this.monster.awaken();
+    }
+    if (this.phase !== PHASE.HEARTS) return;
+    const open = this.map.hearts.filter((h) => !this.destroyed.has(h.propId) && !this.arenas.has(h.propId));
+    const heart = open.find((h) => h.sin === d?.sin) ??
+      open.sort((a, b) => (a.floor === p.floor ? 0 : 1000) - (b.floor === p.floor ? 0 : 1000) +
+        Math.hypot(this.props[a.propId].x - p.x, this.props[a.propId].z - p.z) - Math.hypot(this.props[b.propId].x - p.x, this.props[b.propId].z - p.z))[0];
+    if (!heart) return;
+    for (const tid of heart.tasks) {
+      this.propState[tid] = { done: true, turns: 0 };
+      this.emitAll({ type: 'task', propId: tid, task: heart.task, by: 'debug', state: this.propState[tid], progress: TASK_STEPS, of: TASK_STEPS });
+    }
+    this.propState[heart.propId] = { unsealed: true };
+    this.emitAll({ type: 'heart:unsealed', propId: heart.propId, name: heart.name, room: heart.roomName, sin: heart.sin, by: 'debug' });
+    // Everyone free comes along (spread around the Heart's room).
+    const room = this.map.rooms[heart.roomId];
+    const spots = [];
+    for (let y = room.y + 1; y < room.y + room.h - 1; y++) {
+      for (let x = room.x + 1; x < room.x + room.w - 1; x++) {
+        const pt = { x: tileCenter(x), z: tileCenter(y) };
+        if (!overlapsSolid(this.world, room.floor, pt.x, pt.z, 0.5)) spots.push(pt);
+      }
+    }
+    const prop = this.props[heart.propId];
+    spots.sort((a, b) => Math.hypot(a.x - prop.x, a.z - prop.z) - Math.hypot(b.x - prop.x, b.z - prop.z));
+    let i = 0;
+    for (const o of this.players.values()) {
+      if (o.captured || o.capturing) continue;
+      const spot = spots[Math.min(spots.length - 1, 3 + i * 2)] ?? spots[0];
+      i++;
+      this.teleport(o, spot.x, spot.z, room.floor, Math.atan2(-(prop.x - spot.x), -(prop.z - spot.z)));
+    }
+    this.startArena(heart, p);
   }
 
   onPing(id) {

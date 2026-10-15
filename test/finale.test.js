@@ -198,7 +198,7 @@ test('the Hell Portal opens at 20%; it crawls away, binds hold it, the Soul Grap
   assert.deepEqual(v.coven.map((c) => c.wizardId).sort(), ['parthius', 'soham']);
 });
 
-test('full playthrough: Tome → six Hearts → the chant (a bot walks to the altar) → Archon → portal → epilogue', () => {
+test('full playthrough: Tome → seven Hearts (tasks, Sins) → the chant (a bot walks to the altar) → Archon → portal → epilogue', () => {
   const g = makeGame([{ id: 'h', wizardId: 'himanshu' }, { id: 'b', wizardId: 'kartavian', isBot: true }]);
   const h = g.players.get('h');
   const tome = g.props[g.map.ids.tome];
@@ -208,11 +208,26 @@ test('full playthrough: Tome → six Hearts → the chant (a bot walks to the al
   assert.equal(g.phase, PHASE.HEARTS);
   g.monster.hideFor(1e6); // a focused flow test: the Amalgam keeps out of it
   for (const heart of g.map.hearts) {
+    const at = (prop) => {
+      const spot = prop.front ?? { x: prop.x, z: prop.z };
+      Object.assign(h, { x: spot.x, z: spot.z, floor: prop.floor });
+    };
+    for (const tid of heart.tasks) {
+      at(g.props[tid]);
+      for (let k = 0; k < 4 && !g.propState[tid]?.done; k++) {
+        g.onInteract('h', tid);
+        run(g, 2.5, () => !h.channel);
+      }
+      assert.ok(g.propState[tid]?.done, `task ${tid} done`);
+    }
     const prop = g.props[heart.propId];
-    const spot = prop.front ?? { x: prop.x, z: prop.z };
-    Object.assign(h, { x: spot.x, z: spot.z, floor: prop.floor });
+    at(prop);
     g.onInteract('h', prop.id);
-    assert.ok(run(g, 3, () => g.destroyed.has(prop.id)), `destroyed ${heart.name}`);
+    assert.ok(run(g, 3, () => g.arenas.has(prop.id)), `${heart.name}: its Sin erupts`);
+    const demon = g.arenas.get(prop.id).demon;
+    demon.eruptUntil = 0;
+    demon.damage(9999, 'test');
+    assert.ok(run(g, 1, () => g.destroyed.has(prop.id)), `destroyed ${heart.name}`);
   }
   assert.equal(g.phase, PHASE.CONVERGENCE);
 

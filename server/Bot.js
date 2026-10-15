@@ -1,16 +1,20 @@
 // Server-side bot teammate. Priorities, highest first:
-//   1. Held in the Cell → wait for rescue (and cast through the bars).
-//   2. Someone is held  → run to the Cell (taking the stairs) and break the lock.
-//   3. Monster threat   → cast our spell defensively (Wind push, White stun,
-//                         Void shield, Earth wall, Fire/Water chip, Black torment).
-//   4. Training Husk    → close into spell range and practise on it.
-//   5. Otherwise        → follow the nearest free human, scanning the dark.
+//   1. Held in the Cage → wait for rescue (and cast through the bars).
+//   2. The Keeper has locked on to a teammate → if our Ultimate is one of the
+//      three that break its lock (Dawn, Mind Fracture, Devil Union), use it.
+//   3. Locked in a Sin's arena → fight the Sin with everything we have.
+//   4. The Keeper prowls close (not locked on us) → Disillusionment (V), and
+//      hold perfectly still until it has passed.
+//   5. Someone is held  → run to the Cage (taking the stairs) and break the lock.
+//   6. Training Husk    → close into spell range and practise on it.
+//   7. Otherwise        → follow the nearest free human, scanning the dark.
 
 import { findPath, pathToWorld } from '../shared/pathfinding.js';
 import { moveCircle, lineOfSight, overlapsSolid } from '../shared/collision.js';
 import { MASTERIES } from '../shared/finale.js';
 import { WIZARD_BY_ID } from '../shared/wizards.js';
-import { PHASE, SPEED, PLAYER_RADIUS, worldToTile, yawFromDir } from '../shared/constants.js';
+import { stairToward } from '../shared/nav.js';
+import { PHASE, SPEED, PLAYER_RADIUS, INVIS, worldToTile, yawFromDir } from '../shared/constants.js';
 
 const FOLLOW_DISTANCE = 2.6;
 const SPRINT_DISTANCE = 10;
@@ -19,6 +23,9 @@ const ENGAGE_READY = 1.5; // close in when the spell is ready within this many s
 const THREAT_RADIUS = 8; // the Amalgam this close is a threat even if not hunting
 const MASTERY_ELEMENT = { Black: 'black', Fire: 'fire', Water: 'water', Earth: 'earth', Wind: 'wind', White: 'white', 'Anti-magic': 'void' };
 const BOT_MASTERY_GRACE = 2.5; // seconds a shared Mastery waits for the humans before a bot takes it
+/** The only three Ultimates that break the Keeper's sight-lock: saved for that. */
+const LOCK_BREAKERS = new Set(['dawn_sacred_order', 'abyssal_mind_fracture', 'devil_union']);
+const HIDE_RADIUS = 18; // the Keeper prowling this close: go invisible and freeze
 
 function turnToward(current, target, maxStep) {
   let d = target - current;
@@ -50,6 +57,19 @@ export class Bot {
     this.tryCast(t);
     if (p.channel) return; // holding E on the lock
     if (p.captured) return this.idle(dt, t);
+    if (p.impulse) return; // being dragged by a Sin
+
+    // In a Sin's arena: stay in range of it and keep casting.
+    const sin = g.demons.find((d) => !d.dead && d.inArena(p));
+    if (sin) {
+      if (this.moveTo({ x: sin.x, z: sin.z, floor: sin.floor }, 5, dt, t, true)) {
+        p.yaw = turnToward(p.yaw, yawFromDir(sin.x - p.x, sin.z - p.z), dt * 8);
+      }
+      return;
+    }
+
+    // The Keeper prowls close and hasn't seen us: vanish, and hold still.
+    if (this.hide(dt, t)) return;
 
     // Badly hurt: eat from a Tree of Life if one is growing on this floor.
     if (p.hp < 50) {
@@ -98,6 +118,23 @@ export class Bot {
     }
   }
 
+  /**
+   * Disillusionment: with the Keeper stalking within HIDE_RADIUS (and not yet
+   * locked on to us), cast V and freeze until it has gone by. Returns true
+   * while hiding.
+   */
+  hide(dt, t) {
+    const g = this.game, p = this.p, m = g.monster;
+    if (!m || m.hidden || m.floor !== p.floor || !['stalking', 'searching'].includes(m.state) || g.phase === PHASE.TOME) return false;
+    const d = Math.hypot(m.x - p.x, m.z - p.z);
+    const invisible = g.spells.hasBuff(p, 'invis');
+    if (!invisible && d < HIDE_RADIUS && (p.cooldowns.invis ?? 0) <= t) g.onInvis(p.id);
+    if (!g.spells.hasBuff(p, 'invis') || d > INVIS.sense + 4) return false;
+    p.moving = false; // completely still
+    p.sprint = false;
+    return true;
+  }
+
   /** A clear spot within reach of the altar, different for each bot. */
   chantSpot(altar) {
     if (this._chant) return this._chant;
@@ -144,13 +181,21 @@ export class Bot {
     if (t < this.castAt && !force) return;
     const w = WIZARD_BY_ID[p.wizardId];
     if (!w) return;
-    const m = g.monsters().find((mm) => mm.floor === p.floor) ?? null;
+    // Casting near the Keeper while invisible would give us away.
+    if (g.spells.hasBuff(p, 'invis') && g.monster && !g.monster.hidden && g.monster.floor === p.floor &&
+      Math.hypot(g.monster.x - p.x, g.monster.z - p.z) < INVIS.sense + 2) return;
+    const foes = g.monsters().filter((mm) => mm.floor === p.floor);
+    const keeper = foes.find((mm) => mm.kind === 'amalgam') ?? null;
+    // A Sin we're locked in with comes first; then the husk; the unkillable Keeper last.
+    const m = foes.find((mm) => mm.kind === 'sin' && mm.inArena(p)) ?? foes.find((mm) => mm.kind === 'husk') ??
+      (keeper && !g.inArena(p) ? keeper : null);
     const d = m ? Math.hypot(m.x - p.x, m.z - p.z) : Infinity;
     const isHusk = m?.kind === 'husk';
+    const isKeeper = m?.kind === 'amalgam';
     const los = !!m && lineOfSight(g.map, p.floor, p.x, p.z, m.x, m.z);
-    // The real Amalgam is only engaged when it threatens someone.
-    const threat = !!m && (isHusk || m.state === 'hunting' || m.state === 'boss' || d < THREAT_RADIUS);
-    const huntedClose = !!m && !isHusk && m.state === 'hunting' && m.targetId === p.id && d < 5;
+    // The real Amalgam is only engaged when it threatens someone (spells only stagger it).
+    const threat = !!m && (!isKeeper || m.state === 'hunting' || m.state === 'boss' || d < THREAT_RADIUS);
+    const huntedClose = !!m && isKeeper && m.state === 'hunting' && m.targetId === p.id && d < 5;
     const hurt = [...g.players.values()].some((o) => !o.captured && o.floor === p.floor && o.hp < 55);
 
     const fits = (s) => {
@@ -178,8 +223,26 @@ export class Bot {
       return res.ok;
     };
 
-    // Ultimates are saved for the real Amalgam (or for healing), never the training husk.
-    if ((p.ult ?? 0) >= 100 && (!isHusk || w.ultimate.bot === 'heal') && fits(w.ultimate) && fire('ult')) return;
+    // Ultimates: Dawn, Mind Fracture and Devil Union are saved to break the
+    // Keeper's lock on a teammate it is about to catch; the rest go into the Sins
+    // (or healing). Never the training husk.
+    if ((p.ult ?? 0) >= 100) {
+      const breaker = LOCK_BREAKERS.has(w.ultimate.id);
+      if (breaker && keeper?.state === 'hunting') {
+        const victim = g.players.get(keeper.targetId);
+        const close = victim && victim.floor === keeper.floor && Math.hypot(victim.x - keeper.x, victim.z - keeper.z) < 12;
+        const reach = w.ultimate.id !== 'abyssal_mind_fracture' ||
+          (Math.hypot(keeper.x - p.x, keeper.z - p.z) <= w.ultimate.range && lineOfSight(g.map, p.floor, p.x, p.z, keeper.x, keeper.z));
+        if (close && reach && victim.floor === p.floor) {
+          p.yaw = yawFromDir(keeper.x - p.x, keeper.z - p.z);
+          if (g.spells.cast(p, p.yaw, 0, 'ult').ok) { this.castAt = t + 0.5; return; }
+        }
+      } else if (!breaker && !isHusk && !isKeeper && fits(w.ultimate) && fire('ult')) {
+        return;
+      } else if (w.ultimate.bot === 'heal' && hurt && fire('ult')) {
+        return;
+      }
+    }
     const slots = [0, 1, 2, 3].sort(() => Math.random() - 0.5);
     for (const slot of slots) {
       const s = w.spells[slot];
@@ -216,7 +279,8 @@ export class Bot {
   moveTo(goal, stop, dt, t, needLos = false) {
     const g = this.game, p = this.p;
     if (goal.floor !== p.floor) {
-      const stairs = g.props[p.floor === 0 ? g.map.ids.stairsDown : g.map.ids.stairsUp];
+      const stairs = stairToward(g.map, p.floor, p.x, p.z, goal.floor);
+      if (!stairs) return false;
       if (Math.hypot(stairs.front.x - p.x, stairs.front.z - p.z) < 1.0) {
         g.useStairs(p, stairs);
         this.path = [];

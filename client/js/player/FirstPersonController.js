@@ -79,6 +79,11 @@ export class FirstPersonController {
     document.removeEventListener('mousemove', this._onMouse);
   }
 
+  /** A Sin's ribbons / vacuum drag you along (vx, vz) for `duration` seconds. */
+  impulse(vx, vz, duration) {
+    this.push = { vx, vz, until: performance.now() + duration * 1000 };
+  }
+
   setPosition(x, z, floor, yaw) {
     this.x = x;
     this.z = z;
@@ -104,6 +109,7 @@ export class FirstPersonController {
     }
     if (this.sprinting && this.moving && !this.noStamina) this.stamina = Math.max(0, this.stamina - STAMINA.drain * dt);
     else this.stamina = Math.min(STAMINA.max, this.stamina + STAMINA.regen * dt * (this.moving ? 0.6 : 1));
+    if (this.fatigue) this.stamina = Math.max(0, this.stamina - this.fatigue * dt); // Sloth's heavy sleep
 
     const maxSpeed = (this.crouch ? SPEED.crouch : this.sprinting ? SPEED.sprint : SPEED.walk) * this.speedMul;
     const sin = Math.sin(this.yaw), cos = Math.cos(this.yaw);
@@ -116,7 +122,9 @@ export class FirstPersonController {
     this.vz += (wz * maxSpeed - this.vz) * Math.min(1, dt * accel);
 
     const before = { x: this.x, z: this.z };
-    const r = moveCircle(this.world, this.floor, this.x, this.z, this.vx * dt, this.vz * dt, PLAYER_RADIUS, { ignoreProps: this.ignoreProps });
+    let px = 0, pz = 0;
+    if (this.push && performance.now() < this.push.until) { px = this.push.vx; pz = this.push.vz; } else this.push = null;
+    const r = moveCircle(this.world, this.floor, this.x, this.z, (this.vx + px) * dt, (this.vz + pz) * dt, PLAYER_RADIUS, { ignoreProps: this.ignoreProps });
     this.x = r.x;
     this.z = r.z;
     const actual = dt > 0 ? Math.hypot(r.x - before.x, r.z - before.z) / dt : 0;

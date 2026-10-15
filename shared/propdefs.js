@@ -14,6 +14,9 @@ export const PROP_DEFS = {
   altar: { w: 2.2, d: 1.3, blocks: true, mount: 'floor', interact: 'altar' },
   stairs_down: { w: 1.9, d: 1.9, blocks: true, mount: 'floor', interact: 'stairs' },
   stairs_up: { w: 1.9, d: 1.9, blocks: true, mount: 'floor', interact: 'stairs' },
+  // The family's spiral stairs between Floor 1 and Floor 2 (the pair share one tile column).
+  grand_stair: { w: 1.9, d: 1.9, blocks: true, mount: 'floor', interact: 'stairs' },
+  stairs_landing: { w: 1.9, d: 1.9, blocks: true, mount: 'floor', interact: 'stairs' },
   gate: { w: 2.0, d: 0.3, blocks: true, mount: 'floor', interact: 'gate', dynamic: true },
   mirror: { w: 1.0, d: 0.12, blocks: false, mount: 'wall', interact: 'curio' },
   painting: { w: 1.2, d: 0.1, blocks: false, mount: 'wall', interact: 'curio' },
@@ -21,6 +24,13 @@ export const PROP_DEFS = {
   doll: { w: 0.7, d: 0.7, blocks: true, mount: 'floor', interact: 'curio' },
   musicbox: { w: 0.7, d: 0.7, blocks: true, mount: 'floor', interact: 'curio' },
   candelabra: { w: 0.7, d: 0.7, blocks: true, mount: 'floor', interact: 'curio' },
+  skull: { w: 0.7, d: 0.7, blocks: true, mount: 'floor', interact: 'curio' },
+
+  // Room tasks (three per Heart room)
+  brazier: { w: 0.8, d: 0.8, blocks: true, mount: 'floor', interact: 'task' },
+  rune_mirror: { w: 0.9, d: 0.12, blocks: false, mount: 'wall', interact: 'task' },
+  pedestal: { w: 0.7, d: 0.7, blocks: true, mount: 'floor', interact: 'task' },
+  chalice: { w: 0.6, d: 0.6, blocks: true, mount: 'floor', interact: 'task' },
 
   // Furniture
   bookshelf: { w: 1.9, d: 0.5, blocks: true, mount: 'floor' },
@@ -50,6 +60,13 @@ export const PROP_DEFS = {
   antlers: { w: 1.0, d: 0.2, blocks: false, mount: 'wall' },
   sconce: { w: 0.3, d: 0.2, blocks: false, mount: 'wall' },
   shackles: { w: 0.8, d: 0.15, blocks: false, mount: 'wall' },
+  armor: { w: 0.8, d: 0.7, blocks: true, mount: 'floor' },
+  weaponrack: { w: 1.6, d: 0.4, blocks: true, mount: 'floor' },
+  telescope: { w: 1.0, d: 1.0, blocks: true, mount: 'floor' },
+  globe: { w: 0.8, d: 0.8, blocks: true, mount: 'floor' },
+  cauldron: { w: 1.0, d: 1.0, blocks: true, mount: 'floor' },
+  alembic: { w: 1.5, d: 0.8, blocks: true, mount: 'floor' },
+  window: { w: 1.2, d: 0.1, blocks: false, mount: 'wall' },
 
   // Decals / ceiling
   rug: { w: 3.0, d: 2.0, blocks: false, mount: 'none' },
@@ -66,4 +83,5 @@ export const PROP_LABELS = {
   doll: 'porcelain doll',
   musicbox: 'music box',
   candelabra: 'candelabra',
+  skull: 'skull',
 };

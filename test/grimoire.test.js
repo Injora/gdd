@@ -10,6 +10,7 @@ import { WIZARDS, WIZARD_BY_ID, ULT } from '../shared/wizards.js';
 import { isPassable } from '../shared/pathfinding.js';
 import { overlapsSolid, lineOfSight } from '../shared/collision.js';
 import { HP, PHASE, tileCenter, yawFromDir, worldToTile } from '../shared/constants.js';
+import { SIN_ULT_BONUS } from '../shared/sins.js';
 
 const EAST = yawFromDir(1, 0);
 
@@ -116,7 +117,7 @@ test('Ultimates need 100% charge, spend it, and refuse (free) without a target',
   assert.equal(p2.ult, 0);
 });
 
-test('Ultimate charge: +8 per landed spell (once per cast), +25 per Heart, +20 per rescue, chases, passive', () => {
+test('Ultimate charge: +8 per landed spell (once per cast), +25 per Heart (+20 for its Sin), +20 per rescue, chases, passive', () => {
   const { g, p } = duel('kartavian', 3);
   g.spells.cast(p, EAST, 0, 1); // three Kamaitachi blades, one credit
   run(g, 1.5);
@@ -126,14 +127,12 @@ test('Ultimate charge: +8 per landed spell (once per cast), +25 per Heart, +20 p
   const a = g2.players.get('p0'), b = g2.players.get('p1');
   g2.tomeReadBy = 'x';
   g2.setPhase(PHASE.HEARTS);
-  const heart = g2.props[g2.map.hearts[0].propId];
-  Object.assign(a, { x: heart.front?.x ?? heart.x, z: heart.front?.z ?? heart.z, floor: heart.floor });
-  g2.completeInteraction(a, heart);
-  assert.equal(Math.round(a.ult), ULT.HEART);
-  assert.equal(Math.round(b.ult), ULT.HEART, 'team-wide');
+  g2.destroyHeart(g2.map.hearts[0], a.name); // (its Sin slain: see hearts.test.js)
+  assert.equal(Math.round(a.ult), ULT.HEART + SIN_ULT_BONUS);
+  assert.equal(Math.round(b.ult), ULT.HEART + SIN_ULT_BONUS, 'team-wide');
 
   g2.capture(b, g2.monster);
-  run(g2, 1);
+  run(g2, 1.6);
   const before = a.ult;
   g2.openGate(a.name, a);
   assert.ok(Math.abs(a.ult - before - ULT.RESCUE) < 0.5);
@@ -184,7 +183,7 @@ test('HP: claws deal 30; at ≤ 40 HP the next hit captures; the Cell stabilises
   g.damagePlayer(p, AI.CLAW_DAMAGE, m, 'claw');
   assert.equal(p.hp, 40);
   assert.equal(g.damagePlayer(p, AI.CLAW_DAMAGE, m, 'claw'), 'captured');
-  run(g, 1);
+  run(g, 1.6);
   assert.ok(p.captured);
   assert.equal(p.hp, HP.CELL);
 });
@@ -258,11 +257,18 @@ test('Black: Dimension Slash shrinks its reach; Black Hole drags it in; Shadow S
   const row = openRow(g2, 8);
   put(q, row.x, row.y);
   const m = amalgamAt(g2, row.x + 4, row.y);
-  m.hunt(q, 'test');
+  m.yaw = yawFromDir(-1, 0);
+  assert.ok(m.canSee(q));
   g2.spells.cast(q, EAST, 0, 3);
-  assert.equal(m.state, 'searching', 'the hunted wizard vanished');
-  assert.equal(m.canSee(q), false);
+  assert.equal(m.canSee(q), false, 'unseen before it locks on');
   assert.ok(g2.spells.buffCodes(q).includes('shadow'));
+  // Too late once it has locked on: it still tracks you.
+  q.buffs = {};
+  m.hunt(q, 'test');
+  q.cooldowns = {};
+  g2.spells.cast(q, EAST, 0, 3);
+  assert.equal(m.state, 'hunting');
+  assert.equal(m.targetId, 'p0');
 });
 
 test('Fire: Calidus Brachium lands 3 fists; Sol Linea leaves a burning line; Phoenix Aura burns on contact', () => {
@@ -391,7 +397,7 @@ test('Anti-magic: Black Slash cancels the windup and strips enrage; Null Zone; B
 // ---------------------------------------------------------------------------
 // Ultimates
 
-test('Black Ultimate: 10s mind fracture: it cannot move and tears at itself (no flee until it ends)', () => {
+test('Black Ultimate: 10s mind fracture: locked in place clawing at itself, its sight-lock wiped', () => {
   const g = makeGame(humans('injorath', 'soham'));
   const p = g.players.get('p0');
   g.players.get('p1').floor = 1;
@@ -399,14 +405,15 @@ test('Black Ultimate: 10s mind fracture: it cannot move and tears at itself (no 
   put(p, row.x, row.y);
   const m = amalgamAt(g, row.x + 6, row.y);
   p.ult = 100;
-  const hp0 = m.hp;
+  m.hunt(p, 'test');
   assert.ok(g.spells.cast(p, EAST, 0, 'ult').ok);
   const pos = { x: m.x, z: m.z };
   run(g, 5);
   assert.ok(m.isConfused());
   assert.ok(Math.hypot(m.x - pos.x, m.z - pos.z) < 0.01, 'locked in place');
-  assert.ok(m.hp < hp0 - 15, 'self-damage');
-  assert.notEqual(m.state, 'retreating');
+  assert.notEqual(m.state, 'hunting', 'the lock is gone');
+  assert.equal(evs(g, 'monster:lockbroken')[0].reason, 'fracture');
+  assert.equal(m.hp, m.maxHp, 'still unkillable');
   run(g, 5.5);
   assert.ok(!m.isConfused());
 });
@@ -487,14 +494,14 @@ test('Anti-magic Ultimate: 30s of Devil Union: every wizard is immune; attackers
 // ---------------------------------------------------------------------------
 // The tougher Amalgam
 
-test('Enrage: hunt speed 4.5 → 5.4 u/s at five Hearts; aggression climbs', () => {
+test('Enrage: hunt speed 4.8 → 5.64 u/s at seven Hearts; aggression climbs', () => {
   const g = makeGame(humans('parthius'));
   const m = amalgamAt(g, 10, 10);
   m.aggression = AI.AGGRO_CHANCE;
-  assert.equal(m.huntSpeed(), 4.5);
+  assert.equal(m.huntSpeed(), 4.8);
   const a0 = m.aggressionNow();
-  for (const h of g.map.hearts.slice(0, 5)) g.destroyed.add(h.propId);
-  assert.ok(Math.abs(m.huntSpeed() - 5.4) < 1e-9);
+  for (const h of g.map.hearts) g.destroyed.add(h.propId);
+  assert.ok(Math.abs(m.huntSpeed() - 5.64) < 1e-9);
   assert.ok(m.aggressionNow() > a0);
 });
 

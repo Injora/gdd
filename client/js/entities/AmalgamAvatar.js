@@ -1,5 +1,5 @@
 // The Malphas Amalgam, client side. A procedural, asymmetric, too-tall figure:
-// open ribcage with six heart-nodes (one dies with each destroyed Heart),
+// open ribcage with seven heart-nodes (one dies with each destroyed Heart),
 // crooked pale head, hair curtains, absurd limbs.
 //
 // Uncanny motion: limb/head transforms are only recomputed at a quantised
@@ -31,7 +31,7 @@ export class AmalgamAvatar {
     this.doorK = 0;
     this.rise = 0;
     this.forced = null;
-    this.heartsLit = 6;
+    this.heartsLit = 7;
     this.liftK = 0;
 
     const skin = new THREE.MeshStandardMaterial({ color: 0xcdc3b4, roughness: 0.55 });
@@ -70,7 +70,7 @@ export class AmalgamAvatar {
     pelvis.scale.set(1.3, 0.6, 0.8);
     this.hips.add(pelvis);
 
-    // Spine + ribcage + six heart-nodes.
+    // Spine + ribcage + seven heart-nodes.
     this.spine = new THREE.Group();
     this.hips.add(this.spine);
     const column = limb(1.05, 0.045, bone);
@@ -105,10 +105,12 @@ export class AmalgamAvatar {
     this.spine.add(shroud);
     this.mats.push(shroud.material);
     this.hearts = [];
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 7; i++) {
       const mat = new THREE.MeshBasicMaterial({ color: 0xff2020 });
       const node = new THREE.Mesh(new THREE.SphereGeometry(0.042, 10, 8), mat);
-      node.position.set((i % 2 ? 1 : -1) * 0.065, 0.5 + Math.floor(i / 2) * 0.13, -0.04);
+      // Seven heart-nodes: three pairs and one at the core of the ribcage.
+      node.position.set(i === 6 ? 0 : (i % 2 ? 1 : -1) * 0.065, i === 6 ? 0.69 : 0.5 + Math.floor(i / 2) * 0.13, i === 6 ? -0.07 : -0.04);
+      if (i === 6) node.scale.setScalar(1.4);
       const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: fx.softTex, color: 0xff1a10, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
       glow.scale.setScalar(0.32);
       node.add(glow);
@@ -439,9 +441,9 @@ export class AmalgamAvatar {
 
   update(dt, t, visibleFloor) {
     const s = this.snap;
-    const visible = !s.hid && s.f === visibleFloor;
-    this.group.visible = visible || this.rise > 0.01;
     const forced = this.forced && performance.now() < this.forced.until;
+    const visible = (!s.hid && s.f === visibleFloor) || forced; // (the capture screen always shows its face)
+    this.group.visible = visible || this.rise > 0.01;
 
     if (!forced) {
       const k = 1 - Math.exp(-dt * (s.state === 'hunting' ? 14 : 9));

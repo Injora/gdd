@@ -1,5 +1,7 @@
-// The Malphas Amalgam: AI state machine, capture → Cell → rescue, game over,
-// bot rescue pathfinding, debug controls.
+// The Malphas Amalgam: AI state machine, capture → Cage → rescue, game over,
+// bot rescue pathfinding, debug controls. (Its Step 6 rules — unkillable,
+// sight-lock, invisibility, the three lock-breaking Ultimates — are in
+// keeper.test.js.)
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -166,11 +168,12 @@ test('noise: sprinting nearby, casting, and a dying Heart start a hunt', () => {
   g.spells.cast(p, yawFromDir(-1, 0));
   assert.equal(m.state, 'hunting', 'spellcasting carries 14 units');
 
-  placeMonster(0);
+  // A dying Heart is felt anywhere: it goes to look (it never knows who did it).
+  m.setState('stalking');
   m.floor = 1;
-  g.noise(g.players.get('p1'), Infinity, 'heart');
-  assert.equal(m.state, 'hunting', 'a dying Heart is felt anywhere');
-  assert.equal(m.targetId, 'p1');
+  m.hear({ x: 5, z: 5, floor: 0 }, Infinity, 'heart');
+  assert.equal(m.state, 'searching');
+  assert.deepEqual(m.lastKnown, { x: 5, z: 5, floor: 0 });
 });
 
 test('staring at it with a lit wand for 1.5s makes it duck out of sight or charge', () => {
@@ -183,6 +186,7 @@ test('staring at it with a lit wand for 1.5s makes it duck out of sight or charg
     put(p, row.x, row.y);
     put(m, row.x + 5, row.y);
     m.yaw = yawFromDir(-1, 0);
+    m.blindUntil = Infinity; // (isolate the stare from its own sight-lock)
     p.yaw = yawFromDir(1, 0);
     p.light = true;
     m.setState('stalking');
@@ -213,10 +217,12 @@ test('hunt → lunge → capture: the victim lands in the Cell; the Amalgam retr
   assert.equal(m.state, 'retreating');
 
   run(g, 1.2);
+  assert.ok(!p.captured, 'the 1.5s capture screen is still playing');
+  run(g, 0.4);
   assert.ok(p.captured);
   assert.equal(p.floor, g.map.cell.floor);
   const room = g.map.floors[p.floor].roomIds[worldToTile(p.z) * g.map.floors[p.floor].w + worldToTile(p.x)];
-  assert.equal(room, g.map.cell.roomId, 'inside the Ritual Cell');
+  assert.equal(room, g.map.cell.roomId, 'inside the Underground Cage');
   assert.ok(!g.propState[g.map.ids.gate]?.open, 'gate locked');
   assert.equal(evs(g, 'captured').length, 1);
   assert.ok(m.hidden, 'melted into the dark');
@@ -243,7 +249,7 @@ test('a Void-shielded wizard is not captured: the lunge rebounds', () => {
   assert.ok(m.isBlocked() && m.isKnocked());
 });
 
-test('losing sight of its prey sends it searching, then back to stalking', () => {
+test('locked on, it never gives up the chase: out of sight, on another floor, it still comes', () => {
   const g = makeGame(humans('parthius', 'soham'));
   const m = awake(g);
   g.players.get('p1').floor = 1;
@@ -256,39 +262,45 @@ test('losing sight of its prey sends it searching, then back to stalking', () =>
   m.hidden = false;
   m.setState('stalking');
   m.hunt(p, 'test');
-  m.lastSeenAt = g.time;
-  assert.ok(run(g, AI.LOSE_SIGHT + 1, () => m.state === 'searching'), 'gave up the chase');
-  assert.ok(run(g, AI.SEARCH_TIME + 1, () => m.state === 'stalking' || m.state === 'hunting'));
+  p.capturing = 0;
+  const reached = run(g, 40, () => Math.hypot(m.x - p.x, m.z - p.z) < 4 || evs(g, 'capture').length > 0);
+  assert.ok(reached, 'it ran them down across the house, never seeing them until the end');
+  assert.equal(evs(g, 'monster:hunt').length, 1, 'one lock, never dropped');
 });
 
-test('combined elements (3 different spells within 5s) or stagger damage banish it', () => {
+test('unkillable before the Hearts are gone: spells do no damage and never banish it', () => {
   const g = makeGame(humans('parthius', 'soham'));
   const m = awake(g);
-  m.damage(3, 'fire');
+  m.damage(500, 'fire');
+  assert.equal(m.hp, m.maxHp);
+  assert.ok(!m.dead);
+  assert.equal(evs(g, 'monster:damage').at(-1).immune, true);
+  // Three elements in quick succession no longer drive it off.
+  m.burn(10, 5, 0.1);
   m.stun(0.5);
-  assert.notEqual(m.state, 'retreating');
   m.knockback(m.x - 1, m.z, 2, 0.3);
-  assert.equal(m.state, 'retreating');
-  assert.equal(evs(g, 'monster:banished').at(-1).reason, 'combo');
-
-  const g2 = makeGame(humans('parthius', 'soham'));
-  const m2 = awake(g2);
-  m2.damage(AI.STAGGER_HP + 1, 'earth');
-  assert.equal(m2.state, 'retreating');
-  assert.equal(m2.hp, m2.maxHp, 'stagger HP resets');
-  assert.ok(!m2.dead);
+  run(g, 1);
+  assert.notEqual(m.state, 'retreating');
+  assert.equal(evs(g, 'monster:banished').length, 0);
+  assert.equal(m.hp, m.maxHp, 'fire does not even scorch it');
 });
 
-test('Psychic Torment and Sacred Bind break an active chase', () => {
+test('ordinary crowd control only stalls a locked chase: Psychic Torment and Sacred Bind', () => {
   const g = makeGame(humans('injorath', 'soham'));
   const m = awake(g);
   const p = g.players.get('p0');
   m.hunt(p, 'test');
   m.torment(2, 6);
-  assert.equal(m.state, 'searching');
-  m.hunt(p, 'test');
+  assert.equal(m.state, 'hunting', 'the chase is not broken');
+  assert.ok(m.st.tormentUntil - g.time <= AI.CC_CAP + 1e-9, 'and it only falters for a moment');
   m.stun(3.5);
-  assert.equal(m.state, 'searching');
+  assert.equal(m.state, 'hunting');
+  assert.ok(m.st.stunUntil - g.time <= AI.CC_CAP + 1e-9);
+  m.freeze(30); // (a plain freeze, not Dawn)
+  assert.ok(m.st.frozenUntil - g.time <= AI.CC_CAP + 1e-9);
+  m.knockback(m.x - 1, m.z, 9, 1);
+  assert.ok(m.st.knockLeft <= AI.KNOCK_CAP + 1e-9);
+  assert.equal(m.targetId, 'p0');
 });
 
 test('enrage: hunting speed rises with every destroyed Heart', () => {
@@ -329,7 +341,7 @@ test('rescue: breaking the lock frees every prisoner, who can walk out', () => {
   const g = makeGame(humans('parthius', 'soham', 'kartavian'));
   const gate = g.props[g.map.ids.gate];
   for (const id of ['p0', 'p1']) g.capture(g.players.get(id), g.monster);
-  run(g, 1);
+  run(g, 1.6);
   assert.deepEqual(g.prisoners().map((p) => p.id).sort(), ['p0', 'p1']);
   const rescuer = g.players.get('p2');
   Object.assign(rescuer, { x: gate.front.x, z: gate.front.z, floor: gate.floor });
@@ -350,7 +362,7 @@ test('rescue: breaking the lock frees every prisoner, who can walk out', () => {
 test('the gate stays locked against a prisoner pushing on it', () => {
   const g = makeGame(humans('parthius', 'soham'));
   g.capture(g.players.get('p0'), g.monster);
-  run(g, 1);
+  run(g, 1.6);
   const p = g.players.get('p0');
   const gate = g.props[g.map.ids.gate];
   let pos = { x: p.x, z: gate.z };
@@ -362,10 +374,10 @@ test('everyone held at once → game over; Retry restores the phase at the Foyer
   const g = makeGame(humans('parthius', 'soham'));
   const m = awake(g);
   g.capture(g.players.get('p0'), m);
-  run(g, 1);
+  run(g, 1.6);
   assert.notEqual(g.phase, PHASE.GAMEOVER, 'one free wizard left');
   g.capture(g.players.get('p1'), m);
-  run(g, 1);
+  run(g, 1.6);
   assert.equal(g.phase, PHASE.GAMEOVER);
   assert.equal(evs(g, 'gameover').length, 1);
 
@@ -379,12 +391,12 @@ test('everyone held at once → game over; Retry restores the phase at the Foyer
   assert.equal(evs(g, 'restart').length, 1);
 });
 
-test('bots run to the Cell (down the stairs) and break the lock for a captured human', () => {
+test('bots run to the Cage (down the stairs) and break the lock for a captured human', () => {
   const g = makeGame([{ id: 'h', wizardId: 'parthius' }, { id: 'b1', wizardId: 'soham', isBot: true }]);
   g.monster.nextHauntAt = Infinity; // keep the Amalgam out of it
   const h = g.players.get('h');
   g.capture(h, g.monster);
-  run(g, 1);
+  run(g, 1.6);
   assert.ok(h.captured);
   const bot = g.players.get('b1');
   assert.equal(bot.floor, 0);
@@ -403,7 +415,7 @@ test('bot names follow their wizard when swapped', () => {
   assert.equal(evs(g, 'roster')[0].players.find((m) => m.id === 'b1').name, 'Parthius (bot)');
 });
 
-test('a prisoner can cast through the bars at the Amalgam outside', () => {
+test('a prisoner can cast through the cage bars at the Amalgam outside', () => {
   const g = makeGame(humans('parthius', 'soham'));
   const m = awake(g);
   const gate = g.props[g.map.ids.gate];
@@ -413,12 +425,11 @@ test('a prisoner can cast through the bars at the Amalgam outside', () => {
   m.hidden = false;
   m.setState('stalking');
   m.peekUntil = Infinity;
-  const hp = m.hp;
   g.spells.cast(p, yawFromDir(-1, 0));
   run(g, 1);
   const impact = evs(g, 'impact')[0];
   assert.equal(impact?.hit, 'amalgam', 'fireball flew between the bars');
-  assert.ok(m.hp < hp || m.state === 'retreating');
+  assert.equal(evs(g, 'monster:damage').at(-1).immune, true, '(it shrugs it off)');
 });
 
 test('debug: P cycles Husk → Haunt → Stalk → Hunt → Capture → Auto; K captures and frees', () => {
@@ -434,7 +445,7 @@ test('debug: P cycles Husk → Haunt → Stalk → Hunt → Capture → Auto; K 
     if (modes.at(-1) === 'hunt') assert.equal(g.monster.state, 'hunting');
     if (modes.at(-1) === 'capture') {
       assert.ok(run(g, 4, () => evs(g, 'capture').length > 0), 'capture test lunges at you');
-      run(g, 1);
+      run(g, 1.6);
       assert.ok(p.captured);
       g.debugCapture('p0'); // K while held → rescue
       assert.ok(!p.captured);
@@ -447,6 +458,6 @@ test('debug: P cycles Husk → Haunt → Stalk → Hunt → Capture → Auto; K 
   const before = evs(g, 'capture').length;
   g.debugCapture('p0');
   assert.equal(evs(g, 'capture').length, before + 1);
-  run(g, 1);
+  run(g, 1.6);
   assert.ok(p.captured);
 });

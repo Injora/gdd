@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Six Hearts: The Forbidden Convergence</title>
+  <title>Seven Hearts: The Forbidden Convergence</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23050405'/%3E%3Cpath d='M16 27 4.5 15.5A6.5 6.5 0 0 1 16 8a6.5 6.5 0 0 1 11.5 7.5Z' fill='%23d4222c'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -24,9 +24,9 @@
   <!-- Title -->
   <section id="screen-title" class="screen">
     <div class="title-block">
-      <h1 class="game-title"><span class="six">SIX</span> HEARTS</h1>
+      <h1 class="game-title"><span class="six">SEVEN</span> HEARTS</h1>
       <h2 class="game-subtitle">The Forbidden Convergence</h2>
-      <p class="tagline">Seven wizards. One mansion. Six hearts that must stop beating.</p>
+      <p class="tagline">Seven wizards. Seven Sins. Seven hearts that must stop beating.</p>
     </div>
     <div class="panel title-panel">
       <label class="field">
@@ -75,6 +75,7 @@
 
   <!-- In-game HUD -->
   <section id="hud" class="hidden">
+    <canvas id="minimap" class="minimap" aria-label="Map of the current floor"></canvas>
     <div id="hud-objective" class="hud-objective"></div>
     <div id="hud-hearts" class="hud-hearts hidden"></div>
     <div id="hud-room" class="hud-room"></div>
@@ -96,10 +97,21 @@
         <div id="hud-hp" class="hud-hp"><div class="fill"></div><span></span></div>
         <div id="hud-lumos" class="hud-lumos">NOX</div>
       </div>
-      <div id="hud-hotbar" class="hud-hotbar"></div>
+      <div class="hud-row">
+        <div id="hud-hotbar" class="hud-hotbar"></div>
+        <div id="hud-invis" class="slot invis" title="V: Disillusionment Charm. 12s unseen, 18s cooldown. Cast it BEFORE it sees you, and hold still.">
+          <div class="cd"></div><span class="glyph">◌</span><span class="key">V</span><span class="time"></span>
+        </div>
+      </div>
       <div id="hud-wizard" class="hud-wizard"></div>
     </div>
   </section>
+  <div id="screen-invis" class="screen-invis"></div>
+  <div id="capture-screen" class="capture-screen" aria-hidden="true">
+    <div class="glyphs"><span>ᛉ</span><span>ᚦ</span><span>ᛗ</span><span>ᛞ</span><span>ᚷ</span><span>ᛟ</span><span>ᚹ</span><span>ᛋ</span><span>ᛇ</span></div>
+    <div class="vein"></div>
+    <h2>IT HAS YOU</h2>
+  </div>
   <div id="screen-fx" class="screen-fx"></div>
   <div id="buff-fx" class="buff-fx"></div>
 
@@ -107,7 +119,7 @@
     <div class="journal-page">
       <h2>The Forbidden Convergence</h2>
       <div id="journal-text"></div>
-      <h3>The Six Hearts</h3>
+      <h3>The Seven Hearts</h3>
       <ol id="journal-hearts"></ol>
       <p class="muted small-text">Press J or Esc to close</p>
     </div>
@@ -121,11 +133,12 @@
         <tr><td>Mouse</td><td>Look</td></tr>
         <tr><td>Shift</td><td>Sprint (loud)</td></tr>
         <tr><td>C / Ctrl</td><td>Crouch (quiet)</td></tr>
-        <tr><td>1 – 4</td><td>Cast spell 1–4 (and select it)</td></tr>
+        <tr><td>1 – 4</td><td>Select spell 1–4 (the wand tip previews it)</td></tr>
+        <tr><td>R</td><td>Select your Ultimate (needs 100% charge)</td></tr>
         <tr><td>LMB / Q</td><td>Cast the selected spell</td></tr>
-        <tr><td>R</td><td>Ultimate (needs 100% charge)</td></tr>
+        <tr><td>V</td><td>Disillusionment Charm: 12s unseen (18s cooldown). Cast it BEFORE it sees you, then hold still</td></tr>
         <tr><td>F</td><td>Lumos / Nox: bright torch (you're seen 50% further)</td></tr>
-        <tr><td>E (hold)</td><td>Interact / destroy / read / break lock</td></tr>
+        <tr><td>E (hold)</td><td>Interact: read, break a room's wards, open a Heart, use stairs, break the cage lock</td></tr>
         <tr><td>J</td><td>Journal</td></tr>
         <tr><td>G</td><td>Call for help (ping your location)</td></tr>
         <tr class="debug-only"><td>M</td><td>Debug map (click to teleport)</td></tr>
@@ -133,6 +146,8 @@
         <tr class="debug-only"><td>K</td><td>Instant capture / break the lock</td></tr>
         <tr class="debug-only"><td>Shift + 1 – 7</td><td>Hot-swap wizard</td></tr>
         <tr class="debug-only"><td>U</td><td>Fill Ultimate charge</td></tr>
+        <tr class="debug-only"><td>L</td><td>Open the nearest Heart's Sin arena (in one: slay the Sin)</td></tr>
+        <tr class="debug-only"><td>H / N</td><td>Skip to the Convergence / boss to the Hell Portal</td></tr>
       </table>
     </div>
   </div>
@@ -140,7 +155,7 @@
   <div id="gameover" class="overlay gameover hidden">
     <div class="gameover-inner">
       <h1>The Ritual Consumes You</h1>
-      <p>Every soul is held in the Cell. The Amalgam feeds.</p>
+      <p>Every soul is locked in the Iron Cage. The Amalgam feeds.</p>
       <div class="gameover-actions">
         <button id="btn-retry" class="btn primary">Retry (restart phase)</button>
         <button id="btn-to-lobby" class="btn ghost">Return to the coven</button>

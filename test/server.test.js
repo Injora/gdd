@@ -42,7 +42,7 @@ function waitFor(s, ev, pred = () => true, ms = 4000) {
   });
 }
 
-test('solo coven: lobby -> tome -> six hearts -> convergence', async () => {
+test('solo coven: lobby -> tome -> seven hearts (room tasks, Sins) -> convergence', async () => {
   const a = client();
   await waitFor(a, 'connect');
 
@@ -117,15 +117,42 @@ test('solo coven: lobby -> tome -> six hearts -> convergence', async () => {
   assert.equal(tome.hearts.length, HEART_COUNT);
   assert.equal(game.phase, PHASE.HEARTS);
 
-  // Destroy all six.
+  game.monster.hideFor(1e6); // (this test is about the flow, not the chase)
+
+  // A sealed Heart says so.
+  putAt(map.props[map.hearts[0].propId]);
+  const sealed = waitFor(a, 'game:event', (e) => e.type === 'whisper');
+  a.emit('p:interact', { propId: map.hearts[0].propId });
+  assert.match((await sealed).text, /seal/);
+
+  // Destroy all seven: break each room's three wards, open the Heart, slay its Sin.
   for (const h of map.hearts) {
     const prop = map.props[h.propId];
+    for (const tid of h.tasks) {
+      const tp = map.props[tid];
+      putAt(tp);
+      while (!game.propState[tid]?.done) {
+        const started = waitFor(a, 'game:channel', (d) => d.propId === tid);
+        a.emit('p:interact', { propId: tid });
+        await started;
+        const step = waitFor(a, 'game:event', (e) => e.type === 'task' && e.propId === tid);
+        fastForward();
+        await step;
+      }
+    }
     putAt(prop);
     const started = waitFor(a, 'game:channel', (d) => d.propId === prop.id);
     a.emit('p:interact', { propId: prop.id });
     await started;
-    const done = waitFor(a, 'game:event', (e) => e.type === 'heart' && e.propId === prop.id);
+    const arena = waitFor(a, 'game:event', (e) => e.type === 'arena:start' && e.heartPropId === prop.id);
     fastForward();
+    const ev = await arena;
+    assert.equal(ev.sin, h.sin);
+    assert.ok(ev.tiles.length > 0, 'the doors are sealed');
+    const demon = game.demons.find((d) => d.id === ev.demonId);
+    demon.eruptUntil = 0;
+    const done = waitFor(a, 'game:event', (e) => e.type === 'heart' && e.propId === prop.id);
+    demon.damage(9999, 'test');
     await done;
   }
   assert.equal(game.destroyed.size, HEART_COUNT);

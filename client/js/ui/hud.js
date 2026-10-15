@@ -2,7 +2,7 @@
 // prompt + channel bar, banners, whispers, team list, stamina, journal.
 
 import { WIZARD_BY_ID } from '/shared/wizards.js';
-import { PHASE, HEART_COUNT, STAMINA } from '/shared/constants.js';
+import { PHASE, HEART_COUNT, STAMINA, INVIS } from '/shared/constants.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -19,8 +19,8 @@ const SPELL_GLYPHS = {
 
 const OBJECTIVES = {
   [PHASE.TOME]: ['Phase I · The Tome', 'Somewhere in this house is the Ritual Book. Find it. Read it.'],
-  [PHASE.HEARTS]: ['Phase II · The Six Hearts', 'Find and destroy the six Hearts hidden among the mansion’s things. [J] Journal'],
-  [PHASE.CONVERGENCE]: ['Phase II · Complete', 'Six hearts are silent. Return to the Ritual Altar together.'],
+  [PHASE.HEARTS]: ['Phase II · The Seven Hearts', 'Break each Heart’s three room wards, then slay the Sin inside it. [J] Journal'],
+  [PHASE.CONVERGENCE]: ['Phase II · Complete', 'Seven hearts are silent. Return to the Ritual Altar together.'],
   [PHASE.ARCHON]: ['Phase III · The Archon', 'Seven elements. One body. Drag it into Hell.'],
 };
 
@@ -119,8 +119,9 @@ export class HUD {
     this.renderHearts();
   }
 
-  heartDestroyed(propId) {
-    this.destroyed.add(propId);
+  /** A Heart died (by heart type). */
+  heartDestroyed(type) {
+    this.destroyed.add(type);
     this.renderHearts();
     this.setPhase(this.phase);
   }
@@ -128,7 +129,7 @@ export class HUD {
   renderHearts() {
     if (!this.hearts) return;
     $('hud-hearts').innerHTML = this.hearts
-      .map((h) => `<span class="h ${this.destroyed.has(h.propId) ? 'dead' : ''}" title="${esc(h.name)}">♥</span>`)
+      .map((h) => `<span class="h ${this.destroyed.has(h.type) ? 'dead' : ''}" title="${esc(h.name)}">♥</span>`)
       .join('');
     this.renderJournal();
   }
@@ -142,7 +143,7 @@ export class HUD {
     if (!this.tome) return;
     $('journal-text').innerHTML = this.tome.text.map((p) => `<p>${esc(p)}</p>`).join('');
     $('journal-hearts').innerHTML = this.tome.hearts
-      .map((h) => `<li class="${this.destroyed.has(h.propId) ? 'done' : ''}"><b>${esc(h.name)}.</b> ${esc(h.clue)}</li>`)
+      .map((h) => `<li class="${this.destroyed.has(h.type) ? 'done' : ''}"><b>${esc(h.name)}.</b> ${esc(h.clue)}</li>`)
       .join('');
   }
 
@@ -176,11 +177,31 @@ export class HUD {
     this.select(this.selected ?? 0);
   }
 
+  /** Highlight the selected slot (0–3, or 'ult'): number keys and R only select. */
   select(slot) {
     this.selected = slot;
     this.slots?.forEach((el, i) => el.classList.toggle('selected', i === slot));
-    const sp = this.wizard?.spells[slot];
-    if (sp) $('hud-spellname').textContent = sp.name;
+    this.ultEl?.classList.toggle('selected', slot === 'ult');
+    const sp = slot === 'ult' ? this.wizard?.ultimate : this.wizard?.spells[slot];
+    if (sp) $('hud-spellname').textContent = slot === 'ult' ? `ULTIMATE · ${sp.name}` : sp.name;
+  }
+
+  /** The Disillusionment Charm (V): active time left, or cooldown left. */
+  invis(active, left, cooldown) {
+    const el = $('hud-invis');
+    const key = `${active}|${Math.ceil(left * 10)}|${Math.ceil(cooldown * 10)}`;
+    if (key === this._invisKey) return;
+    this._invisKey = key;
+    el.classList.toggle('active', active);
+    el.classList.toggle('cooling', !active && cooldown > 0);
+    el.style.setProperty('--cd', String(active ? left / INVIS.duration : cooldown / INVIS.cooldown));
+    el.querySelector('.time').textContent = active ? `${left.toFixed(1)}s` : cooldown > 0 ? cooldown.toFixed(1) : '';
+    $('screen-invis').classList.toggle('on', active);
+  }
+
+  /** The Keeper's capture screen (1.5s). */
+  captureScreen(on) {
+    $('capture-screen').classList.toggle('show', on);
   }
 
   /** remaining/duration (seconds) per slot; call every frame. */
@@ -206,7 +227,7 @@ export class HUD {
   }
 
   denied(slot) {
-    const el = slot === 'ult' ? this.ultEl : this.slots?.[slot ?? this.selected];
+    const el = slot === 'ult' ? this.ultEl : slot === 'invis' ? $('hud-invis') : this.slots?.[slot ?? this.selected];
     if (!el) return;
     el.classList.remove('denied');
     void el.offsetWidth;
@@ -263,17 +284,21 @@ export class HUD {
     el.querySelector('small').textContent = text;
   }
 
-  boss(hp, max, ward, text) {
+  boss(hp, max, ward, text, title = 'THE UNBOUND MALPHAS AMALGAM', color = null) {
     const el = $('hud-boss');
     el.classList.toggle('hidden', hp === null);
     if (hp === null) return;
+    el.querySelector('span').textContent = title;
+    el.style.setProperty('--boss', color ?? '#c0102a');
     el.querySelector('i').style.width = `${Math.max(0, (hp / max) * 100)}%`;
     el.classList.toggle('ward', !!ward);
     el.querySelector('small').textContent = text;
   }
 
-  /** Archon form: show the 7 Masteries instead of nothing. */
-  masteries(list, readyMap) {
+  selectMastery(key) { this._mastery = key; }
+
+  /** Archon form: show the 7 Masteries (the selected one highlighted; click fires it). */
+  masteries(list, readyMap, selected = this._mastery) {
     const el = $('hud-masteries');
     if (!list) {
       el.classList.add('hidden');
@@ -286,6 +311,7 @@ export class HUD {
     }
     for (const node of el.querySelectorAll('.slot')) {
       const M = list.find((m) => m.id === node.dataset.id);
+      node.classList.toggle('selected', M.key === selected);
       const left = readyMap?.[M.id] ?? 0;
       node.style.setProperty('--cd', String(left > 0 ? left / M.cooldown : 0));
       node.querySelector('.time').textContent = left > 0 ? left.toFixed(1) : '';

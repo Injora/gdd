@@ -4,9 +4,14 @@
 import * as THREE from 'three';
 import { createCollisionWorld, addBarrier, removeBarrier, lineOfSight } from '/shared/collision.js';
 import { roomAt } from '/shared/mapgen.js';
-import { PHASE, INTERACT_RANGE, NET_SEND_RATE, FLOOR_Y, STAMINA, HP, LUMOS } from '/shared/constants.js';
+import { PHASE, INTERACT_RANGE, NET_SEND_RATE, FLOOR_Y, STAMINA, HP, LUMOS, INVIS, FLOOR, HEART_COUNT } from '/shared/constants.js';
 import { WIZARDS, WIZARD_BY_ID, ABILITY_BY_ID } from '/shared/wizards.js';
 import { PROP_LABELS } from '/shared/propdefs.js';
+import { TASKS, TASK_STEPS } from '/shared/lore.js';
+import { SINS } from '/shared/sins.js';
+import { SpellInput } from './input/SpellInput.js';
+import { Minimap, FOOTSTEP_RANGE } from './ui/Minimap.js';
+import { SinDemonAvatar } from './entities/SinDemonAvatar.js';
 import { buildMansion } from './world/MansionBuilder.js';
 import { FirstPersonController } from './player/FirstPersonController.js';
 import { WizardAvatar } from './entities/WizardAvatar.js';
@@ -81,6 +86,15 @@ export class GameClient {
     this.heartTellAt = 0;
     this.scrapeAt = 0;
     this.pings = [];
+    this.input = new SpellInput(); // 1–4 / R select; LMB / Q fire
+    this.invisUntil = 0;
+    this.invisReadyAt = 0;
+    this.arenas = new Map(); // barrierId -> arena info
+    this.visibleFloors = [FLOOR.GROUND, FLOOR.UPPER];
+    this.captureUntil = 0;
+    this.invisK = 0;
+    this.tremor = 0;
+    this.lastTremorStep = 0;
 
     this.initRenderer();
     this.initScene();
@@ -125,11 +139,18 @@ export class GameClient {
     this.hud.hp(HP.MAX);
     if (init.tome) this.applyTome(init.tome, true);
     for (const id of this.destroyed) {
+      this.heartIds.add(id);
       this.mansion.destroyHeart(id, true);
-      this.hud.heartDestroyed(id);
     }
 
     this.debugMap = new DebugMap($('debug-map'), this.map, (floor, x, z) => this.debugTeleport(x, z, floor));
+    this.minimap = new Minimap($('minimap'), this.map);
+    // Hearts already broken open or destroyed (joining mid-game).
+    for (const [id, st] of Object.entries(this.propState)) {
+      if (st?.unsealed) this.unsealHeart(Number(id), true);
+      if (st?.done !== undefined || st?.turns !== undefined) this.mansion.setPropState(Number(id), st);
+    }
+    for (const a of init.arenas ?? []) this.onArenaStart(a, true);
     $('debug-stats').classList.toggle('hidden', !debug);
     document.body.classList.toggle('debug', debug);
 
@@ -185,19 +206,63 @@ export class GameClient {
     const rig = new THREE.Group();
     rig.position.set(0.2, -0.2, -0.36);
     rig.rotation.set(0.12, 0.08, 0);
-    const wand = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.004, 0.007, 0.26, 6).rotateX(Math.PI / 2),
-      new THREE.MeshStandardMaterial({ color: 0x0d0805, roughness: 0.7 }),
-    );
-    wand.position.z = -0.1;
+    // First person: a robed sleeve with a cuff in your colour, a hand, and a carved wand.
+    this.handMats = [];
+    const fp = (m) => { this.handMats.push(m); return m; };
+    const sleeveMat = fp(new THREE.MeshStandardMaterial({ color: 0x0c0a0e, roughness: 0.85 }));
+    const cuffMat = fp(new THREE.MeshStandardMaterial({ color: this.wizard.color, roughness: 0.45, emissive: this.wizard.color, emissiveIntensity: 0.08 }));
+    const skinMat = fp(new THREE.MeshStandardMaterial({ color: 0xd2b49a, roughness: 0.6 }));
+    const woodMat = fp(new THREE.MeshStandardMaterial({ color: 0x3a2214, roughness: 0.55 }));
+    const goldMat = fp(new THREE.MeshStandardMaterial({ color: 0xc8a040, roughness: 0.35, metalness: 0.85 }));
+    const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 0.2, 10).rotateX(Math.PI / 2), sleeveMat);
+    sleeve.position.set(0.03, -0.03, 0.13);
+    rig.add(sleeve);
+    const cuff = new THREE.Mesh(new THREE.TorusGeometry(0.046, 0.008, 6, 16), cuffMat);
+    cuff.position.set(0.035, -0.035, 0.03);
+    rig.add(cuff);
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.03, 10, 8), skinMat);
+    hand.scale.set(1, 0.85, 1.25);
+    hand.position.set(0.01, -0.012, 0.0);
+    rig.add(hand);
+    const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.006, 0.07, 8).rotateX(Math.PI / 2), woodMat);
+    handle.position.z = -0.02;
+    rig.add(handle);
+    for (const z of [-0.045, 0.0]) {
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.0075, 0.002, 4, 10), goldMat);
+      ring.position.z = z;
+      rig.add(ring);
+    }
+    const wand = new THREE.Mesh(new THREE.CylinderGeometry(0.0035, 0.0065, 0.22, 6).rotateX(Math.PI / 2), woodMat);
+    wand.position.z = -0.15;
     rig.add(wand);
-    this.wandTipMat = new THREE.MeshBasicMaterial({ color: this.wizard.color });
+    this.wandTipMat = new THREE.MeshBasicMaterial({ color: this.wizard.color, transparent: true });
     const tip = new THREE.Mesh(new THREE.SphereGeometry(0.008, 8, 6), this.wandTipMat);
-    tip.position.z = -0.235;
+    tip.position.z = -0.262;
     rig.add(tip);
     this.wandTip = tip;
+    // The elemental preview aura: what the selected slot will cast.
+    this.wandAura = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: this.mansion.kit.glow(new THREE.Group(), 0, 0, 0, 0xffffff, 1).material.map,
+      color: this.wizard.color, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.5,
+    }));
+    this.wandAura.position.z = -0.262;
+    this.wandAura.scale.setScalar(0.05);
+    rig.add(this.wandAura);
     this.camera.add(rig);
     this.wandRig = rig;
+    // Dust motes drifting in your own Lumos beam.
+    {
+      const n = 160;
+      const pos = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) pos.set([(Math.random() - 0.5) * 3, (Math.random() - 0.5) * 2, -1 - Math.random() * 7], i * 3);
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      this.motes = new THREE.Points(geo, new THREE.PointsMaterial({
+        size: 0.025, color: 0xfff0d0, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending,
+        map: this.wandAura.material.map,
+      }));
+      this.camera.add(this.motes);
+    }
 
     const spot = new THREE.SpotLight(tint, WAND_INTENSITY, 30, 0.44, 0.6, 1.6);
     spot.position.set(0.24, -0.16, -0.6);
@@ -240,6 +305,19 @@ export class GameClient {
       'game:channel': (d) => {
         this.channel = d.propId === null ? null : { propId: d.propId, start: performance.now(), duration: d.duration * 1000 };
         if (!this.channel) this.hud.progress(null);
+      },
+      // A Sin's ribbons or vacuum yank you along.
+      'game:impulse': (d) => this.controller.impulse?.(d.vx, d.vz, d.duration),
+      'game:invis': (d) => {
+        const now = performance.now();
+        if (d.ok) {
+          this.invisUntil = now + d.duration * 1000;
+          this.invisReadyAt = now + d.readyIn * 1000;
+          if (d.late) this.hud.whisper('Too late. It has already seen you — it can still smell you out.', 3500);
+        } else if (d.reason === 'cooldown') {
+          this.invisReadyAt = now + d.readyIn * 1000;
+          this.hud.denied('invis');
+        }
       },
     };
     for (const [ev, fn] of Object.entries(this.handlers)) this.net.on(ev, fn);
@@ -287,12 +365,17 @@ export class GameClient {
       seenMonsters.add(m.id);
       let av = this.monsters.get(m.id);
       if (!av) {
-        av = m.kind === 'amalgam'
-          ? new AmalgamAvatar(m, {
+        if (m.kind === 'amalgam') {
+          av = new AmalgamAvatar(m, {
             map: this.map, fx: this.fx, debug: this.debug,
-            onStep: (a, hunting) => this.audio.monsterStep(wpos(a.floor, a.x, a.z, 0.2), hunting),
-          })
-          : new MonsterAvatar(m, this.fx);
+            onStep: (a, hunting) => this.onKeeperStep(a, hunting),
+          });
+        } else if (m.kind === 'sin') {
+          av = new SinDemonAvatar(m, { fx: this.fx, getPos: (id) => (id === this.selfId ? this.localPos() : this.positions.get(id)) });
+          this.scene.add(av.hazardGroup);
+        } else {
+          av = new MonsterAvatar(m, this.fx);
+        }
         this.scene.add(av.group);
         this.monsters.set(m.id, av);
       }
@@ -301,6 +384,7 @@ export class GameClient {
     for (const [id, av] of this.monsters) {
       if (seenMonsters.has(id)) continue;
       this.scene.remove(av.group);
+      if (av.hazardGroup) this.scene.remove(av.hazardGroup);
       av.dispose();
       this.monsters.delete(id);
     }
@@ -348,9 +432,30 @@ export class GameClient {
     this.recoil = 1;
   }
 
+  /** Number keys and R only select (the HUD highlights it, the wand tip previews it). */
   select(slot) {
     this.selected = slot;
     this.hud.select(slot);
+    this.audio.selectSpell?.(slot === 'ult');
+  }
+
+  /** The trigger (LMB, or Q for headless tests): fire whatever is selected. */
+  castSelectedSpell() {
+    if (this.hud.journalOpen || this.gameIsOver) return;
+    const f = this.input.fire({ archon: this.archonMode() });
+    if (f.action === 'mastery') {
+      this.net.emit('p:mastery', { key: f.key, yaw: this.controller.yaw });
+      this.recoil = 1.2;
+      return;
+    }
+    this.cast(f.slot);
+  }
+
+  /** V: the Disillusionment Charm. */
+  castInvis() {
+    if (this.gameIsOver || this.captured || this.archonMode()) return;
+    if (performance.now() < this.invisReadyAt) return this.hud.denied('invis');
+    this.net.emit('p:invis');
   }
 
   setRoster(players) {
@@ -396,9 +501,10 @@ export class GameClient {
         break;
       case 'heart':
         this.destroyed.add(e.propId);
+        this.heartIds.add(e.propId);
         this.mansion.destroyHeart(e.propId);
-        this.hud.heartDestroyed(e.propId);
-        this.hud.banner(`${e.name.toUpperCase()} IS SILENT`, `${e.by} destroyed it. ${e.count} of 6.`);
+        this.hud.heartDestroyed(e.heartType);
+        this.hud.banner(`${e.name.toUpperCase()} IS SILENT`, `${SINS[e.sin]?.name ?? 'Its Sin'} is slain. ${e.count} of ${HEART_COUNT}.`);
         this.shake = 0.6;
         {
           const prop = this.map.props[e.propId];
@@ -408,7 +514,7 @@ export class GameClient {
       case 'phase':
         this.setPhase(e.phase);
         if (e.phase === PHASE.CONVERGENCE) {
-          setTimeout(() => this.hud.banner('SIX HEARTS ARE SILENT', 'Return to the Ritual Altar. All of you.', 6000), 4500);
+          setTimeout(() => this.hud.banner('SEVEN HEARTS ARE SILENT', 'Return to the Ritual Altar. All of you.', 6000), 4500);
         }
         break;
       case 'left':
@@ -503,10 +609,69 @@ export class GameClient {
         }
         break;
 
-      // ---- monsters (Training Husk now, the Keeper in Step 4)
+      // ---- monsters (Training Husk, the Keeper, the Sins)
       case 'monster:damage':
+        if (e.immune) {
+          if ((this._immuneAt ?? 0) < this.time) {
+            this._immuneAt = this.time + 6;
+            this.hud.caption('[ nothing harms it while a single Heart still beats ]', 2600);
+          }
+          this.monsters.get(e.id)?.showImmune?.();
+          break;
+        }
         this.monsters.get(e.id)?.showDamage(e.amount, e.source);
         break;
+      case 'monster:lockbroken': {
+        if (e.reason === 'arena') break;
+        const why = { dawn: 'Chained in golden light, it forgets you.', fracture: 'Its mind is locked; its sight is wiped.', union: 'It touched the Union and recoiled, blind.' }[e.reason] ?? '';
+        this.hud.banner('ITS SIGHT IS BROKEN', `${why} Get out of its sight and hide — V, and hold still.`, 4500);
+        this.audio.lockBroken?.();
+        break;
+      }
+      case 'monster:recoil':
+        this.fx.glow.burst(70, e.x, FLOOR_Y[e.floor] + 1.6, e.z, { speed: 6, life: 0.8, color: new THREE.Color(0xc0102a), drag: 2.5 });
+        this.audio.shriek(wpos(e.floor, e.x, e.z, 2.8), { volume: 0.7, length: 1.4, pitch: 1.1 });
+        break;
+      case 'invis':
+        if (e.id !== this.selfId) {
+          const p = this.positions.get(e.id);
+          if (p) this.fx.glow.burst(30, p.x, FLOOR_Y[p.f] + 1.1, p.z, { speed: 2, life: 0.6, color: new THREE.Color(0xbfe6ff), drag: 3 });
+        } else {
+          this.audio.invis?.();
+        }
+        break;
+
+      // ---- Hearts: room tasks, the Sins' arenas
+      case 'task': {
+        this.mansion.setPropState(e.propId, e.state);
+        this.propState[e.propId] = e.state;
+        const t = TASKS[e.task];
+        this.hud.whisper(e.state.done ? `${t.done}. (${e.progress} of ${e.of})` : `The mirror turns, but not yet true.`, 2600);
+        const prop = this.map.props[e.propId];
+        this.audio.taskStep?.(wpos(prop.floor, prop.x, prop.z, 1), e.task, !!e.state.done);
+        break;
+      }
+      case 'heart:unsealed':
+        this.unsealHeart(e.propId);
+        this.hud.banner(`${e.name.toUpperCase()} IS UNSEALED`, `The wards of the ${e.room} are broken. Something waits inside it: ${SINS[e.sin].name}.`, 5000);
+        break;
+      case 'arena:start':
+        this.onArenaStart(e, false);
+        break;
+      case 'arena:end':
+        this.onArenaEnd(e);
+        break;
+      case 'sin:attack':
+      case 'sin:impact':
+      case 'sin:reflect': {
+        const av = this.monsters.get(e.id);
+        av?.onAttack?.(e);
+        if (e.type === 'sin:attack') this.audio.sinCue?.(e.sin, e.kind, e.stage, wpos(e.floor, e.x, e.z, 1.5));
+        if (e.type === 'sin:reflect') this.audio.sinCue?.('pride', 'reflect', 'strike', wpos(e.floor, e.x, e.z, 1.5));
+        if (e.type === 'sin:impact') this.audio.boom(wpos(e.floor, e.x, e.z), 90, 0.5, 0.7);
+        if ((e.hits ?? []).includes(this.selfId)) this.shake = Math.max(this.shake, 0.4);
+        break;
+      }
       case 'monster:scream': {
         // Psychic Torment: the multi-layered shriek echoes through the mansion.
         const c = this.controller;
@@ -554,9 +719,9 @@ export class GameClient {
       case 'captured':
         if (e.id === this.selfId) {
           this.captured = true;
-          setTimeout(() => this.hud.banner('HELD IN THE RITUAL CELL', 'Press G to call for help. Your spells still pass between the bars.', 6000), 700);
+          setTimeout(() => this.hud.banner('LOCKED IN THE UNDERGROUND IRON CAGE', 'Press G to call for help. Your spells still pass between the bars.', 6000), 200);
         } else {
-          this.hud.whisper(`${e.name} is held in the Basement Ritual Cell. Break the lock!`);
+          this.hud.whisper(`${e.name} is locked in the Underground Iron Cage. Break the lock!`);
         }
         break;
       case 'freed':
@@ -593,7 +758,7 @@ export class GameClient {
         break;
       case 'boss:start':
         this.finaleFx.hellfire(e.floor);
-        this.hud.banner('THE UNBOUND MALPHAS AMALGAM', 'The Chapel splits with hellfire. Keys 1\u20137: Elemental Masteries.', 5000);
+        this.hud.banner('THE UNBOUND MALPHAS AMALGAM', 'The Chapel splits with hellfire. Keys 1\u20137 choose an Elemental Mastery; click to cast it.', 5000);
         this.audio.shriek(wpos(e.floor, e.x, e.z, 3), { volume: 1, length: 2.6, pitch: 0.65 });
         break;
       case 'mastery':
@@ -655,17 +820,64 @@ export class GameClient {
 
   applyTome(tome, silent) {
     this.tomeRead = true;
-    for (const h of tome.hearts) {
-      this.heartIds.add(h.propId);
-      this.heartNames.set(h.propId, h.name);
-    }
-    this.mansion.revealHearts(this.heartIds);
+    // Riddles only: a Heart shows itself when its room's wards are broken.
     this.hud.setJournal(tome);
     this.hud.setHearts(tome.hearts);
+    for (const h of tome.hearts) if (h.destroyed) this.hud.heartDestroyed(h.type);
     if (!silent) {
       this.hud.banner('SOMETHING HAS AWOKEN', `${tome.by} read the Forbidden Convergence aloud.`, 5500);
-      setTimeout(() => this.hud.whisper('Six hearts beat inside this house. Press J to read what the Tome revealed.', 6000), 3000);
+      setTimeout(() => this.hud.whisper('Seven hearts beat inside this house, each sealed by its room. Press J to read the riddles.', 6000), 3000);
       this.shake = 1.2;
+    }
+  }
+
+  /** A Heart's room wards are broken: it shows itself, and its tell begins. */
+  unsealHeart(propId, silent = false) {
+    this.heartIds.add(propId);
+    const prop = this.map.props[propId];
+    this.heartNames.set(propId, prop ? `the ${PROP_LABELS[prop.kind] ?? prop.kind}` : 'the Heart');
+    this.mansion.revealHearts([propId]);
+    if (!this.destroyed.has(propId)) this.mansion.unsealHeart(propId);
+    if (!silent && prop) this.audio.heartTell(wpos(prop.floor, prop.x, prop.z, 1.4), 1);
+  }
+
+  onArenaStart(e, silent) {
+    const info = { barrierId: e.barrierId, tiles: e.tiles, floor: e.floor, roomId: e.roomId, sin: e.sin, heartPropId: e.heartPropId, demonId: e.demonId };
+    this.arenas.set(e.barrierId, info);
+    addBarrier(this.world, e.floor, e.barrierId, e.tiles);
+    this.mansion.addArena(info);
+    if (silent) return;
+    const inside = (e.inside ?? []).includes(this.selfId);
+    const S = SINS[e.sin];
+    this.hud.banner(e.title, inside ? `${S.blurb} The doors will not open until it dies.` : `${e.by} broke ${e.name} open. The doors are sealed in blood.`, 6000);
+    this.shake = Math.max(this.shake, 1);
+    this.redPulse = Math.max(this.redPulse, 0.6);
+    this.audio.arenaSlam?.(inside);
+    const prop = this.map.props[e.heartPropId];
+    if (prop) this.mansion.burst(prop.floor, prop.x, prop.z, 0xff2a1a);
+  }
+
+  onArenaEnd(e) {
+    removeBarrier(this.world, e.barrierId);
+    this.mansion.removeArena(e.barrierId);
+    this.arenas.delete(e.barrierId);
+    if (e.won) {
+      this.audio.arenaWin?.();
+      this.hud.caption('[ the blood-runes fade; the doors are open ]', 3000);
+    } else {
+      this.hud.banner('THE SIN WITHDRAWS', 'Everyone inside was taken. It waits in its Heart for the next of you.', 4500);
+    }
+  }
+
+  /** A Keeper footstep (from its walk cycle): loud, heavy, and on the map. */
+  onKeeperStep(a, hunting) {
+    const c = this.controller;
+    const d = a.floor === c.floor ? Math.hypot(a.x - c.x, a.z - c.z) : Infinity;
+    this.audio.monsterStep(wpos(a.floor, a.x, a.z, 0.2), hunting);
+    if (d <= FOOTSTEP_RANGE) {
+      this.minimap.footstep(a.x, a.z, a.floor);
+      // The floorboards tremble under you.
+      this.tremor = Math.max(this.tremor, 0.25 + (1 - d / FOOTSTEP_RANGE) * 0.75 * (hunting ? 1.3 : 1));
     }
   }
 
@@ -692,9 +904,18 @@ export class GameClient {
           this.hud.lumos(this.lumos);
           this.audio.lumos(this.lumos);
           break;
-        case 'KeyR':
-          if (this.grappleStage()) this.setGrapple(true);
-          else this.cast('ult');
+        case 'KeyR': {
+          // R selects the Ultimate (the trigger fires it); at the Hell Portal it grapples.
+          if (this.grappleStage()) { this.setGrapple(true); break; }
+          const r = this.input.key('KeyR', { archon: this.archonMode() });
+          if (r) this.select(r.slot);
+          break;
+        }
+        case 'KeyV':
+          this.castInvis();
+          break;
+        case 'KeyL':
+          if (this.debug) this.net.emit('debug:arena', {});
           break;
         case 'KeyH':
           if (this.debug) this.net.emit('debug:finale');
@@ -715,7 +936,7 @@ export class GameClient {
           if (this.debug) this.debugMap.toggle();
           break;
         case 'KeyQ':
-          this.cast(this.selected);
+          this.castSelectedSpell(); // alternate trigger (headless tests have no pointer lock)
           break;
         case 'KeyP':
           if (this.debug) this.net.emit('debug:mode');
@@ -730,19 +951,16 @@ export class GameClient {
           if (/^Digit[1-7]$/.test(e.code) && e.shiftKey) {
             // Debug: Shift+1–7 hot-swaps your wizard.
             if (this.debug) this.net.emit('debug:wizard', { wizardId: WIZARDS[Number(e.code.slice(5)) - 1].id });
-          } else if (this.archonMode() && /^Digit[1-7]$/.test(e.code)) {
-            // Archon form: the seven Elemental Masteries.
-            this.net.emit('p:mastery', { key: Number(e.code.slice(5)), yaw: this.controller.yaw });
-            this.recoil = 1.2;
-          } else if (/^Digit[1-4]$/.test(e.code)) {
-            const slot = Number(e.code.slice(5)) - 1;
-            this.select(slot);
-            this.cast(slot);
+          } else {
+            // 1–4 (or 1–7 as the Archon) only SELECT; the trigger fires.
+            const r = this.input.key(e.code, { archon: this.archonMode() });
+            if (r?.action === 'select') this.select(r.slot);
+            else if (r?.action === 'select-mastery') this.hud.selectMastery?.(r.key);
           }
       }
     };
     this._onMouseDown = (e) => {
-      if (e.button === 0 && this.controller.locked) this.cast(this.selected);
+      if (e.button === 0 && this.controller.locked) this.castSelectedSpell();
     };
     this._onKeyUp = (e) => {
       if (e.code === 'KeyE' && this.channel) this.net.emit('p:cancel');
@@ -753,7 +971,10 @@ export class GameClient {
     this._unlockAudio = () => this.audio.unlock();
     window.addEventListener('keydown', this._unlockAudio);
     window.addEventListener('pointerdown', this._unlockAudio);
-    this.controller.onStep = (info) => this.audio.playerStep(this.controller.floor === 1, info.speed);
+    this.controller.onStep = (info) => {
+      this.audio.playerStep(this.controller.floor === FLOOR.BASEMENT, info.speed);
+      // Footsteps under the Charm give you away (the server judges it).
+    };
     this._onClick = () => {
       if (!this.hud.journalOpen && !this.epilogue) this.controller.lock();
     };
@@ -829,9 +1050,18 @@ export class GameClient {
     switch (p.interact) {
       case 'tome': return this.tomeRead ? ['Open your journal', false] : ['Read the Forbidden Tome', true];
       case 'curio':
-        if (this.heartIds.has(p.id)) return [`Destroy ${this.heartNames.get(p.id)}`, true];
+        if (this.heartIds.has(p.id) && !this.destroyed.has(p.id)) {
+          return [[...this.arenas.values()].some((a) => a.heartPropId === p.id) ? null : 'Break open the Cursed Heart (it will release its Sin)', !!p];
+        }
         return [`Examine the ${PROP_LABELS[p.kind] ?? p.kind}`, false];
-      case 'stairs': return [p.kind === 'stairs_down' ? 'Descend the servants’ stair' : 'Climb back up the stair', false];
+      case 'task': {
+        const t = TASKS[p.task];
+        const st = this.propState[p.id];
+        if (st?.done) return [`${t.done}`, false];
+        if (t.turns) return [`${t.label} (${st?.turns ?? p.turns} more)`, true];
+        return [t.label, true];
+      }
+      case 'stairs': return [p.label ?? (p.kind === 'stairs_down' ? 'Descend the stair' : 'Climb the stair'), false];
       case 'altar': return ['Approach the Ritual Altar', false];
       case 'gate': return this.propState[p.id]?.open ? [null, false] : ['Break the ritual lock', true];
       default: return [null, false];
@@ -839,7 +1069,7 @@ export class GameClient {
   }
 
   roomLabel(p) {
-    return roomAt(this.map, p.f, p.x, p.z)?.name ?? (p.f === 1 ? 'Basement passage' : 'Hallway');
+    return roomAt(this.map, p.f, p.x, p.z)?.name ?? (p.f === FLOOR.BASEMENT ? 'Basement passage' : p.f === FLOOR.UPPER ? 'Upper hallway' : 'Hallway');
   }
 
   frame(now) {
@@ -860,14 +1090,21 @@ export class GameClient {
     if (c.floor !== this.activeFloor) {
       this.activeFloor = c.floor;
       this.mansion.setActiveFloor(c.floor);
+      this.visibleFloors = this.mansion.visibleFloors(c.floor);
     }
 
-    // Camera shake (events)
+    // Camera shake (events), and the micro-tremor of the Keeper's footsteps.
     if (this.shake > 0) {
       this.shake = Math.max(0, this.shake - dt);
       const s = this.shake * 0.02;
       this.camera.rotation.x += (Math.random() - 0.5) * s;
       this.camera.rotation.y += (Math.random() - 0.5) * s;
+    }
+    if (this.tremor > 0.01) {
+      this.tremor = Math.max(0, this.tremor - dt * 2.2);
+      const s = this.tremor * 0.006;
+      this.camera.position.y += (Math.random() - 0.5) * s * 3;
+      this.camera.rotation.z += (Math.random() - 0.5) * s;
     }
 
     // Wand light: a living, slightly unsteady flame.
@@ -895,6 +1132,8 @@ export class GameClient {
     this.applyLumos(wandK, channelBoost);
     if (this.jumpscare) this.fillLight.intensity = 5; // its face, lit from the front
     this.wandTipMat.color.set(this.wizard.color).multiplyScalar(this.lumos ? 1.6 : 1);
+    this.updateWandAura(dt);
+    this.updateInvis(now);
     this.applyBuffs(c, dt);
     this.applyEnvironment(dt);
     // Cast recoil: the wand kicks up and back, the tip and light flare in the element colour.
@@ -910,11 +1149,12 @@ export class GameClient {
     }
 
     for (const av of this.avatars.values()) {
-      av.update(dt, this.time, this.camera, c.floor);
+      av.update(dt, this.time, this.camera, this.visibleFloors);
       if (this.archonMode()) { av.group.visible = false; if (av.light) av.light.intensity = 0; } // inside the Archon
     }
-    for (const m of this.monsters.values()) m.update(dt, this.time, c.floor);
-    am?.setHeartsLit(6 - this.destroyed.size);
+    for (const m of this.monsters.values()) m.update(dt, this.time, m instanceof SinDemonAvatar ? this.visibleFloors : c.floor);
+    am?.setHeartsLit(HEART_COUNT - this.destroyed.size);
+    this.updateSinHud();
     this.updateHorror(dt, now, c, am, amNear, amDist, nulled || this.dawnK > 0.5 ? 0 : dread, nulled);
     for (const m of this.monsters.values()) this.grimoire.monsterStatus(m, m.snap.st);
     this.updatePings(dt);
@@ -944,6 +1184,8 @@ export class GameClient {
 
     this.hud.stamina(c.stamina);
     const room = roomAt(this.map, c.floor, c.x, c.z);
+    // The other story is only drawn where you can see it: from the Foyer, or the balcony.
+    this.mansion.setOverlook(!!room && (room.id === this.map.ids.foyer || room.id === this.map.ids.gallery));
     if (room) this.hud.room(room.name);
     if ((this._teamAt ?? 0) <= this.time) {
       this._teamAt = this.time + 0.5;
@@ -966,7 +1208,22 @@ export class GameClient {
       });
     }
 
-    this.mansion.update(this.time, dt, this.camera);
+    this.mansion.update(this.time, dt, this.camera, this.lumos);
+
+    // The Marauder's Map, top-left (~20 Hz).
+    if ((this._mapAt ?? 0) <= this.time) {
+      const mdt = this.time - (this._mapT ?? this.time);
+      this._mapT = this.time;
+      this._mapAt = this.time + 0.05;
+      const others = [];
+      for (const [id, p] of this.positions) {
+        if (id === this.selfId) continue;
+        const av = this.avatars.get(id);
+        const w = WIZARD_BY_ID[this.roster.find((m) => m.id === id)?.wizardId];
+        others.push({ x: av?.x ?? p.x, z: av?.z ?? p.z, f: p.f, yaw: p.yaw, color: w?.color ?? '#ddd', held: p.cap });
+      }
+      this.minimap.draw(mdt, this.time, { x: c.x, z: c.z, floor: c.floor, yaw: c.yaw }, others, [...this.arenas.values()]);
+    }
 
     if (this.debug) {
       const me = { x: c.x, z: c.z, f: c.floor, yaw: c.yaw };
@@ -1060,8 +1317,10 @@ export class GameClient {
   /** Spell buffs on yourself: speed, phasing, tireless sprinting. */
   applyBuffs(c) {
     const b = this.buffs;
+    const sloth = b.includes('sloth');
     c.speedMul = (1 + (b.includes('shadow') ? 0.4 : 0) + (b.includes('tailwind') ? 0.45 : 0) + (b.includes('phoenix') && c.sprinting ? 0.3 : 0)) *
-      (this.archonMode() ? FINALE.ARCHON_SPEED : 1);
+      (this.archonMode() ? FINALE.ARCHON_SPEED : 1) * (sloth ? 1 - SINS.sloth.aura.slow : 1);
+    c.fatigue = sloth ? SINS.sloth.aura.drain : 0;
     c.ignoreProps = b.includes('shadow');
     c.noStamina = b.includes('tailwind');
   }
@@ -1094,47 +1353,120 @@ export class GameClient {
     };
   }
 
+  /**
+   * The Scary Capture Screen (1.5s): the camera snaps into the Amalgam's
+   * unhinged, screaming skull; blood-red glyphs flash; the screen shakes
+   * violently; a multi-layered distorted shriek. Then black, and you wake up
+   * in the Underground Iron Cage.
+   */
   startJumpscare(e) {
-    this.jumpscare = { start: performance.now(), ...e };
+    this.jumpscare = { ...e, start: performance.now(), duration: (e.duration ?? 1.5) * 1000 };
     this.controller.enabled = false;
     this.channel = null;
     this.hud.progress(null);
-    this.audio.jumpscare();
+    this.audio.jumpscare(true);
     this.redPulse = 1;
-    this.chromaPulse = 1.5;
-    this.shake = 1;
+    this.chromaPulse = 2;
+    this.shake = 1.5;
+    this.hud.captureScreen(true);
     const am = this.monsters.get('amalgam');
     if (am) {
       am.x = e.mx;
       am.z = e.mz;
       am.yaw = e.myaw;
-      am.force('scream', 1.0);
+      am.force('scream', (e.duration ?? 1.5) + 0.2);
     }
   }
 
-  /** 0.85 s locked onto its face, fade to black, wake up in the Cell. */
   updateJumpscare(now) {
     const js = this.jumpscare;
     if (!js) return;
     const k = (now - js.start) / 1000;
+    const dur = js.duration / 1000;
     const am = this.monsters.get('amalgam');
-    if (am && k < 0.85) {
+    if (am && k < dur - 0.2) {
       const face = am.face(this._face ??= new THREE.Vector3());
       const fx = -Math.sin(js.myaw), fz = -Math.cos(js.myaw);
-      // Lunging into the lens: starts at arm's length, ends inches away.
-      const dist = 0.75 - Math.min(1, k / 0.6) * 0.38;
-      const jolt = (1 - k) * 0.05;
+      // Snapped into its skull: arm's length to inches away, jolting violently.
+      const dist = 0.8 - Math.min(1, k / 0.5) * 0.45;
+      const jolt = 0.04 + Math.max(0, 1 - k / dur) * 0.08;
       this.camera.position.set(face.x + fx * dist + (Math.random() - 0.5) * jolt, face.y - 0.06 + (Math.random() - 0.5) * jolt, face.z + fz * dist);
       this.camera.lookAt(face);
+      this.camera.rotation.z += (Math.random() - 0.5) * 0.12;
       // Light the face from the front (the wand light points the wrong way here).
       this.fillLight.position.set(0, 0.15, -0.05);
-      this.fillLight.intensity = 5;
+      this.fillLight.intensity = 6 + Math.random() * 6;
     }
-    if ((k > 1.2 && this.captured) || k > 3) {
+    if (k > dur - 0.05) this.hud.captureScreen(false);
+    if ((k > dur + 0.15 && this.captured) || k > dur + 2.5) {
       this.jumpscare = null;
+      this.hud.captureScreen(false);
       this.fillLight.position.set(0.1, -0.05, -1.2);
       this.controller.enabled = !this.gameIsOver;
     }
+  }
+
+  /** The wand tip previews what the trigger will cast: brighter, bigger and gold for the Ultimate. */
+  updateWandAura(dt) {
+    const a = this.wandAura;
+    let color = this.wizard.color, size = 0.045, pulse = 4, op = 0.45;
+    if (this.archonMode()) {
+      const M = MASTERIES.find((m) => m.key === this.input.mastery);
+      color = this.input.archonPick === 'ult' ? '#ffd76a' : M?.color ?? color;
+      size = 0.07;
+      pulse = 7;
+      op = 0.7;
+    } else if (this.selected === 'ult') {
+      const ready = this.ultCharge >= 100;
+      color = ready ? '#ffd76a' : '#a08a50';
+      size = ready ? 0.09 : 0.05;
+      pulse = ready ? 9 : 2;
+      op = ready ? 0.85 : 0.35;
+    } else {
+      size = 0.04 + this.selected * 0.006;
+      pulse = 3 + this.selected * 1.5;
+    }
+    const k = 0.85 + Math.sin(this.time * pulse) * 0.15;
+    a.material.color.set(color);
+    a.material.opacity = op * k * (1 - this.invisK * 0.7);
+    a.scale.setScalar(size * k * (1 + this.recoil * 0.8));
+    this.wandTipMat.color.set(color);
+    // Dust in your own Lumos beam.
+    this.motes.material.opacity += ((this.lumos ? 0.55 : 0) - this.motes.material.opacity) * Math.min(1, dt * 4);
+    if (this.motes.material.opacity > 0.01) {
+      const pos = this.motes.geometry.attributes.position.array;
+      for (let i = 0; i < pos.length; i += 3) {
+        pos[i] += Math.sin(this.time * 0.4 + i) * 0.0015;
+        pos[i + 1] += dt * 0.03 * ((i % 7) - 3) * 0.3;
+        if (pos[i + 1] > 1) pos[i + 1] = -1;
+        if (pos[i + 1] < -1) pos[i + 1] = 1;
+      }
+      this.motes.geometry.attributes.position.needsUpdate = true;
+    }
+  }
+
+  /** The Disillusionment Charm on yourself: glassy hands, a chameleon shimmer, the HUD timer. */
+  updateInvis(now) {
+    const active = now < this.invisUntil && !this.captured;
+    this.invisK = (this.invisK ?? 0) + ((active ? 1 : 0) - (this.invisK ?? 0)) * 0.15;
+    const alpha = 1 - this.invisK * (0.8 - Math.sin(this.time * 6) * 0.08);
+    for (const m of this.handMats) {
+      m.transparent = this.invisK > 0.01;
+      m.opacity = alpha;
+    }
+    this.hud.invis(active, Math.max(0, (this.invisUntil - now) / 1000), Math.max(0, (this.invisReadyAt - now) / 1000));
+  }
+
+  /** In a Sin's arena: its name and health across the top. */
+  updateSinHud() {
+    const c = this.controller;
+    const room = roomAt(this.map, c.floor, c.x, c.z);
+    const arena = room && [...this.arenas.values()].find((a) => a.roomId === room.id && a.floor === c.floor);
+    const av = arena && this.monsters.get(arena.demonId);
+    this.sinBarActive = !!av && !av.snap.dead;
+    if (!this.sinBarActive) return;
+    const S = SINS[av.sin];
+    this.hud.boss(av.snap.hp, av.snap.maxHp, false, S.blurb, `${S.name.toUpperCase()} · ${S.title.toUpperCase()}`, S.color);
   }
 
   addPing(e) {
@@ -1258,13 +1590,13 @@ export class GameClient {
     if (this.archonMode() && f?.boss) {
       const stageText = { boss: 'Break its body. Survive its fury.', portal: 'The rift is open: bind it, shove it, DRAG IT UNDER.', sealing: 'It is going under\u2026' }[f.stage] ?? '';
       this.hud.boss(f.boss.hp, f.boss.max, f.boss.ward, `${stageText}  ·  Archon ${f.ar.hp}/${f.ar.max}`);
-      this.hud.masteries(MASTERIES, f.mr);
+      this.hud.masteries(MASTERIES, f.mr, this.input.archonPick === 'mastery' ? this.input.mastery : null);
       const am = this.monsters.get('amalgam');
       this.finaleFx.bossDecor(am, f.boss.ward, this.time, f.seal);
       this.finaleFx.orbs(f.orbs ?? [], f.ar.f);
       this.finaleFx.wave(f.wave, f.ar.f);
     } else {
-      this.hud.boss(null);
+      if (!this.sinBarActive) this.hud.boss(null);
       this.hud.masteries(null);
     }
     this.finaleFx.update(dt, this.time, this.controller.floor);

@@ -244,7 +244,7 @@ input:focus { border-color: var(--gold); }
 .hud-objective {
   position: absolute;
   top: 18px;
-  left: 20px;
+  left: 276px;
   max-width: min(420px, 60vw);
   font-size: 1rem;
   color: var(--ink);
@@ -671,3 +671,86 @@ body:not(.debug) .debug-only { display: none; }
   color: #7f7;
   pointer-events: none;
 }
+
+
+/* ---------- Step 6 ---------- */
+
+/* The Marauder's-Map minimap, top-left */
+.minimap {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  width: 236px;
+  height: 236px;
+  border-radius: 4px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(122, 92, 50, 0.6);
+  image-rendering: auto;
+  pointer-events: none;
+}
+body.archon .minimap { opacity: 0.55; }
+@media (max-width: 720px) {
+  .minimap { width: 150px; height: 150px; }
+  .hud-objective { left: 180px; }
+}
+
+/* Selection: 1–4 / R highlight; the click fires */
+.slot.ult.selected { box-shadow: 0 0 18px #ffd76a, inset 0 0 14px rgba(255, 215, 106, 0.4); border-color: #ffd76a; }
+.hud-masteries .slot.selected { border-color: var(--wiz); box-shadow: 0 0 14px var(--wiz); transform: translateY(-4px); }
+.hud-row { display: flex; gap: 14px; align-items: flex-end; }
+
+/* V: the Disillusionment Charm */
+.slot.invis { --wiz: #bfe6ff; width: 52px; height: 52px; }
+.slot.invis.active { border-color: #bfe6ff; box-shadow: 0 0 16px rgba(190, 230, 255, 0.8); animation: invis-shimmer 1.4s ease-in-out infinite; }
+.slot.invis.active .cd { background: rgba(190, 230, 255, 0.25); }
+@keyframes invis-shimmer { 50% { filter: hue-rotate(40deg) brightness(1.3); } }
+.screen-invis {
+  position: fixed; inset: 0; pointer-events: none; z-index: 3; opacity: 0; transition: opacity 0.6s;
+  background:
+    radial-gradient(ellipse at center, transparent 45%, rgba(150, 210, 255, 0.18) 90%),
+    repeating-linear-gradient(115deg, rgba(255, 255, 255, 0.025) 0 3px, transparent 3px 9px);
+  mix-blend-mode: screen;
+}
+.screen-invis.on { opacity: 1; animation: chameleon 3s linear infinite; }
+@keyframes chameleon { 0% { filter: hue-rotate(0deg); } 100% { filter: hue-rotate(360deg); } }
+
+/* The Sin's bar uses its own colour */
+.hud-boss .bar i { background: linear-gradient(var(--boss, #ff3a2a), #3a0006); box-shadow: 0 0 14px var(--boss, #ff2a1a); }
+.hud-boss span { color: var(--boss, var(--blood-bright)); }
+
+/* The Scary Capture Screen (1.5s) */
+.capture-screen {
+  position: fixed; inset: 0; z-index: 30; pointer-events: none; opacity: 0;
+  display: grid; place-items: center;
+}
+.capture-screen.show { opacity: 1; animation: capture-shake 0.09s linear infinite; }
+.capture-screen .glyphs { position: absolute; inset: 0; }
+.capture-screen .glyphs span {
+  position: absolute; font-family: Georgia, serif; color: #ff1a10; font-size: 18vmin; opacity: 0;
+  text-shadow: 0 0 30px #ff0000, 0 0 80px #8a0000; mix-blend-mode: screen;
+}
+.capture-screen.show .glyphs span { animation: glyph-flash 0.42s steps(2) infinite; }
+.capture-screen .glyphs span:nth-child(1) { left: 6%; top: 8%; animation-delay: 0s; }
+.capture-screen .glyphs span:nth-child(2) { left: 72%; top: 12%; animation-delay: 0.07s; }
+.capture-screen .glyphs span:nth-child(3) { left: 40%; top: 60%; animation-delay: 0.14s; }
+.capture-screen .glyphs span:nth-child(4) { left: 82%; top: 64%; animation-delay: 0.21s; }
+.capture-screen .glyphs span:nth-child(5) { left: 14%; top: 66%; animation-delay: 0.28s; }
+.capture-screen .glyphs span:nth-child(6) { left: 55%; top: 4%; animation-delay: 0.35s; }
+.capture-screen .glyphs span:nth-child(7) { left: 28%; top: 30%; animation-delay: 0.05s; }
+.capture-screen .glyphs span:nth-child(8) { left: 64%; top: 38%; animation-delay: 0.18s; }
+.capture-screen .glyphs span:nth-child(9) { left: 2%; top: 40%; animation-delay: 0.31s; }
+.capture-screen .vein {
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(ellipse at center, transparent 30%, rgba(120, 0, 0, 0.75) 85%),
+    repeating-radial-gradient(circle at 50% 50%, rgba(255, 0, 0, 0.12) 0 2px, transparent 2px 22px);
+  animation: vein-pulse 0.25s ease-in-out infinite alternate;
+}
+.capture-screen h2 {
+  position: relative; font-family: var(--display); font-size: clamp(2.2rem, 9vw, 7rem); letter-spacing: 0.3em;
+  color: #ff2a1a; text-shadow: 0 0 20px #ff0000, 4px 0 0 rgba(0, 255, 255, 0.4), -4px 0 0 rgba(255, 0, 80, 0.6);
+  margin: 0; animation: capture-text 0.18s steps(2) infinite;
+}
+@keyframes glyph-flash { 0% { opacity: 0; transform: scale(0.8) rotate(-8deg); } 50% { opacity: 0.95; transform: scale(1.15) rotate(6deg); } 100% { opacity: 0; } }
+@keyframes capture-shake { 0% { transform: translate(0, 0); } 25% { transform: translate(-14px, 9px); } 50% { transform: translate(11px, -12px); } 75% { transform: translate(-8px, -6px); } 100% { transform: translate(12px, 10px); } }
+@keyframes vein-pulse { from { opacity: 0.65; } to { opacity: 1; } }
+@keyframes capture-text { 0% { transform: skewX(-12deg) scale(1.05); opacity: 1; } 100% { transform: skewX(10deg) scale(0.96); opacity: 0.6; } }

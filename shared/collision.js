@@ -1,7 +1,7 @@
 // Circle-vs-world collision shared by the client controller, server-side bots
 // and (later) the Monster. Walls are whole tiles; props use their AABB collider.
 
-import { TILE, TILE_WALL } from './constants.js';
+import { TILE, TILE_WALL, TILE_VOID } from './constants.js';
 
 /**
  * Build a collision world for a map.
@@ -63,7 +63,15 @@ export function removeBarrier(world, id) {
   world.barriers.delete(id);
 }
 
+/** Solid for movement: walls, and the open air of the gallery's overlook. */
 function isWall(f, tx, ty) {
+  if (tx < 0 || ty < 0 || tx >= f.w || ty >= f.h) return true;
+  const t = f.tiles[ty * f.w + tx];
+  return t === TILE_WALL || t === TILE_VOID;
+}
+
+/** Opaque for sight: only walls (you can see across the void). */
+function isOpaque(f, tx, ty) {
   if (tx < 0 || ty < 0 || tx >= f.w || ty >= f.h) return true;
   return f.tiles[ty * f.w + tx] === TILE_WALL;
 }
@@ -156,8 +164,8 @@ export function lineOfSight(map, floor, x0, z0, x1, z1) {
   let tMaxZ = stepZ ? ((stepZ > 0 ? (ty + 1) * TILE - z0 : z0 - ty * TILE) / Math.abs(dz)) : Infinity;
   const steps = Math.abs(ex - tx) + Math.abs(ey - ty);
   for (let i = 0; i < steps; i++) {
-    if (isWall(f, tx, ty)) return false;
+    if (isOpaque(f, tx, ty)) return false;
     if (tMaxX < tMaxZ) { tMaxX += tDeltaX; tx += stepX; } else { tMaxZ += tDeltaZ; ty += stepZ; }
   }
-  return !isWall(f, tx, ty);
+  return !isOpaque(f, tx, ty);
 }

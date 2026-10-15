@@ -9,6 +9,11 @@
 //            capture jumpscare, the Cell, a ping for help, the bots' rescue,
 //            and a real hunt (FPS measured with post-processing on).
 //   Always   zero console errors / failed requests, audio engine running.
+//   Step 6   the 2-story mansion (foyer ↔ balcony overlook, grand staircase),
+//            the top-left minimap (and Keeper footstep ripples), the wizard
+//            avatars, 1–4/R select + Q fires, the Disillusionment Charm (V),
+//            Sin arenas (lockdown, demon, slain → Heart destroyed), and the
+//            1.5s Scary Capture Screen → the Underground Iron Cage.
 // Screenshots land in ./verify-output/ (git-ignored).
 //
 // Usage: npm run verify:browser    (CHROME_PATH=/path/to/chrome to override)
@@ -23,6 +28,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = path.join(root, 'verify-output');
 const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const INVIS_WAIT = 300;
 
 const EXPECT = {
   injorath: { ability: 'psychic_torment', status: ['torment', 'reveal'] },
@@ -184,6 +190,135 @@ async function main() {
     const toggleHusk = () => page.evaluate(() => window.__game.net.emit('debug:husk'));
 
     const fpsSamples = [];
+    // ------------------------------------------------------------------ Step 6: the mansion
+    console.log('\n— Step 6: the two-story mansion, the minimap, the wizards —');
+    const tour = await page.evaluate(() => {
+      const g = window.__game, m = g.map;
+      const foyer = m.rooms[m.ids.foyer];
+      const stairs = m.props.filter((p) => p.kind === 'grand_stair' && p.room === m.ids.foyer);
+      return {
+        floors: m.floors.length,
+        foyer: { x: (foyer.cx + 0.5) * 2, z: (foyer.y + foyer.h - 1.5) * 2, top: (foyer.y + 1) * 2 },
+        stairs: stairs.map((p) => ({ id: p.id, x: p.x, z: p.z, fx: p.front.x, fz: p.front.z })),
+      };
+    });
+    check(tour.floors === 3, `expected 3 levels (${tour.floors})`);
+    check(tour.stairs.length === 2, `the Foyer should have dual grand staircases (${tour.stairs.length})`);
+    // 1. From the Foyer, look up through the open void at the Balcony Gallery.
+    await page.evaluate((t) => {
+      const g = window.__game;
+      g.debugTeleport(t.foyer.x, t.foyer.z, 0, 0);
+    }, tour);
+    await sleep(500);
+    await page.evaluate(() => { const g = window.__game; g.controller.yaw = 0; g.controller.pitch = 0.62; });
+    await page.keyboard.press('KeyF'); // Lumos
+    await sleep(600);
+    await shot('mansion-1-foyer-looking-up-at-the-balcony');
+    fpsSamples.push(await measureFps());
+    await page.evaluate(() => { window.__game.controller.pitch = 0.05; });
+    await sleep(200);
+    await shot('mansion-2-grand-foyer-marble-and-stairs');
+    // 2. Climb the grand staircase to Floor 2.
+    const st = tour.stairs[0];
+    await page.evaluate((s) => {
+      const g = window.__game;
+      g.debugTeleport(s.fx, s.fz, 0, Math.atan2(-(s.x - s.fx), -(s.z - s.fz)));
+    }, st);
+    await sleep(500);
+    await page.evaluate((s) => { const g = window.__game; g.controller.yaw = Math.atan2(-(s.x - g.controller.x), -(s.z - g.controller.z)); g.controller.pitch = -0.1; }, st);
+    await page.waitForFunction((id) => window.__game.target?.id === id, { timeout: 3000 }, st.id).catch(() => failures.push('the grand staircase never became the target'));
+    await page.keyboard.press('KeyE');
+    await page.waitForFunction(() => window.__game.controller.floor === 2, { timeout: 4000 }).catch(() => failures.push('the grand staircase did not lead to Floor 2'));
+    const up = await page.evaluate(() => {
+      const g = window.__game;
+      const room = g.map.rooms[g.map.floors[2].roomIds[Math.floor(g.controller.z / 2) * 60 + Math.floor(g.controller.x / 2)]];
+      return { floor: g.controller.floor, room: room?.name };
+    });
+    check(up.room === 'Balcony Gallery', `arrived in ${up.room}, not the Balcony Gallery`);
+    // Look down over the balustrade into the Foyer.
+    await page.evaluate((t) => {
+      const g = window.__game;
+      g.controller.yaw = Math.atan2(-(t.foyer.x - g.controller.x), -((t.foyer.z + t.foyer.top) / 2 - g.controller.z));
+      g.controller.pitch = -0.55;
+    }, tour);
+    await sleep(700);
+    await shot('mansion-3-balcony-gallery-overlooking-the-foyer');
+    fpsSamples.push(await measureFps());
+    const mm = await page.evaluate(() => {
+      const g = window.__game;
+      const c = document.getElementById('minimap');
+      const r = c.getBoundingClientRect();
+      const px = c.getContext('2d').getImageData(c.width / 2, c.height / 2, 1, 1).data;
+      return { floor: g.minimap.floor, left: r.left, top: r.top, w: r.width, alpha: px[3], ink: px[0] + px[1] + px[2] };
+    });
+    check(mm.floor === 2 && mm.left < 40 && mm.top < 40 && mm.w > 100 && mm.alpha === 255, `minimap not drawn top-left for Floor 2 (${JSON.stringify(mm)})`);
+    console.log(`2 stories + basement; dual grand staircases → Balcony Gallery (${up.room}); minimap top-left showing floor ${mm.floor}`);
+    // 3. Back down; the coven gathers for a portrait.
+    await page.evaluate(() => {
+      const g = window.__game;
+      const land = g.map.props.find((p) => p.kind === 'stairs_landing' && p.floor === g.controller.floor && Math.hypot(p.x - g.controller.x, p.z - g.controller.z) < 4);
+      g.controller.yaw = Math.atan2(-(land.x - g.controller.x), -(land.z - g.controller.z));
+      g.controller.pitch = -0.2;
+    });
+    await sleep(300);
+    await page.keyboard.press('KeyE');
+    await page.waitForFunction(() => window.__game.controller.floor === 0, { timeout: 4000 }).catch(() => failures.push('could not descend the grand staircase'));
+    await standAndFace();
+    await page.evaluate(() => { window.__game.controller.yaw += Math.PI; }); // the lit side
+    const self0 = await page.evaluate(() => window.__game.selfId);
+    {
+      const g = liveGame();
+      const me = g.players.get(self0);
+      const fx = -Math.sin(me.yaw), fz = -Math.cos(me.yaw);
+      let i = 0;
+      for (const p of g.players.values()) {
+        if (!p.isBot) continue;
+        const side = i++ ? 0.8 : -0.8;
+        const x = me.x + fx * 2.4 + fz * side, z = me.z + fz * 2.4 - fx * side;
+        g.teleport(p, x, z, me.floor, Math.atan2(-(me.x - x), -(me.z - z)));
+      }
+    }
+    await sleep(700);
+    await page.evaluate(() => { window.__game.controller.pitch = -0.05; });
+    await shot('avatars-1-the-coven-in-their-robes');
+    const avatarCount = await page.evaluate(() => [...window.__game.avatars.values()].filter((a) => a.group.visible).length);
+    check(avatarCount >= 2, `teammate avatars not visible (${avatarCount})`);
+    // 4. The input rework: 1–4 / R only select; the trigger (Q here, LMB in play) fires.
+    await page.evaluate(() => { window.__events.length = 0; });
+    await page.keyboard.press('Digit3');
+    await page.keyboard.press('KeyR');
+    await page.keyboard.press('Digit2');
+    await sleep(400);
+    const sel = await page.evaluate(() => ({
+      casts: window.__events.filter((e) => e.type === 'cast' && e.caster === window.__game.selfId).length,
+      selected: window.__game.selected,
+      hud: [...document.querySelectorAll('#hud-hotbar .slot')].findIndex((el) => el.classList.contains('selected')),
+    }));
+    check(sel.casts === 0, `pressing 1–4 / R cast a spell (${sel.casts} casts)`);
+    check(sel.selected === 1 && sel.hud === 1, `slot 2 not selected/highlighted (${JSON.stringify(sel)})`);
+    await page.keyboard.press('KeyR');
+    await sleep(150);
+    const ultSel = await page.evaluate(() => ({ sel: window.__game.selected, hud: document.querySelector('#hud-hotbar .slot.ult').classList.contains('selected') }));
+    check(ultSel.sel === 'ult' && ultSel.hud, `R did not select the Ultimate (${JSON.stringify(ultSel)})`);
+    await shot('input-1-ultimate-selected-wand-aura');
+    await page.keyboard.press('Digit2');
+    await page.keyboard.press('KeyQ');
+    const fired = await waitEvent('cast', 2000);
+    const want = await page.evaluate(() => window.__game.wizard.spells[1].id);
+    check(fired?.ability === want, `Q did not fire the selected slot (${fired?.ability} vs ${want})`);
+    console.log(`input: 1–4/R select only (0 casts), Q fired ${fired?.ability}`);
+    // 5. The Disillusionment Charm.
+    await page.keyboard.press('KeyV');
+    await page.waitForFunction(() => window.__game.buffs.includes('invis'), { timeout: 3000 }).catch(() => failures.push('V did not make you invisible'));
+    for (const p of liveGame().players.values()) if (p.isBot) liveGame().onInvis(p.id);
+    await sleep(500);
+    const inv = await page.evaluate(() => ({ hud: document.getElementById('hud-invis').classList.contains('active'), screen: document.getElementById('screen-invis').classList.contains('on') }));
+    check(inv.hud && inv.screen, `invisibility HUD missing (${JSON.stringify(inv)})`);
+    await shot('invis-1-disillusionment-charm');
+    console.log('V: Disillusionment Charm active (HUD timer, chameleon shimmer, teammates glassy)');
+    await page.keyboard.press('KeyF'); // Nox
+    await sleep(INVIS_WAIT);
+
     // ------------------------------------------------------------------ horror
     console.log('\n— The Malphas Amalgam —');
     await standAndFace();
@@ -224,8 +359,12 @@ async function main() {
         events: window.__events.slice(-15).map((e) => e.type + (e.kind ? `:${e.kind}` : '') + (e.stage ? `:${e.stage}` : '')),
       })));
     }
-    await sleep(350);
-    await shot('horror-3-jumpscare');
+    await sleep(450);
+    const scary = await page.evaluate(() => document.getElementById('capture-screen').classList.contains('show'));
+    check(scary, 'the Scary Capture Screen did not show');
+    await shot('capture-1-scary-capture-screen');
+    await sleep(300);
+    await shot('capture-2-into-the-skull');
     await page.waitForFunction(() => window.__game.captured, { timeout: 5000 }).catch(() => {});
     await sleep(900);
     const cell = await page.evaluate(() => {
@@ -235,9 +374,11 @@ async function main() {
       g.controller.pitch = 0;
       return { captured: g.captured, floor: g.controller.floor, held: !!g.positions.get(g.selfId)?.cap };
     });
-    check(cell.captured && cell.floor === 1 && cell.held, `not held in the Cell after capture (${JSON.stringify(cell)})`);
+    check(cell.captured && cell.floor === 1 && cell.held, `not held in the Cage after capture (${JSON.stringify(cell)})`);
+    check(!(await page.evaluate(() => document.getElementById('capture-screen').classList.contains('show'))), 'capture screen stuck on');
     await sleep(300);
-    await shot('horror-4-held-in-the-cell');
+    await shot('capture-3-underground-iron-cage');
+    console.log(`capture: 1.5s scary screen (${scary ? 'shown' : 'MISSING'}) → woke in the Underground Iron Cage`);
 
     // 3. Call for help; the bots come down and break the lock.
     await page.keyboard.press('KeyG');
@@ -331,7 +472,8 @@ async function main() {
           window.__events.length = 0;
         });
         await sleep(80);
-        await page.keyboard.press(`Digit${slot + 1}`);
+        await page.keyboard.press(`Digit${slot + 1}`); // selects only…
+        await page.keyboard.press('KeyQ'); // …the trigger fires
         await sleep(slot === 0 ? 260 : 450);
         const r = await page.evaluate((s) => {
           const g = window.__game;
@@ -360,7 +502,8 @@ async function main() {
         window.__events.length = 0;
       });
       await sleep(100);
-      await page.keyboard.press('KeyR');
+      await page.keyboard.press('KeyR'); // select the Ultimate
+      await page.keyboard.press('KeyQ'); // fire it
       const [ultName, ultCheck] = ULT_CHECK[wizardId];
       const ok = await page.waitForFunction(ultCheck, { timeout: 8000 }).then(() => true).catch(() => false);
       await sleep(wizardId === 'sushantus' ? 1800 : 300);
@@ -400,6 +543,79 @@ async function main() {
     console.log(`Bot casts: ${botCasts.join(', ') || 'none'}`);
     check(botCasts.length > 0, 'bots never cast at the husk');
     await toggleHusk();
+
+    // ------------------------------------------------------------------ Step 6: the Sins
+    console.log('\n— Step 6: Seven Hearts, room wards, the Seven Deadly Sins —');
+    const sinsShown = [];
+    for (const [i, sin] of ['pride', 'gluttony', 'wrath', 'lust', 'greed', 'envy', 'sloth'].entries()) {
+      await page.evaluate((s) => { window.__events.length = 0; window.__game.net.emit('debug:arena', { sin: s }); }, sin);
+      const start = await waitEvent('arena:start', 6000);
+      if (!check(start?.sin === sin, `${sin}: no arena started`)) continue;
+      liveGame().monster.hideFor(1e6); // the Keeper waits outside (it can't come in anyway)
+      await sleep(i < 3 ? 2700 : 2400); // the eruption
+      const faceDemon = () => page.evaluate((id) => {
+        const g = window.__game;
+        const d = g.monsters.get(id);
+        if (!d) return;
+        const dist = Math.hypot(d.x - g.controller.x, d.z - g.controller.z);
+        g.controller.yaw = Math.atan2(-(d.x - g.controller.x), -(d.z - g.controller.z));
+        g.controller.pitch = Math.atan2(1.0, Math.max(1, dist)) * 0.5;
+      }, start.demonId);
+      await faceDemon();
+      await sleep(250);
+      const arena = await page.evaluate((id) => {
+        const g = window.__game;
+        const d = g.monsters.get(id);
+        return {
+          demon: !!d, boss: !document.getElementById('hud-boss').classList.contains('hidden'),
+          title: document.querySelector('#hud-boss span').textContent, barriers: g.arenas.size,
+        };
+      }, start.demonId);
+      check(arena.demon && arena.boss && arena.barriers === 1, `${sin}: arena incomplete (${JSON.stringify(arena)})`);
+      if (i < 4) await shot(`sin-${i + 1}-${sin}-lockdown`);
+      // Fight: select a spell, fire with the trigger.
+      for (let k = 0; k < 3; k++) {
+        await faceDemon();
+        await page.keyboard.press(`Digit${(k % 4) + 1}`);
+        await page.keyboard.press('KeyQ');
+        await sleep(400);
+      }
+      if (i < 2) {
+        await faceDemon();
+        await shot(`sin-${i + 1}b-${sin}-fight`);
+      }
+      fpsSamples.push(await measureFps());
+      await page.keyboard.press('KeyL'); // debug: slay it
+      const heart = await waitEvent('heart', 4000);
+      const end = await waitEvent('arena:end', 4000);
+      check(heart?.sin === sin && end?.won, `${sin}: slaying it did not destroy its Heart / open the doors`);
+      sinsShown.push(`${sin}${heart && end?.won ? '' : '✗'}`);
+      await sleep(400);
+    }
+    console.log(`Sins fought (lockdown → slain → Heart destroyed → doors open): ${sinsShown.join(', ')}`);
+    const left = await page.evaluate(() => window.__game.destroyed.size);
+    check(left === 7, `expected 7 Hearts destroyed (${left})`);
+
+    // The Keeper's footsteps on the minimap (within 22 units).
+    await standAndFace();
+    {
+      // Stalking 14–24 units away (set directly: cycling P would pass through "capture").
+      const g = liveGame();
+      const me = g.players.get(self0);
+      const m = g.monster;
+      m.debugHeld = false;
+      m.place(m.hiddenSpot(me.floor, 14, 22));
+      m.hidden = false;
+      m.setState('stalking');
+    }
+    const rippled = await page.waitForFunction(() => window.__game.minimap.ripples.length > 0, { timeout: 15000 }).then(() => true).catch(() => false);
+    if (!check(rippled, 'no footstep ripples on the minimap')) {
+      const g = liveGame(), m = g.monster, me = g.players.get(self0);
+      console.log('  footsteps diagnostics:', JSON.stringify({ m: { st: m.state, hid: m.hidden, x: m.x, z: m.z, f: m.floor, mv: m.moving }, me: { x: me.x, z: me.z, f: me.floor, cap: me.captured } }),
+        await page.evaluate(() => JSON.stringify({ cf: window.__game.controller.floor, snap: window.__game.monsters.get('amalgam')?.snap })));
+    }
+    await shot('minimap-2-keeper-footstep-ripples');
+    console.log(`Keeper footsteps: ${rippled ? 'ripples on the minimap, the floor trembles' : 'none heard'}`);
 
     const audio = await page.evaluate(() => ({ state: window.__game.audio.ctx?.state, played: window.__game.audio.played }));
     console.log(`audio: context ${audio.state}, ${audio.played} sounds synthesised`);
@@ -469,6 +685,7 @@ async function main() {
       await faceBoss();
       await page.evaluate(() => { window.__events = window.__events.filter((e) => e.type !== 'mastery'); });
       await page.keyboard.press(`Digit${M.key}`);
+      await page.keyboard.press('KeyQ');
       const ev = await waitEvent('mastery', 3000);
       await sleep(M.id === 'm_fire_dragon' || M.id === 'm_wind_dragon' ? 700 : 350);
       await shot(`finale-4-mastery-${M.key}-${M.id.slice(2)}`);
@@ -501,7 +718,7 @@ async function main() {
       await faceBoss();
       const ready = await page.evaluate(() => window.__game.fin?.mr ?? {});
       const M = MASTERIES.find((m) => !ready[m.id]);
-      if (M) await page.keyboard.press(`Digit${M.key}`);
+      if (M) { await page.keyboard.press(`Digit${M.key}`); await page.keyboard.press('KeyQ'); }
       portal = await waitEvent('portal:open', 1000);
     }
     check(portal, 'the Hell Portal never opened');
@@ -524,7 +741,7 @@ async function main() {
       await faceBoss();
       const ready = await page.evaluate(() => window.__game.fin?.mr ?? {});
       const M = MASTERIES.find((m) => !ready[m.id] && ['m_wind_dragon', 'm_earth_pillars', 'm_white_chains'].includes(m.id));
-      if (M) await page.keyboard.press(`Digit${M.key}`);
+      if (M) { await page.keyboard.press(`Digit${M.key}`); await page.keyboard.press('KeyQ'); }
       sealing = await waitEvent('sealing', 1000);
     }
     check(sealing, 'the boss was never dragged under');

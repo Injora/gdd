@@ -265,28 +265,36 @@ export class AudioEngine {
 
   // ---- the Amalgam ------------------------------------------------------------------
 
-  /** Wet, clicking footfall (and sometimes dragging claws). */
+  /**
+   * Its footfall: a HEAVY thud you feel in the floorboards (carries far: low
+   * rolloff), a wet slap, a bone click, and scraping claws — loud enough to
+   * warn you before it ever sees you.
+   */
   monsterStep(pos, hunting) {
     if (!this.running) return;
     const t = this.now();
-    const vol = hunting ? 1 : 0.6;
-    const o = this.out({ pos, reverb: 0.2, gain: vol });
+    const vol = hunting ? 1.6 : 1.1;
+    const o = this.out({ pos, reverb: 0.35, gain: vol, ref: 5, rolloff: 0.55 });
+    // the weight: a deep, distorted thud with a sub tail
+    const th = this.osc('sine', 78, t, 0.32);
+    th.frequency.exponentialRampToValueAtTime(34, t + 0.28);
+    const thud = this.ctx.createGain();
+    th.connect(thud).connect(this.distortion(8)).connect(this.env(t, 0.004, 0.3, 1.2)).connect(o);
+    this.noiseSrc(t, 0.2).connect(this.filter('lowpass', 260, 1.2)).connect(this.env(t, 0.003, 0.18, 1)).connect(o);
     // wet slap
-    const n = this.noiseSrc(t, 0.12);
-    n.connect(this.filter('bandpass', rand(1800, 2800), 2.5)).connect(this.env(t, 0.004, 0.09, 0.9)).connect(o);
+    this.noiseSrc(t, 0.12).connect(this.filter('bandpass', rand(1800, 2800), 2.5)).connect(this.env(t, 0.004, 0.09, 0.7)).connect(o);
     // bone click
-    const c = this.osc('square', rand(1400, 2200), t + 0.03, 0.02);
-    c.connect(this.env(t + 0.03, 0.001, 0.02, 0.25)).connect(o);
-    // weight
-    const th = this.osc('sine', 95, t, 0.15);
-    th.frequency.exponentialRampToValueAtTime(48, t + 0.12);
-    th.connect(this.env(t, 0.005, 0.13, 0.9)).connect(o);
-    if (!hunting && Math.random() < 0.3) this.claws(pos);
+    this.osc('square', rand(1400, 2200), t + 0.03, 0.02).connect(this.env(t + 0.03, 0.001, 0.02, 0.25)).connect(o);
+    // the creak of the boards under it
+    const cr = this.osc('sawtooth', rand(140, 220), t + 0.05, 0.25);
+    cr.frequency.linearRampToValueAtTime(rand(90, 130), t + 0.3);
+    cr.connect(this.filter('bandpass', 600, 8)).connect(this.env(t + 0.05, 0.05, 0.22, 0.18)).connect(o);
+    if (Math.random() < (hunting ? 0.6 : 0.45)) this.claws(pos);
   }
 
   claws(pos) {
     const t = this.now() + 0.05;
-    const o = this.out({ pos, reverb: 0.3, gain: 0.5 });
+    const o = this.out({ pos, reverb: 0.3, gain: 0.8, ref: 4, rolloff: 0.7 });
     const n = this.noiseSrc(t, 0.7);
     const f = this.filter('bandpass', 900, 9);
     f.frequency.setValueAtTime(700, t);
@@ -378,16 +386,110 @@ export class AudioEngine {
     for (const f of [110, 116.5, 155.6, 220.3]) this.osc('sawtooth', f, t, 1.5).connect(lp);
   }
 
-  /** Close-up capture jumpscare. */
-  jumpscare() {
+  /**
+   * The capture screen: a multi-layered, distorted horror shriek — three
+   * detuned screams, a bit-crushed scrape, a sub-bass drop and a heartbeat
+   * that stops.
+   */
+  jumpscare(full = false) {
     if (!this.running) return;
-    this.shriek(null, { volume: 1.3, length: 1.1, pitch: 1.2 });
+    this.shriek(null, { volume: 1.3, length: full ? 1.5 : 1.1, pitch: 1.2 });
+    if (full) {
+      this.shriek(null, { volume: 0.9, length: 1.4, pitch: 0.71 });
+      this.shriek(this.behindEar(Math.random() < 0.5 ? -1 : 1), { volume: 0.8, length: 1.3, pitch: 1.62 });
+    }
     const t = this.now();
     const o = this.out({ reverb: 0.2, gain: 1 });
-    const s = this.osc('sine', 55, t, 0.8);
-    s.frequency.exponentialRampToValueAtTime(30, t + 0.7);
-    s.connect(this.env(t, 0.005, 0.75, 1)).connect(o);
+    const s = this.osc('sine', 55, t, 1.4);
+    s.frequency.exponentialRampToValueAtTime(24, t + 1.3);
+    s.connect(this.distortion(20)).connect(this.env(t, 0.005, 1.3, 1)).connect(o);
     this.noiseSrc(t, 0.5).connect(this.filter('lowpass', 1200)).connect(this.env(t, 0.002, 0.45, 0.9)).connect(o);
+    if (full) {
+      // A grinding, crushed scrape across the stereo field.
+      const sq = this.osc('square', 63, t, 1.4);
+      sq.frequency.linearRampToValueAtTime(37, t + 1.4);
+      sq.connect(this.distortion(200)).connect(this.filter('bandpass', 1800, 2)).connect(this.env(t, 0.01, 1.4, 0.35, 'lin')).connect(o);
+      for (let i = 0; i < 3; i++) {
+        const tt = t + 0.1 + i * 0.32;
+        this.osc('sine', 52, tt, 0.18).connect(this.env(tt, 0.004, 0.16, 0.9 - i * 0.25)).connect(o);
+      }
+    }
+  }
+
+  // ---- Step 6 cues -------------------------------------------------------------------
+
+  /** A soft click when a slot is selected (the Ultimate hums). */
+  selectSpell(ult) {
+    if (!this.running) return;
+    const t = this.now();
+    const o = this.out({ reverb: 0.1, gain: ult ? 0.25 : 0.12 });
+    this.osc('sine', ult ? 330 : 880, t, 0.1).connect(this.env(t, 0.002, ult ? 0.35 : 0.06, 1)).connect(o);
+    if (ult) this.osc('sine', 495, t, 0.4).connect(this.env(t, 0.02, 0.35, 0.6)).connect(o);
+  }
+
+  /** The Disillusionment Charm: a cold, glassy shimmer that drains away. */
+  invis() {
+    if (!this.running) return;
+    const t = this.now();
+    const o = this.out({ reverb: 0.5, gain: 0.35 });
+    for (const [i, f] of [1568, 2093, 2637, 3136].entries()) {
+      const s = this.osc('sine', f, t + i * 0.04, 0.9);
+      s.frequency.exponentialRampToValueAtTime(f * 0.5, t + 0.9);
+      s.connect(this.env(t + i * 0.04, 0.01, 0.8, 0.5)).connect(o);
+    }
+    this.whoosh(null, 4000, 400, 0.8, { gain: 0.3, type: 'highpass' });
+  }
+
+  /** A lock-breaking Ultimate landed: a bright chord over a falling roar. */
+  lockBroken() {
+    if (!this.running) return;
+    this.chime(null, [523, 659, 784, 1046], 2.2, 0.22, 'triangle');
+    this.rumble(null, 1.4, 0.6);
+  }
+
+  /** A room-task step: brazier whump, mirror grind, clockwork, coin. */
+  taskStep(pos, task, done) {
+    if (!this.running) return;
+    if (task === 'brazier') { this.whoosh(pos, 300, 2400, 0.6, { gain: 0.8, type: 'lowpass' }); this.crackle(pos, 1.2, 18, 0.4); }
+    if (task === 'mirror') this.whoosh(pos, 900, 600, 0.4, { q: 8, gain: 0.5 });
+    if (task === 'pedestal') { for (let i = 0; i < 8; i++) this.crackle(pos, 0.04, 1, 0.5); this.chime(pos, [1760], 0.4, 0.12, 'square'); }
+    if (task === 'chalice') this.chime(pos, [2349, 3136], 1.2, 0.18);
+    if (done) this.chime(pos, [392, 587, 784], 1.6, 0.14, 'triangle');
+  }
+
+  /** The doors slam and seal in blood. */
+  arenaSlam(inside) {
+    if (!this.running) return;
+    this.boom(null, 55, 1.1, inside ? 1.4 : 0.7);
+    this.shriek(null, { volume: inside ? 0.7 : 0.35, length: 1.2, pitch: 0.55 });
+  }
+
+  arenaWin() {
+    if (!this.running) return;
+    this.chime(null, [262, 392, 523, 659], 2.6, 0.2, 'triangle');
+  }
+
+  /** Each Sin's voice: windups and strikes. */
+  sinCue(sin, kind, stage, pos) {
+    if (!this.running) return;
+    if (stage === 'windup') {
+      const f = { pride: 880, greed: 220, lust: 660, envy: 330, gluttony: 90, wrath: 140, sloth: 70 }[sin] ?? 200;
+      const t = this.now();
+      const o = this.out({ pos, reverb: 0.5, gain: 0.45, ref: 4 });
+      const s = this.osc(sin === 'pride' ? 'sine' : 'sawtooth', f, t, 0.8);
+      s.frequency.exponentialRampToValueAtTime(f * (sin === 'gluttony' || sin === 'sloth' ? 0.6 : 1.6), t + 0.7);
+      s.connect(this.filter('lowpass', 2400, 2)).connect(this.env(t, 0.1, 0.7, 0.8, 'lin')).connect(o);
+      return;
+    }
+    switch (kind) {
+      case 'lance': case 'reflect': this.chime(pos, [1318, 1975, 2637], 0.8, 0.3); this.whoosh(pos, 6000, 1200, 0.3, { gain: 0.5 }); break;
+      case 'ribbons': this.whoosh(pos, 1200, 3500, 0.5, { gain: 0.6, q: 4 }); break;
+      case 'vacuum': this.whoosh(pos, 200, 900, 1.0, { gain: 1, type: 'lowpass' }); break;
+      case 'bite': case 'cleave': case 'caress': case 'claw': this.boom(pos, 120, 0.25, 0.9); this.crackle(pos, 0.15, 6, 0.6); break;
+      case 'yawn': this.rumble(pos, 1.6, 1.2); break;
+      case 'charge': this.roar(pos, true); break;
+      default: this.boom(pos, 90, 0.4, 0.7);
+    }
   }
 
   hauntSting() {
@@ -564,6 +666,7 @@ export class AudioEngine {
   // ---- building blocks for the grimoire -----------------------------------------------
 
   whoosh(pos, f0, f1, dur, { q = 1.5, gain = 0.8, reverb = 0.35, type = 'bandpass' } = {}) {
+    if (!this.running) return;
     const t = this.now();
     const o = this.out({ pos, reverb, gain, ref: 3 });
     const f = this.filter(type, f0, q);
@@ -572,6 +675,7 @@ export class AudioEngine {
   }
 
   boom(pos, f = 80, dur = 0.6, gain = 1) {
+    if (!this.running) return;
     const t = this.now();
     const o = this.out({ pos, reverb: 0.5, gain, ref: 3 });
     const s = this.osc('sine', f, t, dur);
@@ -581,12 +685,14 @@ export class AudioEngine {
   }
 
   chime(pos, freqs, dur = 1.4, gain = 0.25, type = 'sine') {
+    if (!this.running) return;
     const t = this.now();
     const o = this.out({ pos, reverb: 0.6, gain, ref: 3 });
     freqs.forEach((f, i) => this.osc(type, f * rand(0.998, 1.002), t + i * 0.015, dur).connect(this.env(t + i * 0.015, 0.005, dur, 1)).connect(o));
   }
 
   crackle(pos, dur = 0.5, n = 10, gain = 0.6) {
+    if (!this.running) return;
     const t = this.now();
     const o = this.out({ pos, reverb: 0.2, gain, ref: 2 });
     for (let i = 0; i < n; i++) {
@@ -596,6 +702,7 @@ export class AudioEngine {
   }
 
   rumble(pos, dur = 1.2, gain = 1) {
+    if (!this.running) return;
     const t = this.now();
     const o = this.out({ pos, reverb: 0.4, gain, ref: 4 });
     this.noiseSrc(t, dur).connect(this.filter('lowpass', 150)).connect(this.env(t, 0.05, dur, 1.2)).connect(o);
@@ -603,6 +710,7 @@ export class AudioEngine {
   }
 
   roar(pos, fire) {
+    if (!this.running) return;
     const t = this.now();
     const o = this.out({ pos, reverb: 0.7, gain: 1, ref: 6, rolloff: 0.6 });
     const lp = this.filter('lowpass', fire ? 900 : 2200, 3);
@@ -621,6 +729,7 @@ export class AudioEngine {
 
   /** Spells beyond the original seven + every Ultimate. */
   grimoire(ability, pos) {
+    if (!this.running) return;
     switch (ability) {
       case 'dimension_slash': this.whoosh(pos, 3000, 200, 0.4, { q: 4, gain: 0.9 }); this.chime(pos, [233, 247], 0.6, 0.2, 'sawtooth'); break;
       case 'black_hole': this.whoosh(pos, 120, 2400, 1.6, { type: 'lowpass', gain: 1, reverb: 0.7 }); this.boom(pos, 45, 2.5, 0.9); break;

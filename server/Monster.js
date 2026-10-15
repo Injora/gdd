@@ -9,26 +9,40 @@
 //      │ seen too close / stare / noise /    │
 //      │ random aggression                   │ search exhausted
 //      ▼                                     │
-//   hunting ──(lost sight)──► searching ─────┘
-//      │ lunge lands → capture
+//   hunting = LOCKED on the first wizard it spotted ───┘ (lock broken)
+//      │ it tracks them anywhere, at a lethal charge; the lunge always captures
 //      ▼
-//   retreating (also: stagger HP depleted, or 3 different spells within 5s)
-//      └─ 12–18 s hidden, then reappears out of sight → stalking
+//   retreating (after a capture): 12–18 s hidden, then reappears → stalking
 //
-// While anyone is held in the Cell, stalking goals favour the basement
-// (guarding the prisoner) without camping the gate.
+// Until all seven Hearts are destroyed it is UNKILLABLE: spells only stagger
+// it for a moment (crowd control is capped at AI.CC_CAP) and never break the
+// lock. Only three Ultimates can stop it and wipe its sight-lock:
+//   Dawn of the Sacred Order (White)  frozen in golden chains for 30s
+//   Abyssal Mind Fracture (Black)     its mind locked in place for 10s
+//   Devil Union (Anti-magic)          touching an immune wizard: recoil + 6s freeze
+//
+// The Disillusionment Charm (V) hides a wizard from its sight, but only if
+// cast BEFORE it locks on, and only while they hold still: moving or casting
+// within INVIS.sense units of it gives them away, and it charges.
+//
+// While anyone is held in the Cage, stalking goals favour the basement
+// (guarding the prisoner) without camping the gate. It can never enter a
+// Sin's locked arena.
 
 import { MonsterBody } from './MonsterBody.js';
-import { findPath, pathToWorld } from '../shared/pathfinding.js';
+import { findPath, pathToWorld, isPassable } from '../shared/pathfinding.js';
 import { lineOfSight, moveCircle } from '../shared/collision.js';
-import { PHASE, TILE_WALL, TILE_DOOR, HP, LUMOS, tileCenter, worldToTile } from '../shared/constants.js';
+import { stairToward } from '../shared/nav.js';
+import { PHASE, TILE_WALL, TILE_DOOR, HP, LUMOS, INVIS, tileCenter, worldToTile } from '../shared/constants.js';
 import { FINALE } from '../shared/finale.js';
 
 export const AI = {
   STALK_SPEED: 2.3,
   SEARCH_SPEED: 3.0,
-  HUNT_SPEED: 4.5, // players sprint at 5.6 but run out of stamina
-  ENRAGE_PER_HEART: 0.18, // 5.4 u/s at five Hearts
+  HUNT_SPEED: 4.8, // players sprint at 5.6 but run out of stamina
+  CHARGE_SPEED: 6.4, // the lethal charge, once it has you in sight and close
+  CHARGE_RANGE: 10,
+  ENRAGE_PER_HEART: 0.12, // 5.64 u/s at seven Hearts
   AGGRO_PER_HEART: 0.08,
   STALK_MIN: 12,
   STALK_MAX: 22,
@@ -45,14 +59,16 @@ export const AI = {
   LUNGE_SPEED: 8,
   CATCH_RANGE: 1.4,
   LUNGE_COOLDOWN: 1.2,
-  LOSE_SIGHT: 3.5,
-  HUNT_MAX: 40,
+  SPOT_TIME: 0.35, // seconds of continuous sight before it locks on
+  CC_CAP: 0.8, // ordinary spells only hold the unkillable Keeper this long
+  KNOCK_CAP: 2.5, // ...and shove it this far
+  UNION_RECOIL: 6, // touching a Devil Union wizard: frozen this long
+  RELEASE_BLIND: 1.5, // after a lock-break ends, it is blind this long
   SEARCH_TIME: 16,
   LISTEN_TIME: 2.5,
   RETREAT_MIN: 12,
   RETREAT_MAX: 18,
   RETREAT_FLEE: 1.0,
-  STAGGER_HP: 60,
   // Attacks (all damage is to wizards' HP; see Game.damagePlayer)
   CLAW_RANGE: 2.6,
   CLAW_WINDUP: 0.35,
@@ -73,8 +89,6 @@ export const AI = {
   SMASH_WINDUP: 0.5,
   PHANTOM_HEARTS: 4,
   PHANTOM_LIFE: 4,
-  COMBO_WINDOW: 5,
-  COMBO_COUNT: 3,
   HAUNT_FIRST: 20,
   HAUNT_MIN: 35,
   HAUNT_MAX: 75,
@@ -93,7 +107,7 @@ const r2 = (v) => Math.round(v * 100) / 100;
 
 export class Monster extends MonsterBody {
   constructor(game) {
-    super(game, { id: 'amalgam', kind: 'amalgam', x: 0, z: 0, floor: 0, maxHp: AI.STAGGER_HP, radius: 0.55, speed: AI.HUNT_SPEED });
+    super(game, { id: 'amalgam', kind: 'amalgam', x: 0, z: 0, floor: 0, maxHp: 999, radius: 0.55, speed: AI.HUNT_SPEED });
     this.hidden = true;
     this.state = 'dormant';
     this.stateAt = 0;
@@ -127,8 +141,12 @@ export class Monster extends MonsterBody {
     this.tendrilReadyAt = 0;
     this.phantomAt = 0;
     this.tauntUntil = 0;
-    this.pendingBanish = false;
+    this.spotting = new Map(); // playerId -> seconds in continuous sight
+    this.blindUntil = 0;
   }
+
+  /** Unkillable until the Hearts are gone (as the Unbound boss it has HP). */
+  get immune() { return this.state !== 'boss'; }
 
   get targetable() {
     return !this.dead && !this.hidden && this.state !== 'dormant' && this.state !== 'haunt';
@@ -139,11 +157,12 @@ export class Monster extends MonsterBody {
     const { map } = this.game;
     const gate = map.props[map.ids.gate];
     return map.floors.map((f) => {
+      const ff = { ...f, dyn: null };
       const list = [];
       for (let y = 0; y < f.h; y++) {
         for (let x = 0; x < f.w; x++) {
           const i = y * f.w + x;
-          if (f.tiles[i] === TILE_WALL || f.blocked[i]) continue;
+          if (!isPassable(ff, x, y)) continue;
           if (f.id === map.cell.floor && f.roomIds[i] === map.cell.roomId) continue;
           if (f.id === gate.floor && x === gate.tx && y === gate.ty) continue;
           let walls = 0;
@@ -170,8 +189,17 @@ export class Monster extends MonsterBody {
     return [...this.game.players.values()].filter((p) => !p.captured && !p.capturing);
   }
 
-  /** Shadow Step makes a wizard invisible to it. */
-  isInvisible(p) { return this.game.spells.hasBuff(p, 'shadow'); }
+  /** Shadow Step and the Disillusionment Charm (V) hide a wizard from its sight. */
+  isInvisible(p) { return this.game.spells.hasBuff(p, 'shadow') || this.game.spells.hasBuff(p, 'invis'); }
+
+  /** Is it locked on to p (hunting them)? */
+  lockedOn(p) { return this.state === 'hunting' && this.targetId === p?.id; }
+
+  /** Tiles it may use as goals: never inside a Sin's locked arena. */
+  goalTiles(floor) {
+    const arena = this.game.arenaRoom;
+    return arena ? this.tiles[floor].filter((tl) => !arena.call(this.game, tl.roomId)) : this.tiles[floor];
+  }
 
   /** Wizards it can actually perceive. */
   prey() { return this.freePlayers().filter((p) => !this.isInvisible(p)); }
@@ -191,7 +219,7 @@ export class Monster extends MonsterBody {
 
   /** Could the Amalgam see player p right now (stalking senses: view cone, lit wands carry further)? */
   canSee(p) {
-    if (this.hidden || p.floor !== this.floor || this.isInvisible(p)) return false;
+    if (this.hidden || p.floor !== this.floor || this.isInvisible(p) || this.t < this.blindUntil) return false;
     const d = this.dist(p);
     const range = (p.crouch ? AI.SIGHT_SNEAK : AI.SIGHT) * (p.light ? LUMOS.detection : 1);
     if (d > range) return false;
@@ -223,7 +251,7 @@ export class Monster extends MonsterBody {
    * nearest of them, for appearing or hiding.
    */
   hiddenSpot(floor, minDist = 20, maxDist = Infinity) {
-    const tiles = this.tiles[floor];
+    const tiles = this.goalTiles(floor);
     let fallback = null;
     for (let i = 0; i < 400; i++) {
       const tile = tiles[Math.floor(Math.random() * tiles.length)];
@@ -255,7 +283,7 @@ export class Monster extends MonsterBody {
 
   /** Hunting speed: enrages with every destroyed Heart (Black Slash strips it). */
   huntSpeed() {
-    const hearts = Math.min(5, this.game.destroyed.size);
+    const hearts = Math.min(7, this.game.destroyed.size);
     return AI.HUNT_SPEED + (this.isCalm() ? 0 : AI.ENRAGE_PER_HEART * hearts);
   }
 
@@ -264,10 +292,8 @@ export class Monster extends MonsterBody {
     return this.aggression + AI.AGGRO_PER_HEART * this.game.destroyed.size;
   }
 
-  /** Shadow Step: the hunted wizard vanished. */
-  loseTarget(p) {
-    if (this.state === 'hunting' && this.targetId === p.id) this.search(this.lastKnown);
-  }
+  /** Shadow Step: too late once it has locked on — it still tracks them. */
+  loseTarget() {}
 
   /** Bull Thrust: it turns on the wizard who struck it. */
   taunt(p, seconds) {
@@ -287,14 +313,16 @@ export class Monster extends MonsterBody {
   }
 
   /**
-   * Walk toward a goal on any floor (taking the servants' stair when needed).
-   * Returns the remaining distance on the goal's floor, or Infinity.
+   * Walk toward a goal on any floor (taking the nearest staircase on the
+   * route when needed). Returns the remaining distance on the goal's floor,
+   * or Infinity.
    */
   travelTo(goal, speed, dt) {
     const g = this.game;
     let target = goal;
     if (goal.floor !== this.floor) {
-      const stairs = g.props[this.floor === 0 ? g.map.ids.stairsDown : g.map.ids.stairsUp];
+      const stairs = stairToward(g.map, this.floor, this.x, this.z, goal.floor);
+      if (!stairs) return Infinity;
       if (this.dist(stairs.front) < 1.0) {
         const to = stairs.target;
         this.place({ x: to.x, z: to.z, floor: to.floor });
@@ -329,16 +357,48 @@ export class Monster extends MonsterBody {
     this.game.emitAll({ type: 'monster:awaken' });
   }
 
+  /**
+   * Lock on to p and charge. It keeps the FIRST wizard it locks on to (only a
+   * taunt redirects it); an invisible wizard can only be locked on to when
+   * they give themselves away ('sensed').
+   */
   hunt(p, reason) {
-    if (!p || p.captured || p.capturing || this.hidden || this.isInvisible(p)) return;
-    if (this.t < this.tauntUntil && this.targetId !== p.id) return; // taunted: fixated
-    if (['dormant', 'haunt', 'retreating'].includes(this.state)) return;
-    if (this.state === 'hunting' && this.targetId === p.id) return;
+    if (!p || p.captured || p.capturing || this.hidden) return;
+    if (this.isInvisible(p) && !['sensed', 'taunt', 'debug'].includes(reason)) return;
+    if (this.game.inArena?.(p)) return; // behind a Sin's blood-runes: out of its reach
+    if (['dormant', 'haunt', 'retreating', 'boss'].includes(this.state)) return;
+    if (!this.canAct() && reason !== 'debug') return; // chained, or its mind locked
+    if (this.state === 'hunting') return; // already locked: the first one it saw
     this.setState('hunting');
     this.targetId = p.id;
     this.lastKnown = { x: p.x, z: p.z, floor: p.floor };
     this.lastSeenAt = this.t;
-    this.game.emitAll({ type: 'monster:hunt', targetId: p.id, reason });
+    this.spotting.clear();
+    this.game.emitAll({ type: 'monster:hunt', targetId: p.id, reason, lock: true });
+  }
+
+  /**
+   * One of the three Ultimates (or a Sin's blood-runes) wiped its sight-lock.
+   * It forgets its target and, once free to move again, is blind for a moment.
+   */
+  breakLock(reason, holdFor = 0) {
+    const was = this.state === 'hunting' ? this.targetId : null;
+    if (this.state === 'hunting' || this.state === 'searching') this.setState('stalking');
+    this.targetId = null;
+    this.attack = null;
+    this.spotting.clear();
+    this.tauntUntil = 0;
+    this.blindUntil = Math.max(this.blindUntil, this.t + holdFor + AI.RELEASE_BLIND);
+    this.goal = null;
+    this.game.emitAll({ type: 'monster:lockbroken', reason, targetId: was, hold: holdFor });
+  }
+
+  /** Devil Union: it touched an immune wizard. It recoils, frozen, and forgets. */
+  recoilFromUnion(p) {
+    if (this.state === 'boss' || this.isFrozen()) return;
+    super.freeze(AI.UNION_RECOIL);
+    this.game.emitAll({ type: 'monster:recoil', id: this.id, by: p?.id, floor: this.floor, x: r2(this.x), z: r2(this.z), duration: AI.UNION_RECOIL });
+    this.breakLock('union', AI.UNION_RECOIL);
   }
 
   search(at) {
@@ -394,11 +454,46 @@ export class Monster extends MonsterBody {
 
   /** A noise at a player's position; `radius` = how far it carries (Infinity = everywhere). */
   hear(p, radius, kind) {
-    if (!['stalking', 'searching'].includes(this.state) || this.hidden) return;
+    if (!['stalking', 'searching'].includes(this.state) || this.hidden || !this.canAct()) return;
     const sameFloor = p.floor === this.floor;
+    if (kind === 'heart') {
+      // A Heart died: it goes to see (it never knows who).
+      return this.search({ x: p.x, z: p.z, floor: p.floor });
+    }
     if (radius !== Infinity && (!sameFloor || this.dist(p) > radius)) return;
+    if (this.isInvisible(p)) {
+      if (sameFloor && this.dist(p) <= INVIS.sense) this.hunt(p, 'sensed');
+      return;
+    }
     if (kind === 'decoy') this.search({ x: p.x, z: p.z, floor: p.floor });
     else this.hunt(p, kind);
+  }
+
+  /**
+   * Sight and the invisible: a wizard in plain view for SPOT_TIME seconds is
+   * locked on to; an invisible one who moves or casts within INVIS.sense units
+   * is sensed (and locked on to) at once. Standing still while invisible: it
+   * walks right past.
+   */
+  updateSenses(dt) {
+    if (this.hidden || !['stalking', 'searching'].includes(this.state) || !this.canAct()) return;
+    for (const p of this.freePlayers()) {
+      if (p.floor !== this.floor) continue;
+      if (this.isInvisible(p)) {
+        this.spotting.delete(p.id);
+        const d = this.dist(p);
+        const acted = this.t - (p.actAt ?? -Infinity) < 0.6;
+        if (d <= INVIS.sense && (p.moving || acted) && this.t >= this.blindUntil) return this.hunt(p, 'sensed');
+        continue;
+      }
+      if (this.canSee(p)) {
+        const v = (this.spotting.get(p.id) ?? 0) + dt;
+        this.spotting.set(p.id, v);
+        if (v >= AI.SPOT_TIME || this.dist(p) < 3) return this.hunt(p, 'sighted');
+      } else {
+        this.spotting.delete(p.id);
+      }
+    }
   }
 
   updateStares(dt) {
@@ -437,63 +532,70 @@ export class Monster extends MonsterBody {
     this.goalUntil = this.t + 5;
   }
 
-  noteHit(source) {
-    if (['dormant', 'haunt', 'retreating', 'boss'].includes(this.state)) return;
-    const t = this.t;
-    this.hits = this.hits.filter((h) => t - h.t < AI.COMBO_WINDOW && h.source !== source);
-    this.hits.push({ source, t });
-    if (this.hits.length >= AI.COMBO_COUNT) this.banish('combo');
-  }
+  // ---- spells against it ----------------------------------------------------------------
+  //
+  // Unkillable until the Hearts are gone: damage does nothing, and ordinary
+  // crowd control only staggers it for AI.CC_CAP seconds without breaking its
+  // lock. Dawn ('dawn') and the Mind Fracture ('fracture') hold it for their
+  // full duration and wipe the lock. As the Unbound boss it has its own health
+  // pool (Finale.hitBoss) and a 2.5s cap on everything.
 
-  // Every spell effect also counts toward the "combined elements" banish.
-  // As the Unbound boss it has its own health pool (Finale.hitBoss).
   damage(amount, source) {
     if (this.state === 'boss') return this.game.finale.hitBoss(amount, source);
-    super.damage(amount, source);
-    this.noteHit(source);
+    if (amount <= 0 || this.dead) return;
+    this.game.emitAll({ type: 'monster:damage', id: this.id, amount: 0, source, immune: true, hp: this.hp });
   }
 
-  /** No crowd control holds the Unbound one for long. */
-  cap(d) { return this.state === 'boss' ? Math.min(d, FINALE.BOSS_CC_CAP) : d; }
-  freeze(d) { super.freeze(this.cap(d)); }
-  confuse(d, dps) { super.confuse(this.cap(d), dps); }
+  /** How long ordinary crowd control may hold it. */
+  cap(d) { return this.state === 'boss' ? Math.min(d, FINALE.BOSS_CC_CAP) : Math.min(d, AI.CC_CAP); }
+
+  freeze(d, src) {
+    if (src === 'dawn' && this.state !== 'boss') {
+      // Dawn of the Sacred Order: chained in golden light, its sight wiped.
+      super.freeze(d);
+      return this.breakLock('dawn', d);
+    }
+    super.freeze(this.cap(d));
+  }
+  confuse(d, dps, src) {
+    if (src === 'fracture' && this.state !== 'boss') {
+      // Abyssal Mind Fracture: its mind locked in place, clawing at itself.
+      super.confuse(d, dps);
+      return this.breakLock('fracture', d);
+    }
+    super.confuse(this.cap(d), dps);
+  }
   root(d) { super.root(this.cap(d)); }
   pin(d) { super.pin(this.cap(d)); }
   lift(d) { super.lift(this.cap(d)); }
-  /** The wind dragon can't carry the boss off; it slams it (toward the portal, if open). */
+  stun(d) { super.stun(this.cap(d)); }
+  torment(i, r) { super.torment(this.cap(i), r); }
+  pull(x, z, d, speed) { super.pull(x, z, this.cap(d), speed); }
+  knockback(fromX, fromZ, distance, time, fallbackDir) {
+    if (this.state === 'boss') return super.knockback(fromX, fromZ, distance, time, fallbackDir);
+    super.knockback(fromX, fromZ, Math.min(distance, AI.KNOCK_CAP), Math.min(time, 0.3), fallbackDir);
+  }
+  /** The wind dragon can't carry it off: it slams it (toward the portal, if open). */
   sweep(path, speed, stagger) {
-    if (this.state !== 'boss') return super.sweep(path, speed, stagger);
+    if (this.state !== 'boss') {
+      const end = path.at(-1) ?? { x: this.x + 1, z: this.z };
+      return this.knockback(this.x * 2 - end.x, this.z * 2 - end.z, AI.KNOCK_CAP, 0.3);
+    }
     const P = this.game.finale.portal;
     const from = P ? { x: this.x * 2 - P.x, z: this.z * 2 - P.z } : this.game.finale.archon ?? this;
-    this.knockback(from.x, from.z, 6, 0.4);
+    super.knockback(from.x, from.z, 6, 0.4);
     this.st.staggerUntil = Math.max(this.st.staggerUntil, this.t + 1);
   }
-  torment(i, r) {
-    super.torment(this.cap(i), r);
-    this.noteHit('black');
-    if (this.state === 'hunting') this.search(this.lastKnown); // the chase is broken
-  }
-  stun(d) {
-    super.stun(this.cap(d));
-    this.noteHit('white');
-    if (this.state === 'hunting') this.search(this.lastKnown); // blinded: loses the target
-  }
-  knockback(...args) { super.knockback(...args); this.noteHit('wind'); }
-  slow(f, d) { super.slow(f, d); if (d > 1) this.noteHit('water'); }
-  burn(...args) { super.burn(...args); this.noteHit('fire'); }
+  burn(dps, d, slow) { super.burn(this.state === 'boss' ? dps : 0, d, slow); }
 
-  /**
-   * Stagger HP ran out: it doesn't die, it flees. While chained (Dawn) or
-   * mind-fractured it can't flee, so the banish waits until it's released.
-   */
+  /** An attack bounced off a Void shield: a stagger, never a lock-break. */
+  block() { super.block(); }
+
+  /** It cannot die outside the finale. */
   die() {
-    if (this.isConfused() || this.isFrozen()) {
-      this.hp = 1;
-      this.pendingBanish = true;
-      return;
-    }
+    if (this.state === 'boss') return super.die();
     this.hp = this.maxHp;
-    this.banish('stagger');
+    this.dead = false;
   }
 
   guarding() { return this.game.prisoners().length > 0; }
@@ -511,12 +613,15 @@ export class Monster extends MonsterBody {
       return;
     }
     if (this.state === 'dormant' && this.game.phase !== PHASE.TOME && !this.debugHeld) this.awaken();
-    if (this.pendingBanish && !this.isConfused() && !this.isFrozen()) {
-      this.pendingBanish = false;
-      this.hp = this.maxHp;
-      this.banish('stagger');
+    this.hp = this.maxHp; // unkillable (fire and its own claws included)
+    // Devil Union: touching an immune wizard throws it back, frozen and forgetful.
+    if (!this.hidden && this.canAct() && ['stalking', 'hunting', 'searching'].includes(this.state)) {
+      for (const p of this.freePlayers()) {
+        if (p.floor === this.floor && this.dist(p) < this.radius + 0.75 && this.game.spells.hasBuff(p, 'union')) return this.recoilFromUnion(p);
+      }
     }
     this.updateStares(dt);
+    this.updateSenses(dt);
     if (!this.canAct() && this.state !== 'retreating' && this.state !== 'dormant') {
       this.action = this.isConfused() ? 'confused' : null;
       this.attack = null;
@@ -603,7 +708,7 @@ export class Monster extends MonsterBody {
       const tile = tiles[Math.floor(Math.random() * tiles.length)];
       return { ...tile, peek: false, guard: true };
     }
-    const tiles = this.tiles[prey.floor];
+    const tiles = this.goalTiles(prey.floor);
     let best = null;
     for (let i = 0; i < 70; i++) {
       const tile = tiles[Math.floor(Math.random() * tiles.length)];
@@ -634,20 +739,20 @@ export class Monster extends MonsterBody {
   }
 
   updateStalking(dt) {
-    const prey = this.nearestFree();
+    // It prowls toward where the wizards are (even unseen ones: it smells them),
+    // but it only locks on through updateSenses().
+    let prey = null;
+    for (const p of this.freePlayers()) {
+      const score = this.dist(p) + (p.floor === this.floor ? 0 : 60);
+      if (!prey || score < prey.score) prey = { p, score };
+    }
+    prey = prey?.p;
     if (!prey) return;
     const t = this.t;
     if (this.game.destroyed.size >= AI.PHANTOM_HEARTS && t >= this.phantomAt) {
       const first = this.phantomAt === 0;
       this.phantomAt = t + rand(16, 26);
       if (!first) this.spawnPhantoms(prey);
-    }
-    if (this.canSee(prey)) {
-      if (this.dist(prey) < AI.TOO_CLOSE) return this.hunt(prey, 'close');
-      if (t >= this.aggroAt) {
-        this.aggroAt = t + AI.AGGRO_INTERVAL;
-        if (Math.random() < this.aggressionNow()) return this.hunt(prey, 'aggression');
-      }
     }
     if (t < this.peekUntil) {
       this.action = 'peek';
@@ -671,20 +776,16 @@ export class Monster extends MonsterBody {
   updateHunting(dt) {
     const t = this.t;
     const p = this.game.players.get(this.targetId);
-    if (!p || p.captured || p.capturing || this.isInvisible(p)) return this.search(this.lastKnown);
+    if (!p || p.captured || p.capturing) return this.search(this.lastKnown);
+    if (this.game.inArena?.(p)) return this.breakLock('arena'); // the blood-runes sever its sight
     if (this.attack) return this.updateAttack(p, dt);
 
-    // Hunting senses: it tracks its prey in every direction.
-    const sees = p.floor === this.floor && this.dist(p) < 30 && this.los(this, p, this.floor);
-    if (sees) {
-      this.lastKnown = { x: p.x, z: p.z, floor: p.floor };
-      this.lastSeenAt = t;
-    } else if (t - this.lastSeenAt > AI.LOSE_SIGHT && t >= this.tauntUntil) {
-      return this.search(this.lastKnown);
-    }
-    if (t - this.stateAt > AI.HUNT_MAX) return this.search(this.lastKnown);
+    // Locked on: it always knows where they are, invisible or not, on any floor.
+    this.lastKnown = { x: p.x, z: p.z, floor: p.floor };
+    const sees = p.floor === this.floor && this.los(this, p, this.floor);
+    if (sees) this.lastSeenAt = t;
 
-    const d = this.dist(p);
+    const d = p.floor === this.floor ? this.dist(p) : Infinity;
     const hearts = this.game.destroyed.size;
     if (sees && t >= this.attackReadyAt) {
       if (d < AI.CLAW_RANGE * this.reachScale()) return this.startAttack(this.chooseMelee(p), p);
@@ -697,9 +798,9 @@ export class Monster extends MonsterBody {
       const b = this.game.spells.barrierNear(this.floor, this.x, this.z, 2.4);
       if (b) return this.startAttack('smash', p, { barrierId: b.id });
     }
-    // Chase where it saw them last; through the stairs if they changed floor.
-    const goal = sees ? p : (p.floor !== this.floor && t - this.lastSeenAt < 1 ? { x: p.x, z: p.z, floor: p.floor } : this.lastKnown);
-    this.travelTo(goal, this.huntSpeed(), dt);
+    // The lethal charge once it has them in sight and close; otherwise it runs them down.
+    const charging = sees && d < AI.CHARGE_RANGE;
+    this.travelTo({ x: p.x, z: p.z, floor: p.floor }, charging ? Math.max(AI.CHARGE_SPEED, this.huntSpeed()) : this.huntSpeed(), dt);
   }
 
   /** Pick a close-range attack. */
@@ -708,11 +809,10 @@ export class Monster extends MonsterBody {
       this.forceLunge = false;
       return 'lunge';
     }
-    if (p.hp <= HP.CAPTURE_AT) return 'grab';
-    if (Math.random() < AI.LUNGE_CHANCE) return 'lunge';
+    // Locked on: its catch is the capture. Crowded, it may sweep them all back first.
     const crowd = this.prey().filter((o) => o.floor === this.floor && this.dist(o) <= AI.SHOCK_RADIUS).length;
-    if (this.t >= this.shockReadyAt && (crowd >= 2 || Math.random() < 0.3)) return 'shockwave';
-    return 'claw';
+    if (this.t >= this.shockReadyAt && crowd >= 3 && Math.random() < 0.35) return 'shockwave';
+    return p.hp <= HP.CAPTURE_AT ? 'grab' : 'lunge';
   }
 
   startAttack(kind, p, extra = {}) {
@@ -800,7 +900,6 @@ export class Monster extends MonsterBody {
 
   updateSearching(dt) {
     const t = this.t;
-    for (const p of this.freePlayers()) if (this.canSee(p)) return this.hunt(p, 'sighted');
     if (t - this.stateAt > AI.SEARCH_TIME) return this.setState('stalking');
 
     if (this.lastKnown && !this.listenUntil) {
@@ -815,7 +914,7 @@ export class Monster extends MonsterBody {
     if (!this.searchPoints.length) {
       // Sweep a couple of nearby rooms (corridor loops), nearest first.
       const rooms = this.game.map.rooms
-        .filter((r) => r.floor === this.floor && r.type !== 'cell')
+        .filter((r) => r.floor === this.floor && r.type !== 'cell' && !this.game.arenaRoom?.(r.id))
         .map((r) => ({ x: tileCenter(r.cx), z: tileCenter(r.cy), floor: r.floor }))
         .filter((pt) => this.dist(pt) < 26)
         .sort(() => Math.random() - 0.5)
