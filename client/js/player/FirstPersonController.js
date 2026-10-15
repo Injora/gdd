@@ -39,6 +39,8 @@ export class FirstPersonController {
     this.speedMul = 1; // Shadow Step / Tailwind / Phoenix
     this.noStamina = false; // Tailwind: sprint without tiring
     this.ignoreProps = false; // Shadow Step: through furniture
+    this.rideOnly = false; // inside the Archon as a passenger: look, don't walk
+    this.eyeOverride = null; // the Archon's towering eye height
     this.keys = new Set();
     this.onStep = null; // (info) => void, fired at each footfall
 
@@ -88,7 +90,7 @@ export class FirstPersonController {
   held(name) { return MOVE_KEYS[name].some((k) => this.keys.has(k)); }
 
   update(dt) {
-    const on = this.enabled;
+    const on = this.enabled && !this.rideOnly;
     const f = on ? (this.held('forward') ? 1 : 0) - (this.held('back') ? 1 : 0) : 0;
     const s = on ? (this.held('right') ? 1 : 0) - (this.held('left') ? 1 : 0) : 0;
 
@@ -122,7 +124,7 @@ export class FirstPersonController {
     this.moving = actual > 0.3;
 
     // Eye height + head bob
-    const targetEye = this.crouch ? CROUCH_EYE_HEIGHT : EYE_HEIGHT;
+    const targetEye = this.eyeOverride ?? (this.crouch ? CROUCH_EYE_HEIGHT : EYE_HEIGHT);
     this.eye += (targetEye - this.eye) * Math.min(1, dt * 10);
     const prevPhase = this.bobPhase;
     this.bobPhase += actual * dt * (this.sprinting ? 2.3 : 2.0);

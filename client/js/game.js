@@ -13,6 +13,9 @@ import { WizardAvatar } from './entities/WizardAvatar.js';
 import { MonsterAvatar } from './entities/MonsterAvatar.js';
 import { SpellFX } from './fx/SpellFX.js';
 import { GrimoireFX } from './fx/GrimoireFX.js';
+import { FinaleFX } from './fx/FinaleFX.js';
+import { Epilogue } from './epilogue/Epilogue.js';
+import { FINALE, MASTERIES } from '/shared/finale.js';
 import { PostFX } from './fx/PostFX.js';
 import { AudioEngine } from './audio/AudioEngine.js';
 import { AmalgamAvatar } from './entities/AmalgamAvatar.js';
@@ -92,6 +95,14 @@ export class GameClient {
       shake: (amount) => { this.shake = Math.max(this.shake, amount); },
       avatarOf: (id) => this.avatars.get(id),
     });
+    this.finaleFx = new FinaleFX(this.fx, this.scene, this.map, {
+      screen: (kind, strength) => this.hud.screen(kind, strength),
+      shake: (amount) => { this.shake = Math.max(this.shake, amount); },
+    });
+    this.fin = null;
+    this.mergeUntil = 0;
+    this.epilogue = null;
+    this.grappling = false;
     this.fx.prewarm(this.renderer, this.camera);
     this.post = new PostFX(this.renderer, this.scene, this.camera);
     this.renderer.info.autoReset = false; // the composer renders several passes per frame
@@ -268,6 +279,7 @@ export class GameClient {
     this.ents = s.ents ?? [];
     this.grimoire.syncEntities(this.ents);
     this.flooded = (s.fl ?? 0) > 0;
+    this.fin = s.fin ?? null;
     this.dawnActive = (s.dw ?? 0) > 0;
 
     const seenMonsters = new Set();
@@ -575,6 +587,45 @@ export class GameClient {
       case 'ping':
         this.addPing(e);
         break;
+      // ---- Phase III / IV
+      case 'merge':
+        this.startMerge(e);
+        break;
+      case 'boss:start':
+        this.finaleFx.hellfire(e.floor);
+        this.hud.banner('THE UNBOUND MALPHAS AMALGAM', 'The Chapel splits with hellfire. Keys 1\u20137: Elemental Masteries.', 5000);
+        this.audio.shriek(wpos(e.floor, e.x, e.z, 3), { volume: 1, length: 2.6, pitch: 0.65 });
+        break;
+      case 'mastery':
+        this.finaleFx.mastery(e, this.grimoire);
+        this.audio.mastery(e.id, wpos(e.floor, e.to.x, e.to.z, 2));
+        break;
+      case 'boss:volley':
+      case 'boss:wave':
+      case 'boss:charge':
+      case 'boss:ward':
+        this.audio.bossCue(e.type.slice(5), wpos(e.floor, e.x, e.z, 2));
+        if (e.type === 'boss:ward') this.hud.caption('[ a crimson ward: break it with the Anti-Magic Slash (7) ]', 3000);
+        if (e.type === 'boss:charge') this.hud.caption('[ it rears back to charge ]', 1200);
+        break;
+      case 'archon:hit':
+        this.hud.screen('hurt', Math.min(1, 0.3 + e.amount / 50));
+        this.shake = Math.max(this.shake, 0.3 + e.amount / 80);
+        this.audio.hurt(e.amount);
+        break;
+      case 'portal:open':
+        this.finaleFx.openPortal(e);
+        this.hud.banner('THE HELL PORTAL TEARS OPEN', 'Bind it, shove it in with Wind. HOLD E: Soul Grapple.', 6000);
+        this.audio.bossCue('portal', wpos(e.floor, e.x, e.z, 1));
+        break;
+      case 'sealing':
+        this.finaleFx.sealing(e);
+        this.hud.banner('DRAG IT UNDER', 'The rift is closing\u2026', e.duration * 1000);
+        this.audio.bossCue('sealing', wpos(e.floor, e.x, e.z, 1));
+        break;
+      case 'victory':
+        this.startEpilogue(e);
+        break;
       case 'debug:mode':
         this.hud.caption(`DEBUG \u00b7 monster mode: ${e.mode.toUpperCase()}`, 2500);
         break;
@@ -630,6 +681,7 @@ export class GameClient {
       if (e.repeat) return;
       switch (e.code) {
         case 'KeyE':
+          if (this.grappleStage()) { this.setGrapple(true); break; }
           if (this.target && !this.hud.journalOpen) {
             if (this.target.entity) this.net.emit('p:interact', { entityId: this.target.id });
             else this.net.emit('p:interact', { propId: this.target.id });
@@ -641,7 +693,14 @@ export class GameClient {
           this.audio.lumos(this.lumos);
           break;
         case 'KeyR':
-          this.cast('ult');
+          if (this.grappleStage()) this.setGrapple(true);
+          else this.cast('ult');
+          break;
+        case 'KeyH':
+          if (this.debug) this.net.emit('debug:finale');
+          break;
+        case 'KeyN':
+          if (this.debug) this.net.emit('debug:portal');
           break;
         case 'KeyU':
           if (this.debug) this.net.emit('debug:ult');
@@ -671,6 +730,10 @@ export class GameClient {
           if (/^Digit[1-7]$/.test(e.code) && e.shiftKey) {
             // Debug: Shift+1–7 hot-swaps your wizard.
             if (this.debug) this.net.emit('debug:wizard', { wizardId: WIZARDS[Number(e.code.slice(5)) - 1].id });
+          } else if (this.archonMode() && /^Digit[1-7]$/.test(e.code)) {
+            // Archon form: the seven Elemental Masteries.
+            this.net.emit('p:mastery', { key: Number(e.code.slice(5)), yaw: this.controller.yaw });
+            this.recoil = 1.2;
           } else if (/^Digit[1-4]$/.test(e.code)) {
             const slot = Number(e.code.slice(5)) - 1;
             this.select(slot);
@@ -683,6 +746,7 @@ export class GameClient {
     };
     this._onKeyUp = (e) => {
       if (e.code === 'KeyE' && this.channel) this.net.emit('p:cancel');
+      if ((e.code === 'KeyE' || e.code === 'KeyR') && this.grappling) this.setGrapple(false);
     };
     $('btn-retry').onclick = () => this.net.emit('game:restart', { mode: 'phase' });
     $('btn-to-lobby').onclick = () => this.net.emit('game:restart', { mode: 'lobby' });
@@ -691,7 +755,7 @@ export class GameClient {
     window.addEventListener('pointerdown', this._unlockAudio);
     this.controller.onStep = (info) => this.audio.playerStep(this.controller.floor === 1, info.speed);
     this._onClick = () => {
-      if (!this.hud.journalOpen) this.controller.lock();
+      if (!this.hud.journalOpen && !this.epilogue) this.controller.lock();
     };
     this._onLockChange = () => {
       if (this.controller.locked) this.hidePause();
@@ -724,6 +788,7 @@ export class GameClient {
   }
 
   showPause(title) {
+    if (this.epilogue) return; // nothing to pause: the ending plays on its own
     $('pause-title').textContent = title;
     $('pause').classList.remove('hidden');
   }
@@ -733,6 +798,7 @@ export class GameClient {
   // ---- per-frame --------------------------------------------------------------
 
   findTarget() {
+    if (this.phase === PHASE.ARCHON) return null; // inside the Archon there is nothing to pick up
     const c = this.controller;
     const fx = -Math.sin(c.yaw), fz = -Math.cos(c.yaw);
     let best = null;
@@ -783,7 +849,12 @@ export class GameClient {
     this.time += dt;
     const c = this.controller;
 
+    if (this.epilogue) {
+      this.epilogue.update(dt);
+      return;
+    }
     this.renderer.info.reset();
+    this.updateArchon(dt, now);
     c.update(dt);
     this.updateJumpscare(now);
     if (c.floor !== this.activeFloor) {
@@ -806,10 +877,10 @@ export class GameClient {
     const am = this.monsters.get('amalgam');
     const amNear = am && !am.snap.hid && am.snap.f === c.floor;
     const amDist = amNear ? Math.hypot(am.x - c.x, am.z - c.z) : Infinity;
-    const dread = clamp01((15 - amDist) / 15);
+    const dread = this.archonMode() ? 0 : clamp01((15 - amDist) / 15); // the Archon is no one's prey
     let wandK = flicker;
     if (dread > 0) wandK *= Math.random() < dread * 0.18 ? 0.08 : 1 - dread * 0.35 * Math.random();
-    if (amNear && am.snap.state === 'hunting' && amDist < 22) {
+    if (amNear && am.snap.state === 'hunting' && amDist < 22 && !this.archonMode()) {
       if (now >= this.nextCutAt) {
         this.lightCutUntil = now + 300;
         this.nextCutAt = now + 900 + Math.random() * 1700;
@@ -838,7 +909,10 @@ export class GameClient {
       this.wandTipMat.color.set(this.wizard.color).multiplyScalar(1 + r * 2);
     }
 
-    for (const av of this.avatars.values()) av.update(dt, this.time, this.camera, c.floor);
+    for (const av of this.avatars.values()) {
+      av.update(dt, this.time, this.camera, c.floor);
+      if (this.archonMode()) { av.group.visible = false; if (av.light) av.light.intensity = 0; } // inside the Archon
+    }
     for (const m of this.monsters.values()) m.update(dt, this.time, c.floor);
     am?.setHeartsLit(6 - this.destroyed.size);
     this.updateHorror(dt, now, c, am, amNear, amDist, nulled || this.dawnK > 0.5 ? 0 : dread, nulled);
@@ -851,20 +925,22 @@ export class GameClient {
       const av = this.avatars.get(id);
       const x = self ? c.x : av?.x ?? p.x, z = self ? c.z : av?.z ?? p.z, f = self ? c.floor : p.f;
       this.fx.shield(id, !!p.sh && f === c.floor, x, FLOOR_Y[f], z);
-      this.grimoire.aura(id, f === c.floor ? p.bf ?? [] : [], x, FLOOR_Y[f], z, self, dt);
+      this.grimoire.aura(id, f === c.floor && !this.archonMode() ? p.bf ?? [] : [], x, FLOOR_Y[f], z, self, dt);
     }
     this.fx.update(dt, this.time);
     this.grimoire.update(dt, this.time, c.floor, this.localPos());
     this.hud.cooldowns(this.slotCd.map((cd) => ({ remaining: Math.max(0, (cd.readyAt - now) / 1000), duration: cd.duration })));
     this.hud.ult(this.ultCharge);
-    this.hud.hp(this.hp);
+    this.hud.hp(this.archonMode() && this.fin?.ar ? (this.fin.ar.hp / this.fin.ar.max) * 100 : this.hp);
+    this.updateFinaleHud(dt);
     this.hud.buffs(this.buffs);
 
     // Interaction
     this.target = this.hud.journalOpen ? null : this.findTarget();
     const [label, hold] = this.target ? this.promptFor(this.target) : [null, false];
     this.hud.prompt(this.channel ? null : label, hold);
-    if (this.channel) this.hud.progress((now - this.channel.start) / this.channel.duration);
+    if (this.channel && Number.isFinite(this.channel.duration)) this.hud.progress((now - this.channel.start) / this.channel.duration);
+    if (this.grappleStage()) this.hud.prompt(this.grappling ? 'Soul Grapple: dragging it toward the rift\u2026' : 'Soul Grapple: drag it into the rift', true);
 
     this.hud.stamina(c.stamina);
     const room = roomAt(this.map, c.floor, c.x, c.z);
@@ -915,7 +991,7 @@ export class GameClient {
   updateHorror(dt, now, c, am, amNear, amDist, dread, nulled = false) {
     // Terror: staring at it up close warps the view (a Null Zone shields you).
     let staring = false;
-    if (amNear && amDist < 12) {
+    if (amNear && amDist < 12 && !this.archonMode()) {
       const fx = -Math.sin(c.yaw), fz = -Math.cos(c.yaw);
       const dx = am.x - c.x, dz = am.z - c.z;
       staring = (dx * fx + dz * fz) / Math.max(amDist, 1e-3) > 0.9 && lineOfSight(this.map, c.floor, c.x, c.z, am.x, am.z);
@@ -984,7 +1060,8 @@ export class GameClient {
   /** Spell buffs on yourself: speed, phasing, tireless sprinting. */
   applyBuffs(c) {
     const b = this.buffs;
-    c.speedMul = 1 + (b.includes('shadow') ? 0.4 : 0) + (b.includes('tailwind') ? 0.45 : 0) + (b.includes('phoenix') && c.sprinting ? 0.3 : 0);
+    c.speedMul = (1 + (b.includes('shadow') ? 0.4 : 0) + (b.includes('tailwind') ? 0.45 : 0) + (b.includes('phoenix') && c.sprinting ? 0.3 : 0)) *
+      (this.archonMode() ? FINALE.ARCHON_SPEED : 1);
     c.ignoreProps = b.includes('shadow');
     c.noStamina = b.includes('tailwind');
   }
@@ -1102,8 +1179,147 @@ export class GameClient {
     }
   }
 
+  // ---- Phase III: the Archon ---------------------------------------------------------
+
+  archonMode() { return !!this.fin?.ar && this.phase === PHASE.ARCHON && performance.now() >= this.mergeUntil; }
+  grappleStage() { return this.archonMode() && this.fin?.stage === 'portal'; }
+
+  setGrapple(on) {
+    if (on === this.grappling) return;
+    this.grappling = on;
+    this.net.emit('p:grapple', { on });
+  }
+
+  /** Soul Merge: ribbons spiral out of every wizard into the altar; then you are the Archon. */
+  startMerge(e) {
+    const c = this.controller;
+    const sources = [{ x: c.x, z: c.z }];
+    for (const av of this.avatars.values()) if (av.floor === e.floor) sources.push({ x: av.x, z: av.z });
+    this.finaleFx.merge(e, sources);
+    this.audio.mergeSound();
+    this.audio.chant(0);
+    this.hud.banner('SOUL MERGE', 'Seven elements. One body. You are THE ARCHON.', e.duration * 1000 + 1500);
+    this.hud.screen('white', 0.6);
+    this.mergeUntil = performance.now() + e.duration * 1000;
+    this.channel = null;
+    this.hud.progress(null);
+    this.mergeCenter = { x: e.x, z: e.z };
+    c.setPosition(e.ax, e.az, e.floor, e.yaw);
+    c.enabled = true;
+  }
+
+  updateArchon(dt, now) {
+    const c = this.controller;
+    const A = this.fin?.ar;
+    const inArchon = !!A && this.phase === PHASE.ARCHON;
+    document.body.classList.toggle('archon', inArchon);
+    if (!inArchon) {
+      c.rideOnly = false;
+      c.eyeOverride = null;
+      return;
+    }
+    const merging = now < this.mergeUntil;
+    c.eyeOverride = merging ? null : FINALE.ARCHON_EYE;
+    const driver = A.drv === this.selfId;
+    c.rideOnly = merging || !driver;
+    if (c.rideOnly) {
+      // Passengers ride the Archon: follow its position, look wherever they like.
+      const k = 1 - Math.exp(-dt * 12);
+      c.x += (A.x - c.x) * k;
+      c.z += (A.z - c.z) * k;
+      c.floor = A.f;
+    }
+    if (merging && this.mergeCenter) {
+      // The cinematic: eyes drawn up into the light over the altar.
+      const want = Math.atan2(-(this.mergeCenter.x - c.x), -(this.mergeCenter.z - c.z));
+      const k = 1 - Math.exp(-dt * 5);
+      c.yaw += Math.atan2(Math.sin(want - c.yaw), Math.cos(want - c.yaw)) * k;
+      c.pitch += (0.32 - c.pitch) * k;
+    }
+    if (!merging) this.finaleFx.attachCrown(this.camera);
+    this.finaleFx.updateCrown(this.time, this.fin.mr);
+  }
+
+  updateFinaleHud(dt) {
+    const f = this.fin;
+    // The Forbidden Spell
+    if (this.phase === PHASE.CONVERGENCE && f) {
+      const total = this.positions.size || 1;
+      const altarId = this.map.ids.altar;
+      const voices = [...this.positions.values()].filter((p) => p.ch === altarId).length;
+      this.hud.ritual(f.rt, voices === total
+        ? 'Every voice joins the chant\u2026'
+        : `${voices} of ${total} voices. Every wizard must hold E at the altar.`);
+      this.audio.chant(voices ? 0.3 + f.rt * 0.7 : 0);
+      this.finaleFx.ritual(this.map.props[altarId], f.rt, voices, dt);
+    } else {
+      this.hud.ritual(null);
+    }
+    if (this.archonMode() && f?.boss) {
+      const stageText = { boss: 'Break its body. Survive its fury.', portal: 'The rift is open: bind it, shove it, DRAG IT UNDER.', sealing: 'It is going under\u2026' }[f.stage] ?? '';
+      this.hud.boss(f.boss.hp, f.boss.max, f.boss.ward, `${stageText}  ·  Archon ${f.ar.hp}/${f.ar.max}`);
+      this.hud.masteries(MASTERIES, f.mr);
+      const am = this.monsters.get('amalgam');
+      this.finaleFx.bossDecor(am, f.boss.ward, this.time, f.seal);
+      this.finaleFx.orbs(f.orbs ?? [], f.ar.f);
+      this.finaleFx.wave(f.wave, f.ar.f);
+    } else {
+      this.hud.boss(null);
+      this.hud.masteries(null);
+    }
+    this.finaleFx.update(dt, this.time, this.controller.floor);
+  }
+
+  /** Phase IV. */
+  startEpilogue(e) {
+    this.setGrapple(false);
+    this.hud.hide();
+    this.hud.boss(null);
+    this.hud.masteries(null);
+    document.body.classList.remove('archon');
+    document.exitPointerLock?.();
+    this.hidePause();
+    this.controller.enabled = false;
+    this.epilogue = new Epilogue({
+      renderer: this.renderer,
+      gameScene: this.scene,
+      camera: this.camera,
+      map: this.map,
+      mansion: this.mansion,
+      coven: e.coven,
+      isHost: e.hostId === this.selfId,
+      audio: this.audio,
+      onPlayAgain: () => this.net.emit('game:restart', { mode: 'again' }),
+      onReturn: () => this.net.emit('game:restart', { mode: 'lobby' }),
+      hideHorror: () => this.restoreDaylight(),
+    });
+  }
+
+  /** The horror lifts: no monster, no fog, warm morning light everywhere. */
+  restoreDaylight() {
+    for (const m of this.monsters.values()) m.group.visible = false;
+    for (const av of this.avatars.values()) av.group.visible = false;
+    this.finaleFx.dispose();
+    if (this.finaleFx.crown) this.finaleFx.crown.visible = false;
+    this.wandRig.visible = false;
+    this.wandLight.intensity = 0;
+    this.fillLight.intensity = 0;
+    for (const l of this.remoteLights) l.intensity = 0;
+    this.mansion.setDread(0);
+    this.hemi.intensity = 2.6;
+    this.hemi.color.set(0xffe8c0);
+    this.hemi.groundColor.set(0x8a6a40);
+    this.scene.fog = new THREE.FogExp2(0xf3dcb2, 0.012);
+    this.scene.background = new THREE.Color(0xf3dcb2);
+    this.renderer.toneMappingExposure = 1.3;
+    this.camera.fov = 62;
+    this.camera.updateProjectionMatrix();
+  }
+
   dispose() {
     cancelAnimationFrame(this.raf);
+    this.epilogue?.dispose();
+    document.body.classList.remove('archon');
     window.removeEventListener('keydown', this._unlockAudio);
     window.removeEventListener('pointerdown', this._unlockAudio);
     this.audio.dispose();

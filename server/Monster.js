@@ -22,6 +22,7 @@ import { MonsterBody } from './MonsterBody.js';
 import { findPath, pathToWorld } from '../shared/pathfinding.js';
 import { lineOfSight, moveCircle } from '../shared/collision.js';
 import { PHASE, TILE_WALL, TILE_DOOR, HP, LUMOS, tileCenter, worldToTile } from '../shared/constants.js';
+import { FINALE } from '../shared/finale.js';
 
 export const AI = {
   STALK_SPEED: 2.3,
@@ -437,7 +438,7 @@ export class Monster extends MonsterBody {
   }
 
   noteHit(source) {
-    if (['dormant', 'haunt', 'retreating'].includes(this.state)) return;
+    if (['dormant', 'haunt', 'retreating', 'boss'].includes(this.state)) return;
     const t = this.t;
     this.hits = this.hits.filter((h) => t - h.t < AI.COMBO_WINDOW && h.source !== source);
     this.hits.push({ source, t });
@@ -445,14 +446,35 @@ export class Monster extends MonsterBody {
   }
 
   // Every spell effect also counts toward the "combined elements" banish.
-  damage(amount, source) { super.damage(amount, source); this.noteHit(source); }
+  // As the Unbound boss it has its own health pool (Finale.hitBoss).
+  damage(amount, source) {
+    if (this.state === 'boss') return this.game.finale.hitBoss(amount, source);
+    super.damage(amount, source);
+    this.noteHit(source);
+  }
+
+  /** No crowd control holds the Unbound one for long. */
+  cap(d) { return this.state === 'boss' ? Math.min(d, FINALE.BOSS_CC_CAP) : d; }
+  freeze(d) { super.freeze(this.cap(d)); }
+  confuse(d, dps) { super.confuse(this.cap(d), dps); }
+  root(d) { super.root(this.cap(d)); }
+  pin(d) { super.pin(this.cap(d)); }
+  lift(d) { super.lift(this.cap(d)); }
+  /** The wind dragon can't carry the boss off; it slams it (toward the portal, if open). */
+  sweep(path, speed, stagger) {
+    if (this.state !== 'boss') return super.sweep(path, speed, stagger);
+    const P = this.game.finale.portal;
+    const from = P ? { x: this.x * 2 - P.x, z: this.z * 2 - P.z } : this.game.finale.archon ?? this;
+    this.knockback(from.x, from.z, 6, 0.4);
+    this.st.staggerUntil = Math.max(this.st.staggerUntil, this.t + 1);
+  }
   torment(i, r) {
-    super.torment(i, r);
+    super.torment(this.cap(i), r);
     this.noteHit('black');
     if (this.state === 'hunting') this.search(this.lastKnown); // the chase is broken
   }
   stun(d) {
-    super.stun(d);
+    super.stun(this.cap(d));
     this.noteHit('white');
     if (this.state === 'hunting') this.search(this.lastKnown); // blinded: loses the target
   }
@@ -482,6 +504,12 @@ export class Monster extends MonsterBody {
     this.updateStatus(dt);
     this.moving = false;
     if (this.game.phase === PHASE.GAMEOVER) return;
+    if (this.state === 'boss') {
+      const finale = this.game.finale;
+      if (this.canAct() || finale.stage === 'merge') finale.updateBoss(this, dt);
+      else this.action = this.isConfused() ? 'confused' : null;
+      return;
+    }
     if (this.state === 'dormant' && this.game.phase !== PHASE.TOME && !this.debugHeld) this.awaken();
     if (this.pendingBanish && !this.isConfused() && !this.isFrozen()) {
       this.pendingBanish = false;

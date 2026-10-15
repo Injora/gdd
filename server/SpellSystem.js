@@ -618,6 +618,7 @@ export class SpellSystem {
     }
     e.fruits--;
     p.hp = Math.min(HP.MAX, p.hp + e.a.heal);
+    if (this.game.finale?.active) this.game.finale.healArchon(e.a.heal);
     this.game.emitAll({ type: 'tree:eat', id: e.id, by: p.id, name: p.name, fruits: e.fruits, hp: Math.round(p.hp) });
     return true;
   }
@@ -721,6 +722,7 @@ export class SpellSystem {
       if (t >= z.until) { this.zones.splice(i, 1); continue; }
       const a = z.a;
       if (z.kind === 'patronus') {
+        if (this.game.finale?.active) { this.game.finale.healArchon(a.heal * dt); continue; }
         for (const p of this.game.players.values()) {
           if (p.floor === z.floor && !p.captured && Math.hypot(p.x - z.x, p.z - z.z) <= z.r) p.hp = Math.min(HP.MAX, p.hp + a.heal * dt);
         }
@@ -829,7 +831,7 @@ export class SpellSystem {
       }
       if (Math.hypot(m.x - e.x, m.z - e.z) < m.radius + 1.0) {
         if (e.kind === 'fire_dragon') {
-          m.damage(e.a.damage, 'fire');
+          m.damage(e.a.damage, e.a.mastery ? 'mastery' : 'fire');
           m.burn(e.a.burnDps, e.a.burnDuration, 0.2);
           this.game.emitAll({ type: 'impact', id: e.id, ability: e.a.id, kind: 'dragon', floor: e.floor, x: r2(m.x), z: r2(m.z), hit: m.id, blast: e.a.blast });
           this.endEntity(i, true);

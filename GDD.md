@@ -64,22 +64,37 @@ The Monster never kills. It **takes** wizards to a cell in the basement. The hor
   - **If every wizard is held at the same time, it is Game Over: "The Ritual Consumes You".** The host chooses **Retry**, which restarts the current phase from the Foyer with your progress (Tome and Hearts) kept, or **Return to the coven**.
 - Destroying a Heart enrages the Monster and forces it into a **Hunt** toward the Heart's room.
 
-### Phase III — The Forbidden Spell & Soul Merge (Step 5)
-- When all six Hearts are silent, the phase becomes **Convergence**. All free wizards must gather at the **Ritual Altar** in the Chapel, and any captives must be freed first.
-- The **Forbidden Spell** is a group channel at the altar (each player holds E; progress only advances while every free wizard is in the circle).
-- **Soul Merge:** the bodies dissolve and **the Archon** rises, a single towering avatar.
-  - **Shared control:** the host's input drives movement. Each player owns their own element's ability and can also fire *any* of the seven abilities from a shared radial (keys 1–7). All cooldowns are **25%** of their normal values (`ARCHON_COOLDOWN_SCALE`).
-  - The Monster now has a **health bar**. Damage comes from Fire, Water and Earth, plus combination bonuses (for example, Water then Earth equals "mire": a longer slow).
-- **Hell Portal:** at 0 HP the Monster is staggered and a portal tears open under the altar. The Archon must use Wind to push the Monster into the rift and Black to hold its mind there, while the Monster claws back toward the light. Success is a 10-second tug-of-war bar.
+### Phase III — The Forbidden Spell & Soul Merge
+- When all six Hearts are silent, the phase becomes **Convergence**. Every wizard must gather at the **Ritual Altar** in the Chapel; anyone held in the Cell must be freed first, because the spell needs **every** voice.
+- **The Forbidden Spell** is a group channel: each player **holds E** at the altar. A bar at the top fills over **6s** of unbroken chanting by everyone, and drains (0.15/s) whenever any wizard lets go. Gold and violet motes spiral into the altar while the chant rises. Bots walk to their own place around the circle and join in.
+- **Soul Merge (3s cinematic):** ribbons of gold and violet spiral out of every wizard into a blinding core over the altar. Then the bodies are gone and **the Archon** stands in their place.
+- **The Archon** is one towering body (eye height 3m, speed ×1.25, **500 HP**):
+  - **The host drives.** Everyone else rides along inside and aims and casts freely.
+  - Everyone's **own four spells and Ultimate stay live** on supercharged cooldowns (`ARCHON_COOLDOWN_SCALE`, ×0.25).
+  - **Keys 1–7 fire the seven Elemental Masteries.** They share one set of cooldowns because they belong to one body: ✹ Fire Dragon (25 dmg), ≈ Wind Dragon (shove; it pushes *into* the rift once it's open), ♒ Water Deluge (slow), ▲ Earth Pillars (ring of pillars, root), ☉ White Chains (freeze), ☾ Black Torment (interrupt), ⚔ Anti-Magic Slash (cone; the only thing that breaks a ward).
+  - In first person a **heptagram crown** of seven orbs circles your sight. An orb shrinks while its Mastery cools down.
+  - Archon damage is shared by everyone. Devil Union makes it immune, Aegis blocks, Granite Skin hardens it, and the Patronus and the Tree of Life heal it. **At 0 HP it is Game Over**, and Retry re-merges and refights the boss.
+- **The Unbound Malphas Amalgam** (300 HP, ×1.45 scale): the Chapel splits with glowing hellfire cracks and the Amalgam rises from them.
+  - **Bullet-hell orb volleys:** a ring of 16 orbs plus three fast ones aimed at the Archon, every 4.5s. Raising a ward fires a 24-orb ring.
+  - **Floor shockwaves:** a 1s telegraphed windup, then an expanding ring every 7s.
+  - **Telegraphed charges** every 9s.
+  - It circles the Archon at 5 to 9 units.
+  - At **66% and 40%** it raises a crimson **ward** for 4s, and only the Anti-Magic Slash cuts through.
+  - The Archon's normal spells hit it **×2.5**. No crowd control holds it longer than **2.5s**, so even Dawn doesn't stunlock it.
+- **The Hell Portal:** at **20% HP** a swirling rift tears open over the altar. The Amalgam can no longer die. It claws away from the rift (sliding along walls) unless it is bound.
+  - **Bind** it with roots, chains, freeze or pins, **shove** it with Wind, and **Soul Grapple** it: hold **E** or **R**, and each grappling wizard adds pull, up to 3.
+  - Inside 2.6u of the centre it is **dragged under**. A 3s sealing roar follows, then **victory**.
 
-### Phase IV — Epilogue (Step 5)
-- A whiteout transition. Then the same mansion appears in **warm, low morning sun**: open shutters, ivy, birds, a working fountain, children on the lawn.
-- The camera glides through rooms the players fought in, now clean and lived in.
-- **Epilogue cards:** one per wizard in the coven, each showing their family at peace (text from `shared/wizards.js` → `epilogue`), with a hand-painted-style procedural vignette.
-- The credits roll over a slow piano rendition of the music-box lullaby, now in a major key.
+### Phase IV — Epilogue
+- **Whiteout**, then **warm major-key procedural music**: C–G–Am–F pads, a harp arpeggio and birdsong. The horror drones fade away.
+- **Scene 1, the Grand Foyer restored:** the real generated foyer relit by morning sun. Light shafts, ivy climbing the walls, flowers in the corners, dust motes in the beams; no monster, no fog.
+- **Scene 1b, the Estate:** the manor seen from its gardens. Ivy on the stone, a running fountain, low-poly trees, flower beds, birds and a blue sky.
+- **Scene 2, the families:** one vignette per wizard in the coven, 5s each. Their family picnics on the lawn, children play, and the wizard's translucent spirit watches over them. Each vignette shows the wizard's personal `epilogue` text, plus "for *player*, who gave their soul to the Convergence".
+- **The final card**, "The Convergence Is Ended", with **Play Again** (a fresh mansion for the same coven) or **Return to the Coven**. Only the host can choose; everyone else sees "The host will choose…".
 
 ### Loss
 - **Game Over:** all wizards are in the Cell at once. The screen fills with red static, the gate slams, and the Monster's face appears in the bars. Then the lobby returns.
+- **The Archon falls** (0 HP in Phase III): Game Over. Retry re-merges the coven at the altar and refights the Unbound Amalgam from full health.
 
 ---
 
@@ -255,12 +270,16 @@ The last lord's Keeper: too tall for the doorways, gaunt and lopsided (one arm f
 | F | Lumos / Nox: a bright, wide torch, but you're seen 50% further away |
 | J | Journal (the Tome's text and clues) |
 | G | Call for help: ping your location to the coven |
-| 1–7 (Phase III) | Archon element radial |
+| E (hold, Convergence) | Chant the Forbidden Spell at the altar (everyone at once) |
+| 1–7 (Archon) | Elemental Masteries (shared cooldowns) |
+| E / R (hold, Hell Portal) | Soul Grapple: drag the Amalgam into the rift |
 | M (debug) | Top-down debug map. Click it to teleport. |
 | P (debug) | Cycle the monster: Husk → Haunt → Stalk → Hunt → Capture test → Auto |
 | K (debug) | Capture yourself instantly; if you're already held, break the lock |
 | Shift + 1–7 (debug) | Hot-swap your wizard (whoever held it gets yours) |
 | U (debug) | Fill your Ultimate charge |
+| H (debug) | Skip to Convergence: Tome read, all six Hearts destroyed, prisoners freed to the altar |
+| N (debug) | During the boss fight: drop the Unbound Amalgam to 25% with its wards spent, just above the Hell Portal |
 
 ---
 
@@ -270,6 +289,7 @@ The last lord's Keeper: too tall for the doorways, gaunt and lopsided (one arm f
 - **Bots** rescue first: when anyone is held, they run to the Cell (taking the stairs) and break the lock. Against the Amalgam they cast only when it threatens someone, which means it is hunting or within 8u. A bot's name follows its wizard when swapped.
 - **Bots (movement):** server-side teammates that follow the nearest human using A*, take the stairs when you change floor, sprint to catch up, and scan the dark when idle. A human picking a bot's wizard makes the bot switch. When a monster is within 16u and their spell is nearly ready, they **move into range and cast it**. Aegis bots shield when the monster closes on someone near them.
 - **Test Monster Husk** (P, debug only): a slow, harmless husk with 100 HP that patrols, shambles after the nearest wizard it can see, and telegraphs a claw swipe (0.7s windup, every 3s). A floating panel shows HP and every status (Stunned, Tormented, Slowed, Burning, Knocked Back, Blocked, Visible Through Walls), along with damage numbers. It crumbles at 0 HP and re-forms after 3s. It uses the same `MonsterBody` as the Step 4 Monster, so every spell verified on it works on the real thing.
+- **Bots in the finale:** they walk to their own place around the altar and chant. Inside the Archon they cast their own spells, channel **their own element's Mastery** (and the Wind Dragon at the portal) only after it has sat ready for 2.5s, so humans get first pick of the shared cooldowns, and they Soul Grapple at the rift. Outside the finale they save Ultimates for the real Amalgam.
 - `?debug=1` shows the FPS, draw call and position HUD, enables the M map, and exposes `window.__game`.
 - `?join=CODE` pre-fills the join code (useful for shareable links).
 
@@ -284,4 +304,4 @@ The last lord's Keeper: too tall for the doorways, gaunt and lopsided (one arm f
 | 3 | Seven spells (server-side), cooldown HUD, procedural VFX, Earth barricades in collision and pathfinding, gate unlocking, Training Husk, bot casting, debug wizard swap | ✅ Done |
 | 4 | Malphas Amalgam (model, stop-motion, AI states, haunting, noise, stare), procedural audio, post-processing, Lights Out, terror, capture/rescue/ping/game over, bot rescue | ✅ Done |
 | 4.5 | Lumos, 35-spell grimoire + Ultimates and charge, player HP, tougher Amalgam (attacks, tendrils, smashing, phantoms), bots using the grimoire | ✅ Done |
-| 5 | Forbidden Spell, the Archon, Hell Portal, Epilogue | ⏳ Next |
+| 5 | Forbidden Spell (group chant), Soul Merge, the Archon (7 Masteries, crown), the Unbound Amalgam (volleys, shockwaves, charges, wards), Hell Portal + Soul Grapple, sunlit Epilogue with families + Play Again | ✅ Done |

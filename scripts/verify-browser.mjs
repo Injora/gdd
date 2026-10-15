@@ -37,7 +37,8 @@ const EXPECT = {
 async function main() {
   await rm(outDir, { recursive: true, force: true });
   await mkdir(outDir, { recursive: true });
-  const { httpServer, io } = createGameServer();
+  const { httpServer, io, lobbies } = createGameServer();
+  const liveGame = () => [...lobbies.lobbies.values()].find((l) => l.game)?.game;
   await new Promise((r) => httpServer.listen(0, r));
   const url = `http://localhost:${httpServer.address().port}/?debug=1`;
 
@@ -403,6 +404,176 @@ async function main() {
     const audio = await page.evaluate(() => ({ state: window.__game.audio.ctx?.state, played: window.__game.audio.played }));
     console.log(`audio: context ${audio.state}, ${audio.played} sounds synthesised`);
     check(audio.state === 'running' && audio.played > 20, `audio engine not running (${JSON.stringify(audio)})`);
+
+    // ------------------------------------------------------------------ finale
+    console.log('\n— Phase III: the Forbidden Spell → the Archon → the Hell Portal —');
+    await page.evaluate(() => { window.__events.length = 0; });
+    await page.keyboard.press('KeyH'); // debug: six Hearts destroyed, Convergence
+    await page.waitForFunction(() => window.__game.phase === 'convergence' && window.__game.fin, { timeout: 8000 });
+    liveGame().monster.hideFor(40); // a quiet chapel for the chant
+    const faceAltar = () => page.evaluate(() => {
+      const g = window.__game;
+      const altar = g.map.props[g.map.ids.altar];
+      g.debugTeleport(altar.front.x, altar.front.z, altar.floor, 0);
+      g.controller.yaw = Math.atan2(-(altar.x - altar.front.x), -(altar.z - altar.front.z));
+      g.controller.pitch = -0.35;
+    });
+    await faceAltar();
+    await page.waitForFunction(() => window.__game.target?.id === window.__game.map.ids.altar, { timeout: 4000 })
+      .catch(() => failures.push('the altar never became the interaction target'));
+    await page.keyboard.down('KeyE'); // hold: chant the Forbidden Spell
+    await page.waitForFunction(() => (window.__game.fin?.rt ?? 0) > 0.35, { timeout: 60000 }).catch(() => {});
+    await shot('finale-1-the-forbidden-spell');
+    const ritual = await page.evaluate(() => ({ rt: window.__game.fin?.rt, hud: !document.getElementById('hud-ritual').classList.contains('hidden') }));
+    console.log(`chanting… ritual ${(ritual.rt * 100).toFixed(0)}%, hud ${ritual.hud}`);
+    check(ritual.hud, 'the ritual bar never showed');
+    const merge = await waitEvent('merge', 90000);
+    await page.keyboard.up('KeyE');
+    check(merge, 'the Soul Merge never happened (bots did not chant?)');
+    await sleep(1300);
+    await shot('finale-2-soul-merge');
+    const bossStart = await waitEvent('boss:start', 6000);
+    check(bossStart, 'the Unbound Amalgam never appeared');
+    // Keep the Archon standing through the screenshots (verification only).
+    const keepAlive = setInterval(() => {
+      const A = liveGame()?.finale?.archon;
+      if (A) A.hp = Math.max(A.hp, 300);
+    }, 200);
+    await sleep(800);
+    const faceBoss = () => page.evaluate(() => {
+      const g = window.__game;
+      const m = g.monsters.get('amalgam');
+      if (m) g.controller.yaw = Math.atan2(-(m.x - g.controller.x), -(m.z - g.controller.z));
+      g.controller.pitch = 0.05;
+    });
+    await faceBoss();
+    await sleep(300);
+    await shot('finale-3-archon-crown');
+    const archon = await page.evaluate(() => ({
+      body: document.body.classList.contains('archon'),
+      crown: !!window.__game.finaleFx.crown?.parent,
+      orbs: window.__game.finaleFx.crown?.children.filter((o) => o.isMesh).length,
+      masteries: document.querySelectorAll('#hud-masteries .slot').length,
+      boss: !document.getElementById('hud-boss').classList.contains('hidden'),
+      eye: window.__game.controller.eyeOverride,
+    }));
+    console.log(`Archon: crown of ${archon.orbs} orbs, ${archon.masteries} Masteries on the bar, boss bar ${archon.boss}, eye ${archon.eye}`);
+    check(archon.body && archon.crown && archon.orbs === 7 && archon.masteries === 7 && archon.boss, `Archon view incomplete (${JSON.stringify(archon)})`);
+    fpsSamples.push(await measureFps());
+
+    // The seven Elemental Masteries
+    const { MASTERIES } = await import('../shared/finale.js');
+    const masteryCast = [];
+    for (const M of MASTERIES) {
+      await page.waitForFunction((id) => !window.__game.fin?.mr?.[id], { timeout: 15000 }, M.id).catch(() => {});
+      await faceBoss();
+      await page.evaluate(() => { window.__events = window.__events.filter((e) => e.type !== 'mastery'); });
+      await page.keyboard.press(`Digit${M.key}`);
+      const ev = await waitEvent('mastery', 3000);
+      await sleep(M.id === 'm_fire_dragon' || M.id === 'm_wind_dragon' ? 700 : 350);
+      await shot(`finale-4-mastery-${M.key}-${M.id.slice(2)}`);
+      const mine = ev && ev.id === M.id;
+      check(mine, `Mastery ${M.key} (${M.name}) did not fire (${ev?.id ?? 'no event'})`);
+      masteryCast.push(`${M.key}:${M.name}${mine ? '' : '✗'}`);
+      await sleep(250);
+    }
+    console.log(`Masteries: ${masteryCast.join(' · ')}`);
+    fpsSamples.push(await measureFps());
+
+    // Its fury: orb volleys, floor shockwaves, charges
+    const seenAttacks = new Set();
+    for (const type of ['boss:volley', 'boss:wave', 'boss:charge']) {
+      const ev = await waitEvent(type, 14000);
+      if (!ev) continue;
+      seenAttacks.add(type.slice(5));
+      await faceBoss();
+      await sleep(type === 'boss:volley' ? 450 : 1000);
+      await shot(`finale-5-boss-${type.slice(5)}`);
+    }
+    console.log(`boss attacks seen: ${[...seenAttacks].join(', ')}`);
+    check(seenAttacks.size >= 2, `the boss barely attacked (${[...seenAttacks]})`);
+    fpsSamples.push(await measureFps());
+
+    // The Hell Portal
+    await page.keyboard.press('KeyN'); // debug: boss to 25%, wards spent
+    let portal = null;
+    for (let i = 0; i < 40 && !portal; i++) {
+      await faceBoss();
+      const ready = await page.evaluate(() => window.__game.fin?.mr ?? {});
+      const M = MASTERIES.find((m) => !ready[m.id]);
+      if (M) await page.keyboard.press(`Digit${M.key}`);
+      portal = await waitEvent('portal:open', 1000);
+    }
+    check(portal, 'the Hell Portal never opened');
+    await sleep(1200);
+    await page.evaluate(() => {
+      const g = window.__game;
+      const P = g.fin?.portal;
+      if (P) g.controller.yaw = Math.atan2(-(P.x - g.controller.x), -(P.z - g.controller.z));
+      g.controller.pitch = -0.25;
+    });
+    await sleep(300);
+    await shot('finale-6-hell-portal');
+    await page.keyboard.down('KeyE'); // Soul Grapple
+    await sleep(600);
+    const grapple = await page.evaluate(() => window.__game.fin?.gr ?? 0);
+    console.log(`Soul Grapple: ${grapple} wizard(s) dragging`);
+    check(grapple >= 1, 'holding E did not Soul Grapple');
+    let sealing = null;
+    for (let i = 0; i < 60 && !sealing; i++) {
+      await faceBoss();
+      const ready = await page.evaluate(() => window.__game.fin?.mr ?? {});
+      const M = MASTERIES.find((m) => !ready[m.id] && ['m_wind_dragon', 'm_earth_pillars', 'm_white_chains'].includes(m.id));
+      if (M) await page.keyboard.press(`Digit${M.key}`);
+      sealing = await waitEvent('sealing', 1000);
+    }
+    check(sealing, 'the boss was never dragged under');
+    await sleep(1200);
+    await shot('finale-7-sealing');
+    const victory = await waitEvent('victory', 8000);
+    await page.keyboard.up('KeyE');
+    clearInterval(keepAlive);
+    check(victory, 'no victory after the sealing');
+
+    // ------------------------------------------------------------------ epilogue
+    console.log('\n— Phase IV: the Epilogue —');
+    await page.waitForFunction(() => window.__game.epilogue, { timeout: 5000 });
+    const epStage = (name, timeout = 20000) => page.waitForFunction((n) => window.__game.epilogue?.stage === n, { timeout }, name)
+      .then(() => true).catch(async (e) => {
+        console.log(`  (waiting for ${name}: ${String(e).slice(0, 120)}; now ${await page.evaluate(() => JSON.stringify({ st: window.__game.epilogue?.stage, t: window.__game.epilogue?.t }))})`);
+        return false;
+      });
+    check(await epStage('foyer'), 'the epilogue never reached the restored foyer');
+    await sleep(3500);
+    await shot('epilogue-1-foyer-in-sunlight');
+    fpsSamples.push(await measureFps());
+    check(await epStage('garden'), 'the epilogue never reached the gardens');
+    await sleep(3500);
+    await shot('epilogue-2-the-gardens');
+    fpsSamples.push(await measureFps());
+    const coven = victory?.coven ?? [];
+    for (let i = 0; i < coven.length; i++) {
+      check(await epStage(`family${i}`), `the epilogue skipped ${coven[i].name}'s family`);
+      await sleep(2200);
+      const text = await page.evaluate(() => document.getElementById('ep-card').textContent.trim());
+      check(text.length > 40, `family ${i}: no epilogue text`);
+      await shot(`epilogue-3-family-${i + 1}-${coven[i].wizardId}`);
+    }
+    await page.waitForFunction(() => !document.getElementById('ep-final').classList.contains('hidden'), { timeout: 15000 })
+      .catch(() => failures.push('the final card never showed'));
+    await sleep(3500); // let it fade in
+    await shot('epilogue-4-play-again');
+    const buttons = await page.evaluate(() => ({ again: document.getElementById('btn-again')?.disabled, lobby: document.getElementById('btn-ep-lobby')?.disabled }));
+    check(buttons.again === false && buttons.lobby === false, `epilogue buttons not usable by the host (${JSON.stringify(buttons)})`);
+    console.log(`epilogue: foyer → gardens → ${coven.length} families → final card; music ${await page.evaluate(() => !!window.__game.audio.epilogue)}`);
+    const before = await page.evaluate(() => window.__game.selfId && window.__game.raf);
+    await page.click('#btn-again');
+    const replayed = await page.waitForFunction(() => window.__game && !window.__game.epilogue && window.__game.phase === 'tome' && window.__game.positions?.size > 0,
+      { timeout: 15000 }).then(() => true).catch(() => false);
+    check(replayed, 'Play Again did not start a fresh game');
+    console.log(`Play Again → a fresh game: ${replayed}`);
+    void before;
+
 
     const avgFps = fpsSamples.reduce((a, b) => a + b, 0) / fpsSamples.length;
     const minFps = Math.min(...fpsSamples);

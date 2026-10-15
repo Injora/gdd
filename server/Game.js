@@ -15,6 +15,10 @@ import { Bot } from './Bot.js';
 import { SpellSystem } from './SpellSystem.js';
 import { TrainingHusk } from './TrainingHusk.js';
 import { Monster } from './Monster.js';
+import { Finale } from './Finale.js';
+import { FINALE } from '../shared/finale.js';
+
+const FINALE_BOSS_HP = FINALE.BOSS_HP;
 import { botName } from './names.js';
 
 const GATE_OPEN_TIME = 6;
@@ -89,6 +93,7 @@ export class Game {
       if (m.isBot) this.bots.push(new Bot(this, p, this.bots.length));
     });
     this.monster = new Monster(this);
+    this.finale = new Finale(this);
   }
 
   // --- lifecycle -----------------------------------------------------------
@@ -191,6 +196,7 @@ export class Game {
       monsters: this.bodies().map((m) => m.snapshot()),
       prj: this.spells.snapshotProjectiles(),
       ents: this.spells.snapshotEntities(),
+      fin: this.finale.snapshot(),
       fl: this.flood && this.time < this.flood.until ? r2(this.flood.until - this.time) : 0,
       dw: this.dawn && this.time < this.dawn.until ? r2(this.dawn.until - this.time) : 0,
     };
@@ -211,6 +217,7 @@ export class Game {
     for (const bot of this.bots) if (this.players.has(bot.p.id)) bot.update(dt, this.time);
     for (const m of this.bodies()) m.update(dt);
     this.spells.update(dt);
+    this.finale.update(dt);
     this.updateVitals(dt);
     for (const p of this.players.values()) if (p.channel) this.updateChannel(p);
     this.updateCaptures();
@@ -227,7 +234,9 @@ export class Game {
 
   onPlayerState(id, d) {
     const p = this.players.get(id);
-    if (!p || p.isBot || !d || d.tseq !== p.tseq || p.capturing) return; // stale, or frozen in a jumpscare
+    if (!p || p.isBot || !d) return;
+    if (this.finale.active && this.finale.onPlayerState(p, d)) return; // one body: the Archon
+    if (d.tseq !== p.tseq || p.capturing) return; // stale, or frozen in a jumpscare
     const x = Number(d.x), z = Number(d.z);
     if (!Number.isFinite(x) || !Number.isFinite(z)) return;
 
@@ -321,7 +330,10 @@ export class Game {
           const left = HEART_COUNT - this.destroyed.size;
           this.whisper(p, `The altar hungers. ${left} heart${left === 1 ? '' : 's'} still beat${left === 1 ? 's' : ''}.`);
         } else if (this.phase === PHASE.CONVERGENCE) {
-          this.whisper(p, 'The altar drinks the silence of six hearts. Gather the whole coven here for the Forbidden Spell.');
+          // The Forbidden Spell: hold E here, all of you together.
+          this.startChannel(p, prop, Infinity);
+          const missing = [...this.players.values()].filter((o) => !this.finale.chanting(o) && o !== p).length;
+          if (missing) this.whisper(p, `You begin the Forbidden Spell. ${missing} more voice${missing === 1 ? '' : 's'} must join the chant.`);
         }
         break;
 
@@ -514,6 +526,12 @@ export class Game {
   /** "Retry": everyone back to the Foyer, the phase they died in resumes. */
   restartPhase() {
     if (this.phase !== PHASE.GAMEOVER) return;
+    if (this.phaseBefore === PHASE.ARCHON) {
+      this.setPhase(PHASE.ARCHON);
+      this.finale.restart();
+      this.emitAll({ type: 'restart', archon: true });
+      return;
+    }
     let i = 0;
     for (const p of this.players.values()) {
       p.captured = false;
@@ -545,6 +563,7 @@ export class Game {
    * @returns 'immune' | 'blocked' | 'captured' | 'hit' | 'none'
    */
   damagePlayer(p, amount, attacker, kind) {
+    if (this.finale.active) return this.finale.damageArchon(amount, kind); // one shared body
     if (!p || p.captured || p.capturing || this.phase === PHASE.GAMEOVER) return 'none';
     if (this.spells.hasBuff(p, 'union')) {
       attacker?.block?.();
@@ -599,6 +618,49 @@ export class Game {
   debugUlt(id) {
     const p = this.players.get(id);
     if (p) p.ult = ULT.MAX;
+  }
+
+  // --- Phase III input ---------------------------------------------------------------
+
+  onMastery(id, d) {
+    const p = this.players.get(id);
+    if (!p) return;
+    const res = this.finale.mastery(p, Math.floor(Number(d?.key)), Number(d?.yaw));
+    this.socketOf(p)?.emit('game:mastery', { key: d?.key, ...res });
+  }
+
+  onGrapple(id, d) {
+    const p = this.players.get(id);
+    if (p) this.finale.setGrapple(p, !!d?.on);
+  }
+
+  /** Debug H: skip to the Convergence (Tome read, all six Hearts destroyed). */
+  debugFinale() {
+    if (this.finale.active) return;
+    this.tomeReadBy ??= 'debug';
+    for (const h of this.map.hearts) {
+      if (this.destroyed.has(h.propId)) continue;
+      this.destroyed.add(h.propId);
+      this.propState[h.propId] = { destroyed: true };
+      this.emitAll({ type: 'heart', propId: h.propId, heartType: h.type, name: h.name, by: 'debug', count: this.destroyed.size });
+    }
+    this.emitAll({ type: 'tome', by: this.tomeReadBy, tome: this.tomeInfo() });
+    const altar = this.props[this.map.ids.altar];
+    for (const p of this.players.values()) {
+      if (!p.captured) continue;
+      p.captured = false; // out of the Cell, straight to the Chapel
+      this.teleport(p, altar.front.x, altar.front.z, altar.floor, p.yaw);
+    }
+    if (this.monster.state === 'dormant' || this.monster.state === 'haunt') this.monster.awaken();
+    this.setPhase(PHASE.CONVERGENCE);
+  }
+
+  /** Debug N: bring the Unbound one to the brink of the portal. */
+  debugPortal() {
+    const m = this.monster;
+    if (!this.finale.inFight()) return;
+    m.bossHp = Math.min(m.bossHp, FINALE_BOSS_HP * 0.25);
+    this.finale.wardsUsed = 2;
   }
 
   onPing(id) {

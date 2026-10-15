@@ -7,7 +7,8 @@
 //   5. Otherwise        → follow the nearest free human, scanning the dark.
 
 import { findPath, pathToWorld } from '../shared/pathfinding.js';
-import { moveCircle, lineOfSight } from '../shared/collision.js';
+import { moveCircle, lineOfSight, overlapsSolid } from '../shared/collision.js';
+import { MASTERIES } from '../shared/finale.js';
 import { WIZARD_BY_ID } from '../shared/wizards.js';
 import { PHASE, SPEED, PLAYER_RADIUS, worldToTile, yawFromDir } from '../shared/constants.js';
 
@@ -16,6 +17,8 @@ const SPRINT_DISTANCE = 10;
 const ENGAGE_RADIUS = 16; // notice the husk this close
 const ENGAGE_READY = 1.5; // close in when the spell is ready within this many seconds
 const THREAT_RADIUS = 8; // the Amalgam this close is a threat even if not hunting
+const MASTERY_ELEMENT = { Black: 'black', Fire: 'fire', Water: 'water', Earth: 'earth', Wind: 'wind', White: 'white', 'Anti-magic': 'void' };
+const BOT_MASTERY_GRACE = 2.5; // seconds a shared Mastery waits for the humans before a bot takes it
 
 function turnToward(current, target, maxStep) {
   let d = target - current;
@@ -42,7 +45,8 @@ export class Bot {
     const g = this.game, p = this.p;
     p.moving = false;
     p.sprint = false;
-    if (p.capturing || g.phase === PHASE.GAMEOVER) return;
+    if (p.capturing || g.phase === PHASE.GAMEOVER || g.phase === PHASE.EPILOGUE) return;
+    if (g.finale.active) return this.archonTurn(t);
     this.tryCast(t);
     if (p.channel) return; // holding E on the lock
     if (p.captured) return this.idle(dt, t);
@@ -67,6 +71,17 @@ export class Bot {
       return;
     }
 
+    // The Forbidden Spell: take a place around the altar and chant.
+    if (g.phase === PHASE.CONVERGENCE) {
+      const altar = g.props[g.map.ids.altar];
+      const spot = this.chantSpot(altar);
+      if (this.moveTo(spot, 0.6, dt, t) && !g.finale.chanting(p)) {
+        p.yaw = yawFromDir(altar.x - p.x, altar.z - p.z);
+        g.onInteract(p.id, altar.id);
+      }
+      return;
+    }
+
     // Practise on the husk
     const foe = this.engageTarget();
     if (foe) {
@@ -83,15 +98,50 @@ export class Bot {
     }
   }
 
+  /** A clear spot within reach of the altar, different for each bot. */
+  chantSpot(altar) {
+    if (this._chant) return this._chant;
+    const g = this.game;
+    for (let k = 0; k < 16; k++) {
+      const ang = this.index * 1.9 + 0.8 + k * 0.4;
+      const pt = { x: altar.x + Math.cos(ang) * 2.4, z: altar.z + Math.sin(ang) * 2.4, floor: altar.floor };
+      if (!overlapsSolid(g.world, altar.floor, pt.x, pt.z, 0.45)) return (this._chant = pt);
+    }
+    return (this._chant = { x: altar.front?.x ?? altar.x, z: altar.front?.z ?? altar.z, floor: altar.floor });
+  }
+
+  /** Inside the Archon: no body of our own; cast spells and Masteries, grapple at the portal. */
+  archonTurn(t) {
+    const g = this.game, p = this.p, f = g.finale;
+    if (!f.inFight()) return;
+    const m = g.monster;
+    p.yaw = yawFromDir(m.x - p.x, m.z - p.z);
+    if (f.stage === 'portal') f.setGrapple(p, true);
+    if (t < this.castAt) return;
+    this.castAt = t + 0.8 + Math.random() * 0.9;
+    // A bot channels its own element's Mastery (and the Wind Dragon at the portal, to shove it in),
+    // and only once it has sat ready a moment: human wizards get first pick of the shared cooldowns.
+    const ready = (M) => (f.masteryReady[M.id] ?? f.bossAt ?? 0) <= f.t - BOT_MASTERY_GRACE;
+    const own = MASTERIES.find((M) => M.element === MASTERY_ELEMENT[WIZARD_BY_ID[p.wizardId]?.element]);
+    const wind = MASTERIES.find((M) => M.id === 'm_wind_dragon');
+    const pick = [f.stage === 'portal' && wind, own].find((M) => M && ready(M));
+    if (pick && Math.random() < 0.6) {
+      f.mastery(p, pick.key, p.yaw);
+      return;
+    }
+    // …or one of our own spells at a quarter of the cooldown.
+    this.tryCast(t, true);
+  }
+
   // ---- spells ------------------------------------------------------------------
 
   /**
    * Pick and cast a spell (or the Ultimate) that fits the moment, using each
    * spell's `bot` hint: target / ally / self / escape / zone / heal.
    */
-  tryCast(t) {
+  tryCast(t, force = false) {
     const g = this.game, p = this.p;
-    if (t < this.castAt) return;
+    if (t < this.castAt && !force) return;
     const w = WIZARD_BY_ID[p.wizardId];
     if (!w) return;
     const m = g.monsters().find((mm) => mm.floor === p.floor) ?? null;
@@ -99,7 +149,7 @@ export class Bot {
     const isHusk = m?.kind === 'husk';
     const los = !!m && lineOfSight(g.map, p.floor, p.x, p.z, m.x, m.z);
     // The real Amalgam is only engaged when it threatens someone.
-    const threat = !!m && (isHusk || m.state === 'hunting' || d < THREAT_RADIUS);
+    const threat = !!m && (isHusk || m.state === 'hunting' || m.state === 'boss' || d < THREAT_RADIUS);
     const huntedClose = !!m && !isHusk && m.state === 'hunting' && m.targetId === p.id && d < 5;
     const hurt = [...g.players.values()].some((o) => !o.captured && o.floor === p.floor && o.hp < 55);
 

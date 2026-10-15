@@ -184,11 +184,18 @@ export class LobbyManager {
     socket.on('p:cancel', () => this.lobbyOf(socket)?.game?.onCancel(socket.id));
     socket.on('p:cast', (data) => this.lobbyOf(socket)?.game?.onCast(socket.id, data));
     socket.on('p:ping', () => this.lobbyOf(socket)?.game?.onPing(socket.id));
+    socket.on('p:mastery', (data) => this.lobbyOf(socket)?.game?.onMastery(socket.id, data));
+    socket.on('p:grapple', (data) => this.lobbyOf(socket)?.game?.onGrapple(socket.id, data));
 
     // After a game over the host chooses: retry the phase, or back to the coven.
     socket.on('game:restart', hostInGame((lobby, data) => {
       if (data.mode === 'lobby') lobby.game.end();
-      else lobby.game.restartPhase();
+      else if (data.mode === 'again') {
+        // Play again: a fresh mansion for the same coven.
+        lobby.game.stop();
+        lobby.game = null;
+        this.startGame(lobby);
+      } else lobby.game.restartPhase();
     }));
 
     // Debug overrides, only in covens created as solo tests or with ?debug=1.
@@ -201,6 +208,8 @@ export class LobbyManager {
     socket.on('debug:mode', () => debugGame()?.debugMode(socket.id));
     socket.on('debug:capture', () => debugGame()?.debugCapture(socket.id));
     socket.on('debug:ult', () => debugGame()?.debugUlt(socket.id));
+    socket.on('debug:finale', () => debugGame()?.debugFinale(socket.id));
+    socket.on('debug:portal', () => debugGame()?.debugPortal(socket.id));
     socket.on('debug:wizard', (data) => debugGame()?.debugWizard(socket.id, data?.wizardId));
 
     socket.on('disconnect', () => this.leave(socket));

@@ -253,6 +253,45 @@ export class HUD {
     this.flash(el, 'show', ms);
   }
 
+  // ---- Phase III ------------------------------------------------------------------
+
+  ritual(progress, text) {
+    const el = $('hud-ritual');
+    el.classList.toggle('hidden', progress === null);
+    if (progress === null) return;
+    el.querySelector('i').style.width = `${Math.round(progress * 100)}%`;
+    el.querySelector('small').textContent = text;
+  }
+
+  boss(hp, max, ward, text) {
+    const el = $('hud-boss');
+    el.classList.toggle('hidden', hp === null);
+    if (hp === null) return;
+    el.querySelector('i').style.width = `${Math.max(0, (hp / max) * 100)}%`;
+    el.classList.toggle('ward', !!ward);
+    el.querySelector('small').textContent = text;
+  }
+
+  /** Archon form: show the 7 Masteries instead of nothing. */
+  masteries(list, readyMap) {
+    const el = $('hud-masteries');
+    if (!list) {
+      el.classList.add('hidden');
+      return;
+    }
+    if (el.classList.contains('hidden')) {
+      el.classList.remove('hidden');
+      el.innerHTML = list.map((M) => `<div class="slot" style="--wiz:${M.color}" data-id="${M.id}" title="${esc(M.name)}">
+        <span class="glyph">${M.glyph}</span><span class="key">${M.key}</span><div class="cd"></div><span class="time"></span><span class="name">${esc(M.name)}</span></div>`).join('');
+    }
+    for (const node of el.querySelectorAll('.slot')) {
+      const M = list.find((m) => m.id === node.dataset.id);
+      const left = readyMap?.[M.id] ?? 0;
+      node.style.setProperty('--cd', String(left > 0 ? left / M.cooldown : 0));
+      node.querySelector('.time').textContent = left > 0 ? left.toFixed(1) : '';
+    }
+  }
+
   gameOver(show, isHost) {
     $('gameover').classList.toggle('hidden', !show);
     $('btn-retry').disabled = !isHost;

@@ -546,6 +546,70 @@ input:focus { border-color: var(--gold); }
 @keyframes gameover-in { from { opacity: 0; transform: scale(1.06); } to { opacity: 1; transform: none; } }
 .hud-team .held { color: var(--blood-bright); font-family: var(--display); font-size: 0.7rem; letter-spacing: 0.15em; }
 
+/* Phase III */
+.hud-topbar {
+  position: absolute;
+  top: 54px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(560px, 80vw);
+  text-align: center;
+  text-shadow: 0 1px 4px #000;
+}
+.hud-topbar span { font-family: var(--display); letter-spacing: 0.3em; font-size: 0.8rem; color: var(--gold); }
+.hud-topbar .bar { height: 10px; margin-top: 5px; background: rgba(0, 0, 0, 0.6); border: 1px solid rgba(255, 255, 255, 0.15); }
+.hud-topbar .bar i { display: block; height: 100%; width: 0; transition: width 0.2s; }
+.hud-topbar small { display: block; margin-top: 4px; font-style: italic; color: var(--ink); font-size: 0.85rem; }
+.hud-ritual .bar i { background: linear-gradient(90deg, #6a1cff, #ffd76a); box-shadow: 0 0 12px #ffd76a; }
+.hud-boss span { color: var(--blood-bright); }
+.hud-boss .bar i { background: linear-gradient(#ff3a2a, #6a0008); box-shadow: 0 0 14px #ff2a1a; }
+.hud-boss.ward .bar { box-shadow: 0 0 0 2px #c0102a, 0 0 20px #c0102a; }
+.hud-masteries { position: absolute; left: 50%; bottom: 196px; transform: translateX(-50%); display: flex; gap: 6px; }
+.hud-masteries .slot { width: 50px; height: 50px; }
+.hud-masteries .slot .glyph { font-size: 1.3rem; }
+.hud-masteries .name { position: absolute; bottom: -16px; width: 100%; text-align: center; font-size: 0.55rem; font-family: var(--display); color: var(--ink-dim); white-space: nowrap; }
+body.archon .hud-team, body.archon #hud-stamina { display: none; }
+
+/* Phase IV: the Epilogue */
+.epilogue { position: fixed; inset: 0; z-index: 40; pointer-events: none; font-family: var(--serif); }
+.ep-fade { position: absolute; inset: 0; background: #fffaf0; opacity: 1; transition: opacity 0.3s; }
+.ep-card {
+  position: absolute;
+  left: 50%;
+  bottom: 9%;
+  transform: translateX(-50%);
+  width: min(640px, 90vw);
+  padding: 18px 24px;
+  text-align: center;
+  color: #3a2a18;
+  background: rgba(255, 248, 232, 0.82);
+  border: 1px solid rgba(176, 141, 74, 0.6);
+  box-shadow: 0 10px 40px rgba(80, 50, 10, 0.25);
+  opacity: 0;
+  transition: opacity 1.2s;
+}
+.ep-card.show { opacity: 1; }
+.ep-card h3 { font-family: var(--display); letter-spacing: 0.3em; font-size: 0.75rem; color: #9a7a40; margin: 0; text-transform: uppercase; }
+.ep-card h2 { font-family: var(--display); margin: 6px 0 8px; color: #4a2a10; letter-spacing: 0.08em; }
+.ep-card p { margin: 0; font-size: 1.05rem; line-height: 1.5; font-style: italic; }
+.ep-final {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 16px;
+  pointer-events: auto;
+  background: radial-gradient(ellipse at center, rgba(255, 246, 225, 0.55), rgba(255, 236, 200, 0.1) 70%);
+  animation: gameover-in 3s ease-out;
+}
+.ep-final h1 { font-family: var(--display); font-weight: 900; letter-spacing: 0.18em; color: #5a3a10; font-size: clamp(1.6rem, 5vw, 3rem); margin: 0 0 12px; text-shadow: 0 2px 20px rgba(255, 220, 140, 0.9); }
+.ep-final p { max-width: 620px; color: #4a3218; font-size: 1.1rem; line-height: 1.6; margin: 0 0 22px; text-shadow: 0 1px 6px rgba(255, 245, 220, 0.9); }
+.ep-actions { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+.ep-final .btn.ghost { color: #4a3218; border-color: #9a7a40; background: rgba(255, 248, 232, 0.7); }
+
 /* ---------- Overlays ---------- */
 
 .overlay {

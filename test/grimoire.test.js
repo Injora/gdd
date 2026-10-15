@@ -8,7 +8,7 @@ import { TrainingHusk } from '../server/TrainingHusk.js';
 import { AI } from '../server/Monster.js';
 import { WIZARDS, WIZARD_BY_ID, ULT } from '../shared/wizards.js';
 import { isPassable } from '../shared/pathfinding.js';
-import { overlapsSolid } from '../shared/collision.js';
+import { overlapsSolid, lineOfSight } from '../shared/collision.js';
 import { HP, PHASE, tileCenter, yawFromDir, worldToTile } from '../shared/constants.js';
 
 const EAST = yawFromDir(1, 0);
@@ -156,9 +156,18 @@ test('Ultimate charge: +8 per landed spell (once per cast), +25 per Heart, +20 p
 test('Lumos (F): the Amalgam sees you 50% further away', () => {
   const g = makeGame(humans('parthius'));
   const p = g.players.get('p0');
-  const row = openRow(g, 13);
-  put(p, row.x, row.y);
-  const m = amalgamAt(g, row.x + 10, row.y); // 20 units
+  // Any two floor tiles 10 apart (20 units) in a straight, clear line.
+  const f = g.map.floors[0];
+  let pair = null;
+  for (let y = 1; y < f.h - 1 && !pair; y++) {
+    for (let x = 1; x < f.w - 11 && !pair; x++) {
+      if (isPassable(f, x, y) && isPassable(f, x + 10, y) &&
+        lineOfSight(g.map, 0, tileCenter(x), tileCenter(y), tileCenter(x + 10), tileCenter(y))) pair = { x, y };
+    }
+  }
+  assert.ok(pair, 'found a 20-unit sightline');
+  put(p, pair.x, pair.y);
+  const m = amalgamAt(g, pair.x + 10, pair.y); // 20 units
   m.yaw = yawFromDir(-1, 0);
   p.light = false;
   assert.equal(m.canSee(p), false, 'plain wand: seen at 16u');

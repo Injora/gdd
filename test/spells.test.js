@@ -56,8 +56,12 @@ function place(body, tx, ty, floor = 0) {
 
 /** One caster of `wizardId` at the start of an open row, a Husk `dist` tiles east. */
 function duel(wizardId, dist, rowLen = 8) {
-  const game = makeGame([wizardId, 'himanshu' === wizardId ? 'soham' : 'himanshu']);
-  const row = openRow(game, rowLen);
+  // Random mansions don't always have a long open row: re-roll (rarely needed) until one does.
+  let game, row;
+  for (let tries = 0; !row; tries++) {
+    game = makeGame([wizardId, 'himanshu' === wizardId ? 'soham' : 'himanshu']);
+    try { row = openRow(game, rowLen); } catch (e) { if (tries > 20) throw e; }
+  }
   const caster = game.players.get('p0');
   place(caster, row.x, row.y);
   place(game.players.get('p1'), row.x, row.y + 40); // out of the way

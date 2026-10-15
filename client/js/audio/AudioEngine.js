@@ -220,7 +220,7 @@ export class AudioEngine {
    * @param m        { dist, hunting, stalking, awake } about the Amalgam on our floor (dist Infinity if not)
    */
   update(dt, listener, m) {
-    if (!this.running) return;
+    if (!this.running || this.epilogue) return;
     this.listener = listener;
     const ctx = this.ctx, t = this.now();
     const L = ctx.listener;
@@ -728,6 +728,126 @@ export class AudioEngine {
     }
   }
 
+  // ---- Phase III ---------------------------------------------------------------------
+
+  mastery(id, pos) {
+    if (!this.running) return;
+    switch (id) {
+      case 'm_fire_dragon': this.roar(pos, true); break;
+      case 'm_wind_dragon': this.roar(pos, false); break;
+      case 'm_water_deluge': this.grimoire('tidal_surge', pos); this.whoosh(pos, 200, 2000, 1.2, { type: 'lowpass', gain: 1 }); break;
+      case 'm_earth_pillars': this.rumble(pos, 1.2, 1.2); this.crackle(pos, 0.6, 30, 1); break;
+      case 'm_white_chains': this.chime(pos, [880, 1108.7, 1318.5, 1760], 2, 0.3); break;
+      case 'm_black_torment': this.shriek(pos, { volume: 0.7, length: 1.2, pitch: 0.8 }); break;
+      case 'm_antimagic_slash': this.grimoire('black_slash', pos); break;
+    }
+  }
+
+  bossCue(kind, pos) {
+    if (!this.running) return;
+    if (kind === 'volley') this.whoosh(pos, 180, 900, 0.7, { q: 2, gain: 0.9 });
+    if (kind === 'wave') { this.boom(pos, 45, 1.4, 1.3); this.rumble(pos, 1.2, 1); }
+    if (kind === 'charge') this.shriek(pos, { volume: 0.6, length: 0.8, pitch: 0.6 });
+    if (kind === 'ward') this.chime(pos, [110, 116.5, 164.8], 2.5, 0.4, 'sawtooth');
+    if (kind === 'portal') { this.rumble(pos, 4, 1.5); this.shriek(pos, { volume: 0.8, length: 3, pitch: 0.5 }); }
+    if (kind === 'sealing') { this.shriek(pos, { volume: 1.2, length: 3.2, pitch: 0.9 }); this.boom(pos, 35, 3, 1.5); }
+  }
+
+  /** A low choral hum that swells with the Forbidden Spell. */
+  chant(level) {
+    if (!this.running) return;
+    if (!this.chantNodes && level > 0) {
+      const g = this.ctx.createGain();
+      g.gain.value = 0;
+      const f = this.filter('bandpass', 700, 2);
+      for (const hz of [98, 146.8, 196, 293.7]) {
+        const o = this.ctx.createOscillator();
+        o.type = 'sawtooth';
+        o.frequency.value = hz * rand(0.997, 1.003);
+        o.connect(f);
+        o.start();
+      }
+      f.connect(g).connect(this.reverb);
+      g.connect(this.master);
+      this.chantNodes = { g };
+    }
+    this.chantNodes?.g.gain.setTargetAtTime(level * 0.12, this.now(), 0.3);
+  }
+
+  mergeSound() {
+    if (!this.running) return;
+    this.choir();
+    this.whoosh(null, 100, 6000, 3, { type: 'lowpass', gain: 1, reverb: 0.9 });
+    this.boom(null, 40, 3, 1.2);
+  }
+
+  /** Phase IV: the horror falls silent; warm harp + pads + birdsong. */
+  epilogueMusic() {
+    if (!this.running) return;
+    const t = this.now();
+    this.droneGain?.gain.setTargetAtTime(0, t, 1);
+    this.subGain?.gain.setTargetAtTime(0, t, 0.5);
+    this.airGain?.gain.setTargetAtTime(0.004, t, 2);
+    this.chantNodes?.g.gain.setTargetAtTime(0, t, 0.5);
+    this.proximity = 0;
+    this.epilogue = true;
+    const music = this.ctx.createGain();
+    music.gain.value = 0;
+    music.gain.setTargetAtTime(0.5, t + 1.5, 2);
+    music.connect(this.master);
+    const send = this.ctx.createGain();
+    send.gain.value = 0.35;
+    music.connect(send).connect(this.reverb);
+    this.music = music;
+    const chords = [[261.6, 329.6, 392], [196, 246.9, 293.7], [220, 261.6, 329.6], [174.6, 220, 261.6]]; // C G Am F
+    const bar = 3.2;
+    let step = 0;
+    const schedule = () => {
+      if (!this.epilogue || !this.ctx) return;
+      const now = this.now();
+      const chord = chords[step % chords.length];
+      // Pad
+      const lp = this.filter('lowpass', 1100, 0.5);
+      const pad = this.ctx.createGain();
+      pad.gain.setValueAtTime(0.0001, now);
+      pad.gain.linearRampToValueAtTime(0.09, now + 1);
+      pad.gain.linearRampToValueAtTime(0.0001, now + bar + 0.8);
+      lp.connect(pad).connect(music);
+      for (const f of chord) for (const d of [-4, 4]) {
+        const o = this.osc('sawtooth', f / 2, now, bar + 1);
+        o.detune.value = d;
+        o.connect(lp);
+      }
+      // Harp arpeggio (plucked partials)
+      const notes = [...chord, chord[0] * 2, chord[1] * 2, chord[2] * 2, chord[1] * 2, chord[0] * 2];
+      notes.forEach((f, i) => {
+        const tt = now + i * (bar / notes.length);
+        for (const [mult, amp] of [[1, 0.22], [2, 0.07], [3, 0.03]]) {
+          this.osc('sine', f * mult, tt, 2).connect(this.env(tt, 0.004, 1.8, amp)).connect(music);
+        }
+      });
+      // Birdsong
+      for (let b = 0; b < 3; b++) {
+        if (Math.random() < 0.6) {
+          const tt = now + rand(0, bar);
+          const o = this.osc('sine', rand(2400, 3600), tt, 0.3);
+          o.frequency.exponentialRampToValueAtTime(rand(3000, 4800), tt + 0.08);
+          o.frequency.exponentialRampToValueAtTime(rand(2200, 3200), tt + 0.18);
+          o.connect(this.env(tt, 0.01, 0.2, 0.05)).connect(music);
+        }
+      }
+      step++;
+      this.musicTimer = setTimeout(schedule, bar * 1000);
+    };
+    schedule();
+  }
+
+  stopEpilogueMusic() {
+    this.epilogue = false;
+    clearTimeout(this.musicTimer);
+    this.music?.gain.setTargetAtTime(0, this.now(), 0.5);
+  }
+
   fireImpact(pos) {
     if (!this.running) return;
     const t = this.now();
@@ -739,6 +859,8 @@ export class AudioEngine {
   }
 
   dispose() {
+    this.epilogue = false;
+    clearTimeout(this.musicTimer);
     try { this.ctx?.close(); } catch { /* already closed */ }
     this.ctx = null;
   }

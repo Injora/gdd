@@ -38,11 +38,13 @@ server/
   MonsterBody.js          shared body + status effects for every hostile
   Monster.js              the Malphas Amalgam: dormant/haunt/stalk/hunt/search/retreat/guard AI
   TrainingHusk.js         debug dummy: patrol, shamble, telegraphed swipe, crumble/re-form
-  Bot.js                  bot teammate brain (rescue, defend, engage, follow; A*, stairs)
+  Finale.js               Phase III: the Forbidden Spell, Soul Merge, the Archon, the Unbound Amalgam, Hell Portal, victory
+  Bot.js                  bot teammate brain (rescue, defend, engage, follow, chant, Archon turns; A*, stairs)
   names.js                bot display names
 shared/                   ← imported by BOTH server and browser; no Node/DOM APIs
   constants.js            tile size, speeds, ranges, phases, yaw convention
   wizards.js              the seven wizards + ability numbers (balance source of truth)
+  finale.js               FINALE tuning (ritual, Archon, boss, portal) + the seven MASTERIES
   lore.js                 room types/hints, heart disguises + riddles, Tome text
   propdefs.js             prop footprints/colliders/mounting/interaction kinds
   mapgen.js               seeded mansion generator + publicMap() + roomAt()
@@ -65,6 +67,8 @@ client/
   js/entities/AmalgamAvatar.js        the Amalgam: procedural model, 13 Hz stop-motion, door neck-snap
   js/fx/SpellFX.js        original 7 spells' VFX, particles, pooled spell lights, hex shield shader
   js/fx/GrimoireFX.js     21 new spells + 7 Ultimates, dragons, Tree of Life, flood, auras, monster attack/CC VFX
+  js/fx/FinaleFX.js       merge ribbons, heptagram crown, chant motes, hellfire cracks, boss ward/orbs/shockwave, 7 Masteries, portal shader, sealing
+  js/epilogue/Epilogue.js Phase IV: relit foyer, the estate gardens, family vignettes, final card (own scene + timeline)
   js/fx/PostFX.js         composer: grain, vignette, chromatic aberration, warp, desat, red, fade
   js/audio/AudioEngine.js procedural Web Audio: drone, sub-bass, heartbeat, HRTF cues, shriek, SFX
   js/debug/DebugMap.js    top-down map (M), click-to-teleport in solo debug
@@ -73,9 +77,12 @@ test/
   spells.test.js          cooldowns ×7, every status, barricade collision/pathing, knockback clamp, shields, gate
   monster.test.js         AI states, haunting, noise, stare, capture → Cell, rescue, game over, bot rescue, debug
   grimoire.test.js        35 spells, each mechanic, all Ultimates, ult charge, HP pipeline, Lumos, tougher Amalgam
+  finale.test.js          ritual (every voice, decay), merge, Archon driving/damage/death/retry, Masteries, wards, CC cap, portal + grapple + victory, full playthrough with a bot
   server.test.js          full lobby → tome → 6 hearts → convergence → stairs over sockets
 scripts/
-  verify-browser.mjs      headless Chrome: 7 spells, haunting, capture, Cell, bot rescue, hunt, audio, FPS
+  verify-browser.mjs      headless Chrome: haunting, capture, Cell, bot rescue, hunt, 35 spells + Ultimates, Lumos, audio,
+                          then the finale: chant → merge → Archon crown → 7 Masteries → boss attacks → portal → grapple →
+                          sealing → epilogue scenes → Play Again; FPS ≥ 60 and zero console errors
 ```
 
 ---
@@ -111,8 +118,11 @@ scripts/
 | C→S | `p:cancel` | — (released E) |
 | C→S | `p:cast` | `{ yaw, pitch, slot: 0–3 \| 'ult' }` (origin is always the server's copy of the caster) |
 | C→S | `p:ping` | call for help (3s cooldown) |
-| C→S | `game:restart` (host) | `{ mode: 'phase' \| 'lobby' }` after a game over |
+| C→S | `p:mastery` | `{ key: 1–7, yaw }`: an Elemental Mastery (Archon only) |
+| C→S | `p:grapple` | `{ on }`: Soul Grapple held/released (Hell Portal stage) |
+| C→S | `game:restart` (host) | `{ mode: 'phase' \| 'lobby' \| 'again' }`: after a game over or from the epilogue (`again` = fresh game, same coven) |
 | S→C | `game:end` | the game closed; back to the coven screen |
+| S→C | `game:mastery` | `{ key, ok, cooldown? \| reason, remaining? }`, reply to the caster |
 | S→C | `game:cooldown` | `{ ok, slot, ability, readyIn, duration?, reason? }`, reply to the caster (`reason`: cooldown / charge / no-target) |
 | C→S | `debug:teleport` | `{ x, z, floor, yaw }` |
 | C→S | `debug:husk` | spawn/remove the Training Husk ~4u ahead |
@@ -120,10 +130,12 @@ scripts/
 | C→S | `debug:capture` | K: capture yourself; if held, break the lock |
 | C→S | `debug:ult` | U: fill your Ultimate charge |
 | C→S | `debug:wizard` | `{ wizardId }` hot-swap (the previous holder takes yours) |
-| S→C | `game:snap` | `{ t, phase, players: [{ id, x, z, f, yaw, pitch, cr, sp, li (Lumos), mv, ch, sh, cap, cg, hp, u (ult %), bf[] (buffs) }], monsters: [{ id, kind, x, z, f, yaw, hp, maxHp, st[], mv, act, dead, state?, hid?, tg? }], prj: [{ id, k, f, x, z, vx, vz }], ents: [{ id, k, f, x, z, yaw, n?/m? }], fl (flood s left), dw (dawn s left) }` @ 20 Hz |
+| C→S | `debug:finale` | H: skip to Convergence (Tome read, all Hearts destroyed, prisoners freed to the altar) |
+| C→S | `debug:portal` | N: boss to 25% with wards spent (boss fight only) |
+| S→C | `game:snap` | `{ t, phase, players: [{ id, x, z, f, yaw, pitch, cr, sp, li (Lumos), mv, ch, sh, cap, cg, hp, u (ult %), bf[] (buffs) }], monsters: [{ id, kind, x, z, f, yaw, hp, maxHp, st[], mv, act, dead, state?, hid?, tg? }], prj: [{ id, k, f, x, z, vx, vz }], ents: [{ id, k, f, x, z, yaw, n?/m? }], fl (flood s left), dw (dawn s left), fin }` @ 20 Hz. `fin` (Convergence onward): `{ stage, rt (ritual 0–1), ar: { x, z, f, yaw, hp, max, drv } \| null, boss: { hp, max, ward } \| null, portal, orbs: [[x, z]], wave: { x, z, r } \| null, mr: { masteryId: s left }, gr (grapplers), seal (0–1) }` |
 | S→C | `game:channel` | `{ propId \| null, duration, done? }` |
 | S→C | `game:teleport` | `{ x, z, floor, yaw, tseq }` |
-| S→C | `game:event` | `whisper`, `journal`, `tome`, `heart`, `phase`, `left`, `roster`, `gate`, `cast`, `impact`, `barrier:end`, `monster:damage`, `monster:scream`, `husk:spawn/despawn/crumble/revive/hit/blocked/miss`, `monster:awaken/haunt/vanish/hunt/banished/blocked`, `capture`, `captured`, `freed`, `gameover`, `restart`, `ping`, `debug:mode`, `spell:hit`, `zone:trigger`, `entity:end`, `tree:eat`, `player:hit`, `player:immune`, `monster:attack`, `monster:phantoms`, `barrier:hit`, `flood:end`, `dawn:end` |
+| S→C | `game:event` | `whisper`, `journal`, `tome`, `heart`, `phase`, `left`, `roster`, `gate`, `cast`, `impact`, `barrier:end`, `monster:damage`, `monster:scream`, `husk:spawn/despawn/crumble/revive/hit/blocked/miss`, `monster:awaken/haunt/vanish/hunt/banished/blocked`, `capture`, `captured`, `freed`, `gameover`, `restart`, `ping`, `debug:mode`, `spell:hit`, `zone:trigger`, `entity:end`, `tree:eat`, `player:hit`, `player:immune`, `monster:attack`, `monster:phantoms`, `barrier:hit`, `flood:end`, `dawn:end`, `merge`, `boss:start`, `boss:volley`, `boss:wave`, `boss:charge`, `boss:ward`, `boss:warded`, `archon:hit`, `mastery`, `portal:open`, `sealing`, `victory` |
 
 `debug:*` commands are honoured only in covens created with **Solo test** or from a `?debug=1` page (`lobby.debug`).
 
@@ -199,6 +211,31 @@ SpellSystem.update(dt): projectiles (substepped, impact on monster/solid) → `i
   - **Horror layer:** `GameClient.updateHorror()` derives `dread` (distance ≤ 15u), `terror` (staring), light cuts and hunt state. These drive `PostFX.set()`, `MansionBuilder.setDread()`, the wand light and `AudioEngine.update()`.
   - **Audio:** the `AudioContext` is created/resumed on the first key or pointer press.
 
+### The finale (Step 5)
+- **State lives in `server/Finale.js`.** `Game` owns one `Finale` and calls `finale.update(dt)` every tick. Stages run `ritual → merge → boss → portal → sealing → victory`, and the snapshot exposes them as `fin`.
+- **The ritual:** in `CONVERGENCE`, interacting with the altar starts an *infinite* channel (`startChannel(p, altar, Infinity)`). Progress `rt` advances only while `chanting(p)` is true for every player, and decays otherwise. Releasing E sends `p:cancel` as usual.
+- **Merge:**
+  - `startMerge()` sets `PHASE.ARCHON` and `cooldownScale = ARCHON_COOLDOWN_SCALE`, picks the driver (the host, or the first human), and hides the Amalgam. Its state becomes `'boss'`.
+  - After `MERGE_TIME`, `beginBoss()` places the Unbound Amalgam and resets its HP (`bossHp`), wards and attack timers.
+- **The Archon:**
+  - Only the driver's `p:state` moves it (`onPlayerState`), and every player's server position follows it, so spells cast by anyone originate from the Archon.
+  - `Game.damagePlayer` redirects into `finale.damageArchon`, which applies union, aegis and granite. Patronus zones and the Tree heal it. 0 HP → `GAMEOVER`, and `restart()` re-merges.
+- **The boss:**
+  - `Monster.update` in the `'boss'` state delegates to `finale.updateBoss`, which handles the charge, the crawl away from the portal, circling, and the volley, wave and charge timers.
+  - `Monster.damage` routes to `finale.hitBoss`, which applies the ward check, the ×`BOSS_SPELL_SCALE` scaling for non-Mastery damage, the HP floor of 1 once the portal is open, and the ward and portal thresholds.
+  - `Monster.cap()` limits every CC duration to `BOSS_CC_CAP`. Orbs and the shockwave are simulated in `Finale.update` and sent as plain arrays.
+- **Masteries:** `finale.mastery(p, key, yaw)` checks the shared cooldown (`masteryReady`), applies the effect through `MonsterBody` statuses and `SpellSystem.spawnDragon`, and emits `mastery`. Dragons with `a.mastery` report the damage source `'mastery'`, which skips the ×2.5 scaling.
+- **Portal and seal:** each `p:grapple` adds a grappler (up to 3). In the portal stage, `update` pulls the boss toward the rift at `GRAPPLE_PULL × n` while it isn't bound. Within `PORTAL_RADIUS` it enters `sealing` for `SEAL_TIME`, then `victory()` sets `PHASE.EPILOGUE` and emits `victory { coven, hostId }`.
+- **Client:**
+  - `GameClient.archonMode()` gates the whole presentation:
+    - `controller.rideOnly` (passengers can't move), `eyeOverride = ARCHON_EYE`, and the ×1.25 speed.
+    - The crown attached to the camera, the Mastery bar, the boss bar, and the Archon HP shown on the HP bar.
+    - Hidden teammate avatars and auras, and no dread, terror or light cuts.
+  - `FinaleFX` draws everything from `fin` and the events.
+  - On `victory`, `Epilogue` takes over the frame loop: `GameClient.frame` early-returns into `epilogue.update(dt)`.
+    - It relights the real mansion through `restoreDaylight()`, then renders its own garden scene with the camera's far plane pushed to 600.
+    - The buttons emit `game:restart { mode: 'again' | 'lobby' }`.
+
 ### Channels (hold-to-interact)
 `p:interact` starts a channel on the server (`CHANNEL.tome = 2s`, `heart = 2.5s`, `gate = 3s`, divided by the wizard's `passive.gateUnlockSpeed`, so Soham takes 1.5s). Each tick the server cancels the channel if the player leaves range (+1 unit of slack) and completes it once the time is up. Clients only draw the progress bar.
 
@@ -258,4 +295,5 @@ SpellSystem.update(dt): projectiles (substepped, impact on monster/solid) → `i
 |---|---|
 | **3 · Abilities** | ✅ Done. See *Spells* above. |
 | **4 · Monster** | ✅ Done. See *The Amalgam* above. |
-| **5 · Archon** | The altar's `CONVERGENCE` branch in `Game.onInteract` starts the group channel. Then a `PHASE.ARCHON` branch in `Game.step`: merge players into one entity driven by host input, apply `ARCHON_COOLDOWN_SCALE`, and add a portal entity in `map.ids.altarRoom`. The epilogue is a client-side scene and does not need the mansion's horror lighting rig. |
+| **5 · Archon** | ✅ Done. See *The finale* above. |
+| **Next** | Mixing by ear with real players, more Archon combo interactions, mobile controls. |
