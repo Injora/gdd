@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Six Hearts: The Forbidden Convergence</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&family=IM+Fell+English:ital@0;1&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/vendor/three/build/three.module.js",
+        "three/addons/": "/vendor/three/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <canvas id="game-canvas"></canvas>
+
+  <!-- Title -->
+  <section id="screen-title" class="screen">
+    <div class="title-block">
+      <h1 class="game-title"><span class="six">SIX</span> HEARTS</h1>
+      <h2 class="game-subtitle">The Forbidden Convergence</h2>
+      <p class="tagline">Seven wizards. One mansion. Six hearts that must stop beating.</p>
+    </div>
+    <div class="panel title-panel">
+      <label class="field">
+        <span>Your name</span>
+        <input id="input-name" maxlength="16" autocomplete="off" placeholder="Wanderer">
+      </label>
+      <button id="btn-create" class="btn primary">Summon a Coven</button>
+      <div class="join-row">
+        <input id="input-code" maxlength="4" autocomplete="off" placeholder="CODE">
+        <button id="btn-join" class="btn">Join</button>
+      </div>
+      <button id="btn-solo" class="btn ghost">Solo test (with bot teammates)</button>
+      <p id="title-error" class="error" role="alert"></p>
+    </div>
+    <p class="footnote">3–4 players · headphones strongly advised · best played in the dark</p>
+  </section>
+
+  <!-- Lobby -->
+  <section id="screen-lobby" class="screen hidden">
+    <header class="lobby-header">
+      <div>
+        <h2>Choose your wizard</h2>
+        <p class="muted">Each soul walks as one of the Seven. No two may share a name.</p>
+      </div>
+      <div class="coven-code">
+        <span class="muted">Coven code</span>
+        <strong id="lobby-code">----</strong>
+      </div>
+    </header>
+    <div class="lobby-body">
+      <div id="wizard-grid" class="wizard-grid"></div>
+      <aside class="panel roster-panel">
+        <h3>The Coven</h3>
+        <ol id="roster" class="roster"></ol>
+        <div class="lobby-actions">
+          <button id="btn-add-bot" class="btn small">+ Add bot</button>
+          <label class="check"><input type="checkbox" id="chk-solo"> Solo debug (allow &lt; 3)</label>
+          <button id="btn-ready" class="btn">Ready</button>
+          <button id="btn-start" class="btn primary">Begin the Ritual</button>
+          <p id="lobby-status" class="muted small-text"></p>
+          <button id="btn-leave" class="btn ghost small">Leave coven</button>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- In-game HUD -->
+  <section id="hud" class="hidden">
+    <div id="hud-objective" class="hud-objective"></div>
+    <div id="hud-hearts" class="hud-hearts hidden"></div>
+    <div id="hud-room" class="hud-room"></div>
+    <div id="hud-crosshair" class="hud-crosshair"></div>
+    <div id="hud-prompt" class="hud-prompt"></div>
+    <div id="hud-progress" class="hud-progress hidden"><div></div></div>
+    <div id="hud-banner" class="hud-banner"><h2></h2><p></p></div>
+    <div id="hud-whisper" class="hud-whisper"></div>
+    <ul id="hud-team" class="hud-team"></ul>
+    <div id="hud-stamina" class="hud-stamina"><div></div></div>
+    <div id="hud-light" class="hud-light"></div>
+  </section>
+
+  <div id="journal" class="overlay hidden">
+    <div class="journal-page">
+      <h2>The Forbidden Convergence</h2>
+      <div id="journal-text"></div>
+      <h3>The Six Hearts</h3>
+      <ol id="journal-hearts"></ol>
+      <p class="muted small-text">Press J or Esc to close</p>
+    </div>
+  </div>
+
+  <div id="pause" class="overlay hidden">
+    <div class="panel pause-panel">
+      <h2 id="pause-title">Click to enter the mansion</h2>
+      <table class="controls">
+        <tr><td>W A S D</td><td>Move</td></tr>
+        <tr><td>Mouse</td><td>Look</td></tr>
+        <tr><td>Shift</td><td>Sprint (loud)</td></tr>
+        <tr><td>C / Ctrl</td><td>Crouch (quiet)</td></tr>
+        <tr><td>E (hold)</td><td>Interact / destroy / read</td></tr>
+        <tr><td>F</td><td>Wand light on / off</td></tr>
+        <tr><td>J</td><td>Journal</td></tr>
+        <tr class="debug-only"><td>M</td><td>Debug map</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <canvas id="debug-map" class="hidden"></canvas>
+  <div id="debug-stats" class="hidden"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>
