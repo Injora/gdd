@@ -49,6 +49,7 @@ import { lineOfSight, moveCircle } from '../shared/collision.js';
 import { stairToward } from '../shared/nav.js';
 import { PHASE, TILE_WALL, TILE_DOOR, HP, LUMOS, INVIS, tileCenter, worldToTile } from '../shared/constants.js';
 import { buildRoomGraph, zoneAt, oneRoomAway } from '../shared/roomgraph.js';
+import { derived } from './MapCache.js';
 import { FINALE } from '../shared/finale.js';
 
 export const AI = {
@@ -160,7 +161,7 @@ export class Monster extends MonsterBody {
     this.listenUntil = 0;
     this.retreatHideAt = 0;
     this.until = 0;
-    this.tiles = this.buildTileIndex();
+    this.tiles = derived(game.mansion, 'keeperTiles', () => this.buildTileIndex()); // shared per mansion
     this.attack = null;
     this.attackReadyAt = 0;
     this.shockReadyAt = 0;
@@ -169,7 +170,7 @@ export class Monster extends MonsterBody {
     this.tauntUntil = 0;
     this.spotting = new Map(); // playerId -> seconds in continuous sight
     this.blindUntil = 0;
-    this.rooms = buildRoomGraph(game.map); // Step 8: who is "1 room away"
+    this.rooms = derived(game.mansion, 'roomGraph', () => buildRoomGraph(game.mansion?.map ?? game.map)); // Step 8: who is "1 room away" (shared per mansion)
     this.ping = null; // the activity it is investigating
     this.movedSensedAt = new Map(); // playerId -> last movement ping
     this.disturbance = null; // the last doorway someone crossed (biases its patrol)
@@ -381,7 +382,7 @@ export class Monster extends MonsterBody {
       const tiles = findPath(f, worldToTile(this.x), worldToTile(this.z), worldToTile(target.x), worldToTile(target.z), 6000);
       this.path = tiles ? pathToWorld(tiles) : [];
       this.pathKey = key;
-      this.repathAt = this.t + 0.5;
+      this.repathAt = this.t + 0.4 + Math.random() * 0.2; // staggered: covens don't all re-path on the same tick
     }
     while (this.path.length && this.dist(this.path[0]) < 0.5) this.path.shift();
     const next = this.path.length > 1 ? this.path[0] : target;

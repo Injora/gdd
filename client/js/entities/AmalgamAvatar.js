@@ -1,6 +1,8 @@
-// The Malphas Amalgam, client side. A procedural, asymmetric, too-tall figure:
-// open ribcage with seven heart-nodes (one dies with each destroyed Heart),
-// crooked pale head, hair curtains, absurd limbs.
+// The Malphas Amalgam, client side. Step 9: anatomical body horror
+// (keeperModel.js): a 3.2 m contorted frame, a cracked ribcage with seven wet
+// hearts (one dies with each destroyed Heart), a split mandible that unhinges
+// to its chest when it hunts, four spider limbs from its shoulder blades,
+// glistening skin, black ichor, creeping shadows.
 //
 // Uncanny motion: limb/head transforms are only recomputed at a quantised
 // ~13 Hz (stop-motion), while the body's position glides smoothly. It snaps
@@ -10,6 +12,7 @@
 import * as THREE from 'three';
 import { FLOOR_Y, TILE, TILE_DOOR } from '/shared/constants.js';
 import { STATUS_LABELS } from './MonsterAvatar.js';
+import { buildKeeperModel } from './keeperModel.js';
 
 const POSE_HZ = 13;
 const angleLerp = (a, b, t) => a + Math.atan2(Math.sin(b - a), Math.cos(b - a)) * t;
@@ -34,171 +37,38 @@ export class AmalgamAvatar {
     this.heartsLit = 7;
     this.liftK = 0;
 
-    const skin = new THREE.MeshStandardMaterial({ color: 0xcdc3b4, roughness: 0.55 });
-    const bone = new THREE.MeshStandardMaterial({ color: 0x9a8c7a, roughness: 0.7 });
-    const dark = new THREE.MeshBasicMaterial({ color: 0x050303 });
-    const hair = new THREE.MeshStandardMaterial({ color: 0x070505, roughness: 1, side: THREE.DoubleSide });
-    this.skin = skin;
-    this.mats = [skin, bone, hair];
-
-    const limb = (len, r, mat = skin) =>
-      new THREE.Mesh(new THREE.CylinderGeometry(r * 0.75, r, len, 7).translate(0, -len / 2, 0), mat);
-
+    // Step 9: the anatomical nightmare (keeperModel.js). Sculpted facing +z; turned
+    // to face -z like everything else (and the poses below mirror their pitch).
+    const k = buildKeeperModel({ glowTex: fx?.softTex ?? null });
+    this.model = k;
+    this.skin = k.skin;
+    this.mats = k.mats;
     this.group = new THREE.Group();
-    this.body = new THREE.Group();
-    this.group.add(this.body);
-
-    // Legs: long, digitigrade-ish.
-    this.hips = new THREE.Group();
-    this.hips.position.y = 1.6;
-    this.body.add(this.hips);
-    this.legs = [-1, 1].map((s) => {
-      const hip = new THREE.Group();
-      hip.position.set(s * 0.13, 0, 0);
-      hip.add(limb(0.85, 0.09));
-      const knee = new THREE.Group();
-      knee.position.y = -0.85;
-      knee.add(limb(0.82, 0.065));
-      const foot = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.04, 0.32), skin);
-      foot.position.set(0, -0.84, -0.1);
-      knee.add(foot);
-      hip.add(knee);
-      this.hips.add(hip);
-      return { hip, knee, s };
-    });
-    const pelvis = new THREE.Mesh(new THREE.SphereGeometry(0.17, 10, 8), bone);
-    pelvis.scale.set(1.3, 0.6, 0.8);
-    this.hips.add(pelvis);
-
-    // Spine + ribcage + seven heart-nodes.
-    this.spine = new THREE.Group();
-    this.hips.add(this.spine);
-    const column = limb(1.05, 0.045, bone);
-    column.rotation.x = Math.PI;
-    column.position.y = 0;
-    this.spine.add(column);
-    for (let i = 0; i < 6; i++) {
-      const r = 0.21 - Math.abs(i - 2.5) * 0.02;
-      for (const s of [-1, 1]) {
-        const rib = new THREE.Mesh(new THREE.TorusGeometry(r, 0.016, 4, 12, Math.PI * 0.95), bone);
-        rib.rotation.set(Math.PI / 2, 0, s > 0 ? -Math.PI * 0.05 : Math.PI * 1.05);
-        rib.position.set(0, 0.42 + i * 0.1, -0.02);
-        this.spine.add(rib);
-      }
-    }
-    const back = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.17, 0.75, 12, 1, true, -Math.PI * 0.42, Math.PI * 0.84), skin);
-    back.material = skin.clone();
-    back.material.side = THREE.DoubleSide;
-    this.mats.push(back.material);
-    back.position.y = 0.66;
-    this.spine.add(back);
-    // A tattered burial shroud hanging from the shoulders gives it mass.
-    const shroudGeo = new THREE.CylinderGeometry(0.3, 0.5, 1.7, 14, 6, true, -Math.PI * 0.7, Math.PI * 1.4);
-    const sp = shroudGeo.attributes.position;
-    for (let i = 0; i < sp.count; i++) {
-      if (sp.getY(i) < -0.6) sp.setY(i, sp.getY(i) - Math.random() * 0.45); // ragged hem
-      sp.setX(i, sp.getX(i) * (0.92 + Math.random() * 0.16));
-    }
-    shroudGeo.computeVertexNormals();
-    const shroud = new THREE.Mesh(shroudGeo, new THREE.MeshStandardMaterial({ color: 0x14100d, roughness: 1, side: THREE.DoubleSide }));
-    shroud.position.y = 0.25;
-    this.spine.add(shroud);
-    this.mats.push(shroud.material);
-    this.hearts = [];
-    for (let i = 0; i < 7; i++) {
-      const mat = new THREE.MeshBasicMaterial({ color: 0xff2020 });
-      const node = new THREE.Mesh(new THREE.SphereGeometry(0.042, 10, 8), mat);
-      // Seven heart-nodes: three pairs and one at the core of the ribcage.
-      node.position.set(i === 6 ? 0 : (i % 2 ? 1 : -1) * 0.065, i === 6 ? 0.69 : 0.5 + Math.floor(i / 2) * 0.13, i === 6 ? -0.07 : -0.04);
-      if (i === 6) node.scale.setScalar(1.4);
-      const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: fx.softTex, color: 0xff1a10, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
-      glow.scale.setScalar(0.32);
-      node.add(glow);
-      this.spine.add(node);
-      this.hearts.push({ node, mat, glow, phase: i * 0.37 });
-    }
-
-    // Shoulders (uneven) + arms (one much longer).
-    this.shoulders = new THREE.Group();
-    this.shoulders.position.y = 1.02;
-    this.spine.add(this.shoulders);
-    const clav = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.6, 6), bone);
-    clav.rotation.z = Math.PI / 2 + 0.18;
-    this.shoulders.add(clav);
-    this.arms = [
-      { s: -1, y: 0.06, upper: 0.82, fore: 0.92 },
-      { s: 1, y: -0.07, upper: 0.88, fore: 1.12 },
-    ].map(({ s, y, upper, fore }) => {
-      const sh = new THREE.Group();
-      sh.position.set(s * 0.3, y, 0);
-      sh.add(limb(upper, 0.06));
-      const elbow = new THREE.Group();
-      elbow.position.y = -upper;
-      elbow.add(limb(fore, 0.048));
-      for (let f = 0; f < 4; f++) {
-        const finger = limb(0.34, 0.011);
-        finger.position.set((f - 1.5) * 0.025, -fore, 0);
-        finger.rotation.set(0.1, 0, (f - 1.5) * 0.12);
-        elbow.add(finger);
-      }
-      sh.add(elbow);
-      this.shoulders.add(sh);
-      return { sh, elbow, s };
-    });
-
-    // Neck + crooked head + hair.
-    this.neck = new THREE.Group();
-    this.neck.position.set(0, 1.05, -0.04);
-    this.spine.add(this.neck);
-    const neckMesh = limb(0.34, 0.035);
-    neckMesh.rotation.x = Math.PI;
-    this.neck.add(neckMesh);
-    this.head = new THREE.Group();
-    this.head.position.y = 0.34;
-    this.neck.add(this.head);
-    const skull = new THREE.Mesh(new THREE.SphereGeometry(0.15, 14, 12), skin);
-    skull.scale.set(0.78, 1.4, 0.92);
-    skull.position.y = 0.16;
-    this.head.add(skull);
-    this.jaw = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.035, 0.22, 10), dark);
-    this.jaw.position.set(0, 0.02, -0.11);
-    this.jaw.rotation.x = 0.25;
-    this.head.add(this.jaw);
-    this.eyeMat = new THREE.MeshBasicMaterial({ color: 0xf4efe6 });
-    for (const s of [-1, 1]) {
-      const socket = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 6), dark);
-      socket.position.set(s * 0.048, 0.22 + s * 0.012, -0.115);
-      this.head.add(socket);
-      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.008, 6, 4), this.eyeMat);
-      eye.position.set(s * 0.048, 0.22 + s * 0.012, -0.135);
-      this.head.add(eye);
-      // Two pinpoints that pierce the fog: you see it watching before you see it.
-      const glint = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: fx.softTex, color: 0xfff4e0, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
-      }));
-      glint.scale.setScalar(0.09);
-      glint.position.copy(eye.position);
-      this.head.add(glint);
-      (this.glints ??= []).push(glint);
-    }
-    for (let i = 0; i < 12; i++) {
-      const a = (i / 12) * Math.PI * 2;
-      const len = 0.6 + Math.random() * 0.5;
-      const strand = new THREE.Mesh(new THREE.PlaneGeometry(0.05, len).translate(0, -len / 2, 0), hair);
-      strand.position.set(Math.cos(a) * 0.1, 0.36, Math.sin(a) * 0.1 + 0.02);
-      strand.rotation.set(jitter(0.15), a, jitter(0.15));
-      this.head.add(strand);
-    }
+    this.body = k.body;
+    this.group.add(k.group);
+    k.group.rotation.y = Math.PI;
+    this.hips = k.hips;
+    this.legs = k.legs;
+    this.spine = k.spine;
+    this.shoulders = k.shoulders;
+    this.arms = k.arms;
+    this.neck = k.neck;
+    this.head = k.head;
+    this.jaws = k.jaws;
+    this.hearts = k.hearts;
+    this.spiderLimbs = k.spiderLimbs;
+    this.tendrils = k.tendrils;
+    this.eyeMat = k.eyeMat;
+    this.glints = k.glints;
     this.headTilt = 0.32; // permanently crooked
-
-    this.group.traverse((o) => { if (o.isMesh && !o.material.isMeshBasicMaterial) { o.castShadow = true; o.receiveShadow = true; } });
+    this.mouthK = 0;
 
     // Through-walls silhouette for Psychic Torment.
     this.revealFill = new THREE.MeshBasicMaterial({ color: 0x9a3cff, transparent: true, opacity: 0.32, depthTest: false, depthWrite: false });
     this.revealWire = new THREE.MeshBasicMaterial({ color: 0xe6c4ff, wireframe: true, transparent: true, opacity: 0.5, depthTest: false, depthWrite: false });
     this.overlays = [];
     const meshes = [];
-    this.body.traverse((o) => { if (o.isMesh) meshes.push(o); });
+    this.body.traverse((o) => { if (o.isMesh && !o.material.transparent) meshes.push(o); });
     for (const m of meshes) {
       for (const mat of [this.revealFill, this.revealWire]) {
         const o = new THREE.Mesh(m.geometry, mat);
@@ -220,7 +90,7 @@ export class AmalgamAvatar {
       this.labelTex = new THREE.CanvasTexture(c);
       this.label = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.labelTex, transparent: true, depthTest: false }));
       this.label.scale.set(2.4, 0.3, 1);
-      this.label.position.y = 3.7;
+      this.label.position.y = 4.0;
       this.label.renderOrder = 1000;
       this.group.add(this.label);
       this.labelKey = '';
@@ -288,7 +158,8 @@ export class AmalgamAvatar {
     this.group.traverse((o) => {
       if (o.isMesh && !this.overlays.includes(o)) o.material = this.ghostMat;
     });
-    this.hearts.forEach((h) => { h.glow.visible = false; });
+    this.hearts.forEach((h) => { if (h.glow) h.glow.visible = false; });
+    for (const t of this.tendrils) t.group.visible = false;
     this.ghost = true;
     if (this.label) this.label.visible = false;
   }
@@ -307,7 +178,7 @@ export class AmalgamAvatar {
   /** World position of the face, and the direction it faces. */
   face(out = new THREE.Vector3()) {
     this.head.updateWorldMatrix(true, false);
-    return this.head.localToWorld(out.set(0, 0.2, -0.1));
+    return this.head.localToWorld(out.set(0, 0.2, 0.13));
   }
 
   nearDoor() {
@@ -347,82 +218,103 @@ export class AmalgamAvatar {
     this.doorK += ((this.nearDoor() ? 1 : 0) - this.doorK) * 0.5;
     const hunch = this.doorK;
 
-    this.hips.position.y = 1.6 - hunch * 0.12 + (moving ? Math.abs(w) * 0.05 : 0);
-    // Upright parts lean forward with negative X (the model faces -Z).
-    this.spine.rotation.set(-((hunting ? 0.7 : 0.28) + hunch * 0.3), 0, 0);
+    // (Poses are authored for the old -z-facing figure: X() mirrors their pitch for this one.)
+    const X = (v) => -v;
+    this.hips.position.y = 1.75 - hunch * 0.14 + (moving ? Math.abs(w) * 0.06 : 0);
+    this.spine.rotation.set(X(-((hunting ? 0.7 : 0.28) + hunch * 0.3)), 0, 0);
     this.legs.forEach((l) => {
-      l.hip.rotation.x = w * swing * -l.s;
-      l.knee.rotation.x = -0.25 - Math.max(0, w * l.s) * 0.7;
+      l.hip.rotation.x = X(w * swing * -l.s) - 0.15;
+      l.knee.rotation.x = 0.45 + Math.max(0, w * l.s) * 0.5; // the knees bend the wrong way
+      l.ankle.rotation.x = -0.9 - Math.max(0, -w * l.s) * 0.3;
     });
     this.arms.forEach((a) => {
-      a.sh.rotation.set(hunting ? -w * 0.9 * a.s - 0.3 : 0.15 + w * 0.15 * a.s, 0, a.s * (0.12 + hunch * 0.25));
-      a.elbow.rotation.x = hunting ? 0.6 : 0.25;
+      a.sh.rotation.set(X(hunting ? -w * 0.9 * a.s - 0.3 : 0.15 + w * 0.15 * a.s), 0, a.s * (0.12 + hunch * 0.25));
+      a.elbow.rotation.x = X(hunting ? 0.6 : 0.25);
     });
-    this.shoulders.position.y = 1.02 - hunch * 0.1;
-    this.shoulders.rotation.x = -hunch * 0.35;
-    this.neck.rotation.x = -0.35;
-    this.head.rotation.set(hunting ? 0.8 : 0.4, 0, this.headTilt + hunch * 1.25); // face stays on its prey
-    this.jaw.scale.y = 1;
+    this.shoulders.position.y = 1.15 - hunch * 0.1;
+    this.shoulders.rotation.x = X(-hunch * 0.35);
+    this.neck.rotation.x = X(-0.35);
+    this.head.rotation.set(X(hunting ? 0.8 : 0.4), 0, this.headTilt + hunch * 1.25); // face stays on its prey
+    // The split mandible: ajar while it stalks, unhinged to its chest when it hunts.
+    let mouth = hunting ? 0.75 : 0.12;
+    // The spider limbs: folded over its back, flexing; flung forward when it hunts.
+    const reach = hunting ? 0.6 : 0;
+    this.spiderLimbs.forEach((L) => {
+      const f = Math.sin(this.walkPhase * 0.5 + L.phase + performance.now() / 700) * 0.18;
+      L.base.rotation.x = -0.9 - L.row * 0.2 + reach * 0.6 + f;
+      L.segs[1].rotation.x = 0.9 + f * 1.5 - reach * 0.4;
+      L.segs[2].rotation.x = 0.8 - f - reach * 0.2;
+    });
 
     switch (act) {
       case 'peek':
         this.spine.rotation.z = 0.55;
         this.head.rotation.z = this.headTilt + 1.1;
-        this.arms[1].sh.rotation.set(0.9, 0, 0.6);
+        this.arms[1].sh.rotation.set(X(0.9), 0, 0.6);
         break;
       case 'listen':
         this.head.rotation.z = this.headTilt + 0.7;
-        this.head.rotation.x = 0.1;
+        this.head.rotation.x = X(0.1);
+        mouth = 0.25;
         break;
       case 'windup':
-        this.arms.forEach((a) => { a.sh.rotation.set(2.6, 0, a.s * 0.7); a.elbow.rotation.x = 0.4; });
-        this.jaw.scale.y = 1.6;
-        this.spine.rotation.x = 0.4;
+        this.arms.forEach((a) => { a.sh.rotation.set(X(2.6), 0, a.s * 0.7); a.elbow.rotation.x = X(0.4); });
+        mouth = 0.45;
+        this.spine.rotation.x = X(0.4);
         break;
       case 'lunge':
-        this.arms.forEach((a) => { a.sh.rotation.set(1.55, 0, a.s * 0.15); a.elbow.rotation.x = 0.05; });
-        this.spine.rotation.x = -1.0;
-        this.jaw.scale.y = 2.1;
-        this.head.rotation.x = 1.1;
+        this.arms.forEach((a) => { a.sh.rotation.set(X(1.55), 0, a.s * 0.15); a.elbow.rotation.x = X(0.05); });
+        this.spine.rotation.x = X(-1.0);
+        mouth = 0.85;
+        this.head.rotation.x = X(1.1);
+        this.spiderLimbs.forEach((L) => { L.base.rotation.x = 0.3; L.segs[1].rotation.x = 0.2; });
         break;
-      case 'claw': // one long arm drawn back to rake
-        this.arms[1].sh.rotation.set(2.6, 0, 0.9);
-        this.arms[1].elbow.rotation.x = 1.2;
+      case 'claw':
+        this.arms[1].sh.rotation.set(X(2.6), 0, 0.9);
+        this.arms[1].elbow.rotation.x = X(1.2);
         this.spine.rotation.y = -0.4;
         break;
-      case 'shockwave': // both arms high, about to slam the floor
-        this.arms.forEach((a) => { a.sh.rotation.set(3.0, 0, a.s * 0.4); a.elbow.rotation.x = 0.2; });
-        this.spine.rotation.x = 0.25;
-        this.jaw.scale.y = 2;
+      case 'shockwave':
+        this.arms.forEach((a) => { a.sh.rotation.set(X(3.0), 0, a.s * 0.4); a.elbow.rotation.x = X(0.2); });
+        this.spine.rotation.x = X(0.25);
+        mouth = 0.7;
         break;
-      case 'tendril': // the chest splits; one arm thrust forward
-        this.arms[0].sh.rotation.set(1.5, 0, -0.1);
+      case 'tendril':
+        this.arms[0].sh.rotation.set(X(1.5), 0, -0.1);
         this.arms[0].elbow.rotation.x = 0;
-        this.spine.rotation.x = -0.6;
-        this.jaw.scale.y = 1.8;
+        this.spine.rotation.x = X(-0.6);
+        mouth = 0.6;
         break;
       case 'smash':
-        this.arms.forEach((a) => { a.sh.rotation.set(2.9, 0, a.s * 0.15); a.elbow.rotation.x = 0.6; });
+        this.arms.forEach((a) => { a.sh.rotation.set(X(2.9), 0, a.s * 0.15); a.elbow.rotation.x = X(0.6); });
         break;
-      case 'confused': // tearing at its own skull
+      case 'confused':
         this.arms.forEach((a) => {
-          a.sh.rotation.set(2.7 + jitter(0.4), 0, a.s * (0.9 + jitter(0.3)));
-          a.elbow.rotation.x = 2.0 + jitter(0.5);
+          a.sh.rotation.set(X(2.7 + jitter(0.4)), 0, a.s * (0.9 + jitter(0.3)));
+          a.elbow.rotation.x = X(2.0 + jitter(0.5));
         });
-        this.spine.rotation.x = -0.3 + jitter(0.3);
-        this.jaw.scale.y = 2.2 + Math.random();
+        this.spine.rotation.x = X(-0.3 + jitter(0.3));
+        mouth = 0.7 + Math.random() * 0.3;
         break;
-      case 'scream': // the jumpscare: face-to-face, jaw unhinged
-        this.spine.rotation.x = -0.25;
-        this.neck.rotation.x = -0.1;
-        this.head.rotation.set(0.15, 0, this.headTilt * 1.6);
-        this.arms.forEach((a) => { a.sh.rotation.set(2.2, 0, a.s * 0.9); a.elbow.rotation.x = 0.9; });
-        this.jaw.scale.y = 2.6;
+      case 'scream':
+        // The capture: face to face, its mandibles snapping wide inches from you,
+        // the spider limbs reaching round to grip the edges of your sight.
+        this.spine.rotation.x = X(-0.25);
+        this.neck.rotation.x = X(-0.1);
+        this.head.rotation.set(X(0.15), 0, this.headTilt * 1.6);
+        this.arms.forEach((a) => { a.sh.rotation.set(X(2.2), 0, a.s * 0.9); a.elbow.rotation.x = X(0.9); });
+        mouth = 1;
         this.head.rotation.z += jitter(0.25);
+        this.spiderLimbs.forEach((L) => {
+          L.base.rotation.x = 0.4 + jitter(0.08);
+          L.base.rotation.z = L.s * (0.5 + L.row * 0.25);
+          L.segs[1].rotation.x = 0.4 + jitter(0.1);
+          L.segs[2].rotation.x = 1.2 + jitter(0.15);
+        });
         break;
       case 'retreat':
-        this.arms.forEach((a) => { a.sh.rotation.set(3.0, 0, a.s * 0.3); });
-        this.head.rotation.x = 0.9; // looking up at the ceiling it climbs into
+        this.arms.forEach((a) => { a.sh.rotation.set(X(3.0), 0, a.s * 0.3); });
+        this.head.rotation.x = X(0.9);
         break;
     }
 
@@ -436,7 +328,16 @@ export class AmalgamAvatar {
         a.elbow.rotation.x += jitter(0.8 * amp);
       });
       this.spine.rotation.z += jitter(0.2 * amp);
-      if (twitching) this.jaw.scale.y = 1 + Math.random() * 1.2;
+      if (twitching) mouth = 0.3 + Math.random() * 0.7;
+    }
+    this.mouth(mouth);
+  }
+
+  /** Open the split mandible (0 shut … 1 unhinged to the chest, the halves splayed). */
+  mouth(k) {
+    this.mouthK = k;
+    for (const j of this.jaws) {
+      j.hinge.rotation.set(k * 1.25, -j.s * k * 0.35, j.s * k * 0.55);
     }
   }
 
@@ -475,11 +376,29 @@ export class AmalgamAvatar {
       const lit = i < this.heartsLit && !this.ghost;
       const p = (t * 1.3 + h.phase) % 1;
       const beat = Math.exp(-((p - 0.05) ** 2) / 0.002) + 0.6 * Math.exp(-((p - 0.22) ** 2) / 0.002);
-      h.mat.color.setRGB(lit ? 0.5 + beat * 0.5 : 0.05, lit ? 0.02 : 0.02, lit ? 0.02 : 0.02);
-      h.glow.visible = lit;
-      h.glow.material.opacity = 0.35 + beat * 0.65;
+      // Wet and pulsing while its Heart lives; grey and shrivelled once destroyed.
+      h.mat.color.setRGB(lit ? 0.3 + beat * 0.15 : 0.08, lit ? 0.02 : 0.06, lit ? 0.03 : 0.05);
+      h.mat.emissiveIntensity = lit ? 0.4 + beat * 4.5 : 0; // the beat blooms
+      h.node.scale.setScalar(h.base * (lit ? 1 + beat * 0.14 : 0.7));
+      if (h.glow) {
+        h.glow.visible = lit;
+        h.glow.material.opacity = 0.35 + beat * 0.65;
+      }
     });
-    this.eyeMat.color.setScalar(0.7 + Math.random() * 0.3);
+    // Creeping shadows: tendrils of dark reaching out across the floor (further when it hunts).
+    const hunt = s.state === 'hunting' || (s.state === 'investigating' && s.ip === 'approach');
+    for (const td of this.tendrils) {
+      td.group.scale.z = (hunt ? 2.4 : 1.4) + Math.sin(t * 1.3 + td.phase) * 0.35;
+      td.group.rotation.y += Math.sin(t * 0.7 + td.phase) * dt * 0.2;
+    }
+    // Black ichor dripping from its jaw and its open chest.
+    if (visible && this.fx && !this.ghost && Math.random() < 0.35) {
+      const src = Math.random() < 0.5 ? this.head : this.spine;
+      const p0 = (this._drip ??= new THREE.Vector3()).set(jitter(0.06), src === this.head ? -0.02 : 0.5 + Math.random() * 0.4, src === this.head ? 0.1 : 0.12);
+      src.localToWorld(p0);
+      this.fx.dust.emit(p0.x, p0.y, p0.z, 0, -2.5, 0, 0.7, ICHOR, 6, 0);
+    }
+    this.eyeMat.color.setRGB(1, 0.05, 0.03).multiplyScalar(4.5 + Math.random() * 2.5); // pinpoint red, flickering
     const watching = s.state === 'haunt' || s.state === 'stalking' || s.act === 'peek';
     if (!this.ghost) for (const gl of this.glints) gl.material.opacity = watching ? 0.55 + Math.random() * 0.3 : 0.25;
 
@@ -507,4 +426,5 @@ export class AmalgamAvatar {
 }
 
 const EMBER = new THREE.Color(0xff6a10);
+const ICHOR = new THREE.Color(0x050203);
 const VIOLET = new THREE.Color(0xa040ff);

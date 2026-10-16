@@ -3,10 +3,10 @@
 // the server bounds-checks and corrects. See ARCHITECTURE.md.
 
 import { performance } from 'node:perf_hooks';
-import { generateMansion, publicMap, roomAt } from '../shared/mapgen.js';
+import { roomAt } from '../shared/mapgen.js';
 import { createCollisionWorld, overlapsSolid, addBarrier, removeBarrier, moveCircle } from '../shared/collision.js';
 import {
-  PHASE, CHANNEL, INTERACT_RANGE, TICK_RATE, SPEED, HEART_COUNT, TILE, TILE_WALL, TILE_VOID, PLAYER_RADIUS, HP,
+  PHASE, CHANNEL, INTERACT_RANGE, SPEED, HEART_COUNT, TILE, TILE_WALL, TILE_VOID, PLAYER_RADIUS, HP,
   tileCenter,
 } from '../shared/constants.js';
 import { DECOY_LINES, TOME_TEXT, TASKS, TASK_STEPS, HEART_TYPES } from '../shared/lore.js';
@@ -24,6 +24,9 @@ import { FINALE } from '../shared/finale.js';
 const FINALE_BOSS_HP = FINALE.BOSS_HP;
 import { botName } from './names.js';
 import { zoneAt, nearCorridor } from '../shared/roomgraph.js';
+import { SnapshotEncoder } from '../shared/netcodec.js';
+import { mansionFor, instanceMap, newSeed } from './MapCache.js';
+import { scheduler } from './TickScheduler.js';
 
 const GATE_OPEN_TIME = 6;
 const CAPTURE_DELAY = 1.5; // the victim's capture screen plays before the cage
@@ -52,9 +55,12 @@ export class Game {
     this.lobby = lobby;
     this.room = lobby.room;
     this.onEnd = onEnd;
-    this.seed = Number.isInteger(lobby.seed) ? lobby.seed >>> 0 : (Math.random() * 0xffffffff) >>> 0;
-    this.map = generateMansion(this.seed);
-    this.clientMap = publicMap(this.map);
+    this.seed = Number.isInteger(lobby.seed) ? lobby.seed >>> 0 : newSeed();
+    // Step 9: the mansion is shared with every coven on this seed; only our floors (barriers) are ours.
+    this.mansion = mansionFor(this.seed);
+    this.map = instanceMap(this.mansion);
+    this.clientMap = this.mansion.clientMap;
+    this.encoder = new SnapshotEncoder(); // the compact snapshot protocol
     this.props = this.map.props;
     this.heartByProp = new Map(this.map.hearts.map((h) => [h.propId, h]));
     this.heartByTask = new Map(this.map.hearts.flatMap((h) => [...h.tasks, ...(h.sink !== null && h.sink !== undefined ? [h.sink] : [])].map((id) => [id, h])));
@@ -92,7 +98,7 @@ export class Game {
         pitch: 0,
         crouch: false,
         sprint: false,
-        light: true,
+        light: false, // Nox until they say otherwise (bots keep to the plain wand glow)
         moving: false,
         tseq: 0,
         lastStateAt: Date.now(),
@@ -128,13 +134,12 @@ export class Game {
       if (!p.isBot) this.socketOf(p)?.emit('game:start', this.initPayload(p.id));
     }
     this.lastTick = performance.now();
-    this.interval = setInterval(() => this.tick(), 1000 / TICK_RATE);
-    console.log(`[game ${this.room}] started, seed ${this.seed}, ${this.players.size} wizards`);
+    scheduler.add(this); // one 20 Hz loop per process drives every game
+    if (!process.env.QUIET) console.log(`[game ${this.room}] started, seed ${this.seed}, ${this.players.size} wizards`);
   }
 
   stop() {
-    clearInterval(this.interval);
-    this.interval = null;
+    scheduler.remove(this);
   }
 
   end() {
@@ -235,8 +240,7 @@ export class Game {
 
   // --- simulation ----------------------------------------------------------
 
-  tick() {
-    const now = performance.now();
+  tick(now = performance.now()) {
     const dt = Math.min(0.1, (now - this.lastTick) / 1000);
     this.lastTick = now;
     this.step(dt);
@@ -256,7 +260,23 @@ export class Game {
     this.updateCrossings();
     this.updateCaptures();
     this.updateGate();
-    this.io.to(this.room).emit('game:snap', this.snapshot());
+    this.broadcastSnapshot();
+  }
+
+  /**
+   * Step 9: the compact protocol. A tick whose slow state (buffs, HP, statuses,
+   * hazards, the finale…) changed sends the binary transforms and the JSON
+   * delta together, reliably; a tick with nothing but movement sends the binary
+   * frame alone, volatile (a dropped one is harmless). (They must travel in one
+   * packet: a volatile frame sent right behind a reliable one is dropped while
+   * the transport is still busy, so in the finale, where something changes
+   * every tick, no transforms would ever arrive.)
+   */
+  broadcastSnapshot() {
+    const { bin, delta } = this.encoder.encode(this.snapshot(), this.time);
+    const room = this.io.to(this.room);
+    if (delta) room.emit('game:s', bin, delta);
+    else (room.volatile ?? room).emit('game:s', bin);
   }
 
   insideWall(floor, x, z) {

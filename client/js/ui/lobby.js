@@ -1,6 +1,7 @@
 // Title screen and lobby (coven) screen.
 
 import { WIZARDS, WIZARD_BY_ID } from '/shared/wizards.js';
+import { Showcase } from './Showcase.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -65,6 +66,7 @@ export class LobbyUI {
     this.error('');
     const code = $('input-code').value.trim();
     if (!code) return this.error('Enter a coven code.');
+    await this.net.route(code.toUpperCase()); // (cluster mode: the worker that owns this coven)
     const res = await this.net.request('lobby:join', { name: this.name(), code });
     if (!res?.ok) return this.error(res?.error);
     this.soloMode = false;
@@ -81,7 +83,26 @@ export class LobbyUI {
 
   me() { return this.state?.members.find((m) => m.id === this.selfId); }
 
+  /** Step 9: the 3D hero showcase: the hovered wizard, else your own, else the first. */
+  showcase(wizardId) {
+    try {
+      this.hero ??= new Showcase($('showcase'));
+    } catch (err) {
+      console.warn('showcase unavailable:', err.message);
+      return;
+    }
+    const w = WIZARD_BY_ID[wizardId] ?? WIZARD_BY_ID[this.me()?.wizardId] ?? WIZARDS[0];
+    this.hero.show(w);
+    this.hero.start();
+    const info = $('showcase-info');
+    info.style.setProperty('--wiz', w.color);
+    const kind = (s, i) => (i === 4 ? 'Ultimate' : s.kind === 'utility' ? 'Utility' : 'Attack');
+    info.innerHTML = `<h3>${escapeHtml(w.name)}</h3><div class="title">${escapeHtml(w.title)} · ${escapeHtml(w.element)}</div>
+      <ul>${[...w.spells, w.ultimate].map((s, i) => `<li><span class="kind">${i < 4 ? i + 1 : 'R'} · ${kind(s, i)}</span><b>${escapeHtml(s.name)}.</b> ${escapeHtml(s.description)}</li>`).join('')}</ul>`;
+  }
+
   showTitle(message) {
+    this.hero?.stop();
     $('screen-lobby').classList.add('hidden');
     $('screen-title').classList.remove('hidden');
     this.state = null;
@@ -94,6 +115,7 @@ export class LobbyUI {
   }
 
   hide() {
+    this.hero?.stop();
     $('screen-title').classList.add('hidden');
     $('screen-lobby').classList.add('hidden');
   }
@@ -125,8 +147,12 @@ export class LobbyUI {
         <div class="cd">Cooldown ${w.ability.cooldown}s</div>
         ${holder ? `<div class="owner">${mine ? 'Your wizard' : `Chosen by ${escapeHtml(holder.name)}`}</div>` : ''}`;
       card.onclick = () => this.act('lobby:pick', { wizardId: w.id });
+      card.onmouseenter = () => this.showcase(w.id);
+      card.onfocus = () => this.showcase(w.id);
       grid.appendChild(card);
     }
+    grid.onmouseleave = () => this.showcase(null);
+    this.showcase(null);
 
     // Roster
     const roster = $('roster');

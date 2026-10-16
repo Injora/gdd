@@ -1,4 +1,4 @@
-# Architecture — HorCrux (v3.0)
+# Architecture — HorCrux (v4.0)
 
 ## Quick start
 
@@ -8,6 +8,8 @@ npm start            # http://localhost:3666  (PORT=4000 npm start to change)
 npm run dev          # same, restarts on server file changes
 npm test             # map generator (60 seeds, 3 levels), spells, the Keeper's rules, Hearts + Sin tasks + Sins, input, finale, Step 7 labels, sockets
 npm run verify:browser   # headless Chrome: the whole game end to end, screenshots in verify-output/, errors + FPS
+npm run test:scale1500   # 1,500 simulated players in 375 covens on a local cluster: rooms, errors, p95 tick, memory
+WORKERS=auto npm start   # cluster mode: one worker per core behind a coordinator that routes by coven
 ```
 
 Open `http://localhost:3666/?debug=1` and click **Solo test** to play with two bots. In debug, **P** cycles the monster (Husk → Haunt → Stalk → Hunt → Capture test → Auto), **K** captures/frees you, **L** opens the nearest Heart's Sin arena (L again slays the Sin), **H** skips to the Convergence, **U** readies your Ultimate, a click on the full map (**M** / **Tab**, available to everyone) teleports you, and **Shift+1–7** hot-swap your wizard. For real co-op, one player clicks **Summon a Coven** and the others **Join** with the 4-letter code. Use the LAN URL the server prints so other machines can connect.
@@ -89,6 +91,10 @@ test/
   monster.test.js         AI states, haunting, noise, stare, locked chase, immunity, capped CC, capture → Cage, rescue, game over, bot rescue, debug
   keeper.test.js          Keeper rules: unkillable, V before sight + still, moving/casting within 14u, V fails in its sight, V an infinite toggle, Dawn/Mind Fracture/Union break the lock, 1.5s capture → cage, bots hide
   hearts.test.js          Sin tasks in the Sin's room, carry tasks (one at a time, returned on capture), lockdown (no exit, Keeper out), scaled HP, each Sin's kit + telegraphs, Pride reflects, enrage + strip, coven scaling, slay → Heart destroyed + doors open, withdrawal, all 7 → Convergence, debug L
+  netcodec.test.js        the compact protocol: real snapshots round-trip, slow state only on change, removals, dropped frames, 4× smaller
+  scale.test.js           tick scheduler (slots, 20 Hz, isolation, stats), shared mansions with per-coven barriers
+  cluster.test.js         a 3-worker cluster: routing by coven code, other workers can't see it, /metrics, the rate limiter
+  models.test.js          seven wizard models (hair, eyes, ring, attire, budget), the Keeper's anatomy, the seven Sins' signatures, the vanity camera
   activity.test.js        the room graph; a task step / a spell / movement 1 room away → investigating that room (routed to its doorway); lockdowns ignored; crossings bend the patrol; V + still survives the inspection; moving / working the task / visible → locked on; every ping kind
   step7.test.js           the Tome's Hearts, heart status + tracker, billboard prompts agree with the server, footstep falloff
   _tasks.js, _seeds.js    helpers: do a Heart's tasks (incl. carry); a roomy seed
@@ -108,6 +114,15 @@ scripts/
 ```
 
 ---
+
+## Scaling to 1,500 players (Step 9)
+
+- **One process or a cluster.** `npm start` runs one process (the tests, a LAN game). `WORKERS=auto` (one per core) or `WORKERS=N` makes `server.js` a coordinator that never runs a game itself: it accepts each TCP connection, reads its first request line, and hands the socket (plus the bytes it read) to a worker over the cluster IPC channel (`worker.send(msg, socket)`; the worker `unshift`s the bytes and emits `connection` on its own HTTP server). The routing key is the coven: Socket.io clients connect with `?coven=ABCD`, `shardOf(code, workers)` (FNV-1a, `shared/shard.js`) names its worker, and a worker only ever creates codes that shard to itself, so a coven's four wizards always land together. Connections that name no coven (the page, a new coven) go to the least-loaded worker. The client learns its worker from a `hello { shard, shards }` and, before joining another worker's coven, reconnects there (`net.route(code)` re-attaches every handler). The coordinator serves `/metrics` itself (aggregated from the workers' 1 s reports) and restarts a worker that dies; SIGTERM shuts everything down cleanly.
+- **One tick loop per process** (`server/TickScheduler.js`): every running game is stepped by a single 20 Hz loop, spread over 4 staggered slots (each game still steps exactly every 50 ms; the event loop is never blocked longer than one slot). A game that throws is isolated and counted. A ring buffer of slot and cycle durations feeds `/metrics` (`tick.p95`: slot, `tick.cycleP95`: all slots of one tick, `tick.perRoom`).
+- **Shared mansions** (`server/MapCache.js`): `generateMansion(seed)` is pure and a game only writes `floor.dyn` (barriers), so every coven on one seed shares the map, the client map, the room graph and the Keeper's tile index (LRU, `MAP_CACHE`); each game gets its own floor wrappers. `MANSION_POOL=N` draws new seeds from a pool of N layouts for big deployments. The Keeper re-paths every 0.4–0.6 s, jittered so covens don't all path on the same tick.
+- **The compact protocol** (`shared/netcodec.js`): `Game.broadcastSnapshot()` runs `SnapshotEncoder.encode(snapshot)` → a **binary** frame of the fast fields (positions `Int16` at 1 cm, yaw `Uint8`, pitch `Int8`, velocities, HP / Ult, bit-packed booleans) and a **JSON delta** of every other field, per entity, only when it changed (new id ↔ index pairs, changed fields, removed fields, top-level `phase` / `fin`). A tick with a delta sends both in one reliable `game:s` packet; a tick with only movement sends the binary frame alone, **volatile**. (Never a volatile frame right behind a reliable one: socket.io drops it while the transport is busy, which froze the finale's transforms.) The client's `SnapshotDecoder` rebuilds the exact snapshot shape `onSnapshot()` always took. About 1.5 KB/s per player downstream under load. Reliable events (casts, task steps, captures, lockdowns…) are unchanged.
+- **Guards:** a token bucket per socket (`RATE`: burst 80, 60/s; floods dropped, persistent flooders disconnected), `maxHttpBufferSize` 64 KB, no per-message deflate, and a sweep every 30 s that removes covens with nobody connected or idle 15 minutes before starting.
+- **The load test** (`scripts/load-test-1500.js`): starts a cluster (by default half the cores; the rest drive the clients), forks simulator processes that open 1,500 real Socket.io connections in 375 covens (create → routed join → pick → ready → start, in debug covens so a wizard can step to a task), then plays at 10 Hz for 65 s: walking, sprinting, Lumos, V, casting, Sin tasks (which send the Keeper investigating). It asserts 1,500 players, 375 rooms, 0 errors, p95 tick < 16 ms, < 1.5 GB RSS. On the dev machine (M4, 10 cores): p95 ≈ 2.6 ms per slot (≈ 9.6 ms for the whole 50 ms cycle), ≈ 62 µs per room per tick, ≈ 1.2 GB peak across 5 workers + coordinator.
 
 ## Networking model
 
@@ -355,7 +370,9 @@ SpellSystem.update(dt): projectiles (substepped, impact on monster/solid) → `i
 - Per floor: one `InstancedMesh` per wall finish (wallpaper/rose/green/chapel stone/basement stone, chosen by the room a wall faces), per floor finish (marble/parquet/flagstone/velvet by room type), ceilings (coffered or stone), Gothic arches (two orientations), and the balustrade/slab edge around the void. Ceiling and floor tiles are omitted over the void and at each spiral's column.
 - **Materials:** `MeshStandardMaterial` with a canvas albedo + a normal map made from a painted height map (`heightToNormal`, Sobel) + a roughness map. Paintings sway via an `onBeforeCompile` UV patch on a shared `time` uniform. Window moonbeams and Lumos beams are additive cone `ShaderMaterial`s faded by view angle and distance. Sconces and chandeliers flicker with additive glow sprites, not lights.
 - Props are small primitive groups (built in `props.js`) with shared materials. Curio props get a `userData.fx(t, ctx)` animator. The tell is only shown once `revealHearts()` has been called with that prop's id.
-- **Post-processing:** RenderPass → OutputPass (tone mapping + sRGB) → one horror ShaderPass. With vsync off in headless Chrome the hunt stays above ~330 fps on the dev machine.
+- **Post-processing:** RenderPass → UnrealBloomPass (half resolution, on the HDR half-float buffer, threshold 2.0 so only authored emissives bloom: candle flames, wand tips, irises, spells, the Keeper's hearts and eyes) → OutputPass (ACES Filmic + sRGB) → one horror ShaderPass (grain, vignette, chromatic aberration, a permanent subtle lens barrel plus terror warp, desat, red, fade).
+- **Step 9 detail layer** (all `InstancedMesh`, one draw per kind per floor): crossed Gothic vault ribs on every roofed room tile with gilded bosses, stepped cornices and skirting along every wall face, stone pilasters, lathe-turned balusters, iron candle brackets with HDR flames that flicker per instance in the vertex shader, and a `Points` field of dust motes animated in its shader. Textures add a gold filigree set with a **metalness map**, carved mahogany, 1024² marble and stone; a very dim PMREM `RoomEnvironment` (`scene.environmentIntensity` 0.07) gives polished marble, gilding and steel something to reflect.
+- **Characters** (`client/js/entities/wizardModel.js`, `keeperModel.js`, `sinModels.js`, three-only so node tests build them): sculpted wizard heads (a deformed sphere + baked AO), hair as a sculpted mass + strand-grown tapered locks merged per wizard, tailored attire, a fresnel rim-light patch (`rimLight`); the Keeper's anatomy (clearcoat physical materials); seven bespoke Sin sculpts. `mergeByMaterial()` folds static sibling meshes that share a material into one. The lobby `Showcase` is its own small renderer with three-point lighting and bloom; the vanity camera (`player/VanityCam.js`, pure) places the camera and the local `WizardAvatar`.
 - **Light budget is fixed:** 1 hemisphere, 1 local wand spot (shadowed) + 1 fill point, 3 pooled teammate spots, up to 3 static candle points, 1 burst flash, 5 pooled spell lights (dragons, the Tree, auras, beacons and more) (fireball, scorch, Sacred flash). `SpellFX.prewarm()` compiles every spell material at load, so a spell's first cast doesn't hitch. Lights are never added or removed during play (avoiding shader recompiles), and inactive ones sit at intensity 0. Floors not in view are hidden.
 - Tone mapping is ACES Filmic, fog is black `FogExp2(0.075)`. Measured at about 120 fps in Chrome on the dev machine (DPR capped at 1.75). With vsync off in headless Chrome (Apple M4, 1280×720), the frame rate stays between about 250 and 670 fps while spell effects play (`npm run verify:browser`).
 
@@ -369,6 +386,7 @@ SpellSystem.update(dt): projectiles (substepped, impact on monster/solid) → `i
 | **4 · Monster** | ✅ Done. See *The Amalgam* above. |
 | **5 · Archon** | ✅ Done. See *The finale* above. |
 | **6 · v2.0** | ✅ Done. See the Amalgam notes above. |
+| **9 · v4.0** | ✅ Done. See *Scaling to 1,500 players* and *Rendering* above. |
 | **8 · v3.1** | ✅ Done. See *Activity & room movement* above. |
 | **7 · v3.0** | ✅ Done. See *Hearts, Sin tasks and the Sins*, *The Disillusionment Charm*, *The client (Steps 6–7)* and *The grimoire* above. |
 | **Next** | Mixing by ear with real players, real-multiplayer balance of the sight-lock, mobile controls. |

@@ -1,6 +1,6 @@
 {
   "name": "horcrux",
-  "version": "3.1.0",
+  "version": "4.0.0",
   "description": "HorCrux \u2014 3-4 player co-op survival horror (browser prototype)",
   "type": "module",
   "main": "server.js",
@@ -8,7 +8,8 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "test": "node --test test/*.test.js",
-    "verify:browser": "node scripts/verify-browser.mjs"
+    "verify:browser": "node scripts/verify-browser.mjs",
+    "test:scale1500": "node scripts/load-test-1500.js"
   },
   "engines": {
     "node": ">=20"

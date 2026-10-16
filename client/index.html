@@ -57,7 +57,13 @@
       </div>
     </header>
     <div class="lobby-body">
-      <div id="wizard-grid" class="wizard-grid"></div>
+      <div class="lobby-main">
+        <section class="showcase panel">
+          <canvas id="showcase" aria-label="Your wizard on the hero pedestal"></canvas>
+          <div id="showcase-info" class="showcase-info"></div>
+        </section>
+        <div id="wizard-grid" class="wizard-grid"></div>
+      </div>
       <aside class="panel roster-panel">
         <h3>The Coven</h3>
         <ol id="roster" class="roster"></ol>
@@ -134,7 +140,8 @@
         <tr><td>W A S D</td><td>Move</td></tr>
         <tr><td>Mouse</td><td>Look</td></tr>
         <tr><td>Shift</td><td>Sprint (loud)</td></tr>
-        <tr><td>C / Ctrl</td><td>Crouch (quiet)</td></tr>
+        <tr><td>Z / Ctrl</td><td>Crouch (quiet): Z toggles, Ctrl holds</td></tr>
+        <tr><td>C</td><td>Vanity camera: over the shoulder, circling you when you stand still</td></tr>
         <tr><td>1 – 4</td><td>Select spell 1–4 (the wand tip previews it)</td></tr>
         <tr><td>R</td><td>Select your Ultimate (charges over 5 minutes; once per game)</td></tr>
         <tr><td>LMB / Q</td><td>Cast the selected spell</td></tr>

@@ -4,6 +4,12 @@
 // the Foyer, spiral stairwells through the ceilings, the iron cage, every prop,
 // and the few static candle lights. Also owns prop-level effects (heart tells,
 // task states, heart destruction, the blood-rune barriers of a Sin's arena).
+//
+// Step 9: a dense layer of instanced architecture: ribbed Gothic vaulting with
+// gilded bosses in every room, carved cornices and skirting along every wall,
+// stone pilasters, lathe-turned balusters, iron candle brackets with flickering
+// emissive flames (they bloom), and drifting dust motes. Each kind is one draw
+// call per floor however many there are.
 
 import * as THREE from 'three';
 import { TILE, WALL_HEIGHT, TILE_WALL, TILE_DOOR, TILE_VOID, FLOOR, FLOOR_Y } from '/shared/constants.js';
@@ -85,7 +91,7 @@ export function buildMansion(map) {
   });
   const mats = {
     floor: {
-      marble: pbr(tex.marble, { roughness: 0.55, normalScale: new THREE.Vector2(0.5, 0.5) }),
+      marble: pbr(tex.marble, { roughness: 0.85, normalScale: new THREE.Vector2(0.35, 0.35), envMapIntensity: 1.6 }), // polished: chandeliers and spell fire glint in it
       parquet: pbr(tex.parquet, { roughness: 0.9 }),
       flag: pbr(tex.flagstones),
       velvet: pbr(tex.velvet, { normalScale: new THREE.Vector2(0.4, 0.4) }),
@@ -104,6 +110,28 @@ export function buildMansion(map) {
     brass: kit.materials.brass,
     iron: kit.materials.iron,
     frame: kit.materials.woodDark,
+    gold: kit.materials.goldFrame,
+    wax: kit.materials.wax,
+    // Candle flames: HDR-bright (they bloom) and flickering per instance (in the vertex shader).
+    flame: (() => {
+      const m = new THREE.MeshBasicMaterial({ color: new THREE.Color(1.0, 0.62, 0.26).multiplyScalar(5) });
+      m.onBeforeCompile = (sh) => {
+        sh.uniforms.uTime = kit.uniforms.time;
+        sh.vertexShader = sh.vertexShader
+          .replace('#include <common>', '#include <common>\nuniform float uTime;')
+          .replace('#include <begin_vertex>', `#include <begin_vertex>
+#ifdef USE_INSTANCING
+float seed = instanceMatrix[3].x * 7.13 + instanceMatrix[3].z * 3.71;
+#else
+float seed = 0.0;
+#endif
+float fl = 0.82 + 0.22 * sin(uTime * 13.0 + seed) + 0.12 * sin(uTime * 29.0 + seed * 2.3);
+transformed.y *= fl;
+transformed.xz *= 1.0 + 0.1 * sin(uTime * 17.0 + seed);`);
+      };
+      m.customProgramCacheKey = () => 'candle-flame';
+      return m;
+    })(),
   };
   // Stone and the arches repeat at a sensible scale.
   const archTex = mats.arch.map.clone();
@@ -115,6 +143,19 @@ export function buildMansion(map) {
   const floorGeo = new THREE.PlaneGeometry(TILE, TILE).rotateX(-Math.PI / 2);
   const ceilGeo = new THREE.PlaneGeometry(TILE, TILE).rotateX(Math.PI / 2).translate(0, WALL_HEIGHT, 0);
   const arch = archGeometry();
+  // Step 9: the instanced architecture's pieces.
+  const baluster = new THREE.LatheGeometry([[0.0, 0], [0.05, 0], [0.05, 0.06], [0.03, 0.1], [0.06, 0.32], [0.035, 0.5], [0.025, 0.7], [0.045, 0.82], [0.03, 0.9], [0.05, 0.94], [0.05, 1.0], [0, 1.0]]
+    .map(([r, y]) => new THREE.Vector2(r, y)), 8).translate(0, -0.5, 0);
+  const ribGeo = new THREE.BoxGeometry(TILE * Math.SQRT2, 0.12, 0.09);
+  const bossGeo = new THREE.SphereGeometry(0.1, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2).rotateX(Math.PI);
+  const corniceGeoX = moulding(TILE, 0.22, 0.16, false);
+  const corniceGeoZ = moulding(TILE, 0.22, 0.16, true);
+  const skirtGeoX = new THREE.BoxGeometry(TILE, 0.18, 0.05);
+  const skirtGeoZ = new THREE.BoxGeometry(0.05, 0.18, TILE);
+  const pilasterGeo = new THREE.BoxGeometry(0.3, WALL_HEIGHT, 0.1);
+  const bracketGeo = new THREE.BoxGeometry(0.05, 0.05, 0.22).translate(0, 0, -0.06);
+  const candleGeo = new THREE.CylinderGeometry(0.025, 0.028, 0.18, 8);
+  const flameGeo = new THREE.ConeGeometry(0.022, 0.1, 6).translate(0, 0.02, 0);
 
   // Holes: the basement stair's pit, and each spiral stair's column (a ceiling
   // hole on Floor 1 and a floor hole on Floor 2).
@@ -134,6 +175,7 @@ export function buildMansion(map) {
     const walls = {}, floors = {}, ceil = [], ceilStone = [];
     const archNS = [], archEW = [];
     const railX = [], railZ = [], posts = [], slabX = [], slabZ = [];
+    const ribs = [], bosses = [], corniceX = [], corniceZ = [], skirtX = [], skirtZ = [], pilasters = [], brackets = [], candles = [], flames = [];
 
     for (let y = 0; y < f.h; y++) {
       for (let x = 0; x < f.w; x++) {
@@ -173,7 +215,27 @@ export function buildMansion(map) {
           continue;
         }
         const key = `${f.id}:${x}:${y}`;
-        if (!ceilHoles.has(key) && !(f.id === FLOOR.GROUND && voidAbove(x, y))) (basement ? ceilStone : ceil).push([cx, 0, cz]);
+        const roofed = !ceilHoles.has(key) && !(f.id === FLOOR.GROUND && voidAbove(x, y));
+        if (roofed) (basement ? ceilStone : ceil).push([cx, 0, cz]);
+        // Ribbed vaulting: crossed stone ribs on every roofed room tile, a gilded boss where they meet.
+        if (roofed && roomOf(x, y)) {
+          ribs.push([cx, WALL_HEIGHT - 0.07, cz, Math.PI / 4], [cx, WALL_HEIGHT - 0.07, cz, -Math.PI / 4]);
+          if ((x + y) % 2 === 0) bosses.push([cx, WALL_HEIGHT - 0.12, cz]);
+        }
+        // Along every wall it faces: a carved cornice, a skirting board, a pilaster now and then,
+        // and (in halls and corridors) an iron candle bracket.
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          if (tile(x + dx, y + dy) !== TILE_WALL || t === TILE_DOOR) continue;
+          const fx = cx + dx * (TILE / 2 - 0.07), fz = cz + dy * (TILE / 2 - 0.07);
+          if (dx) { corniceZ.push([fx, WALL_HEIGHT - 0.14, fz]); skirtZ.push([fx, 0.09, fz]); } else { corniceX.push([fx, WALL_HEIGHT - 0.14, fz]); skirtX.push([fx, 0.09, fz]); }
+          if ((x * 3 + y * 5 + (dx + 2) * 7 + (dy + 2)) % 5 === 0) pilasters.push([cx + dx * (TILE / 2 - 0.06), WALL_HEIGHT / 2, cz + dy * (TILE / 2 - 0.06), dx ? Math.PI / 2 : 0]);
+          if (!roomOf(x, y) && !basement && (x + y) % 3 === 0) {
+            const bx = cx + dx * (TILE / 2 - 0.16), bz = cz + dy * (TILE / 2 - 0.16);
+            brackets.push([bx, 2.05, bz, Math.atan2(dx, dy)]);
+            candles.push([bx - dx * 0.08, 2.18, bz - dy * 0.08]);
+            flames.push([bx - dx * 0.08, 2.33, bz - dy * 0.08]);
+          }
+        }
         if (!floorHoles.has(key)) {
           const r = roomOf(x, y);
           const kind = basement ? 'flag' : r ? (FLOOR_KIND[r.type] ?? 'parquet') : 'velvet';
@@ -197,7 +259,21 @@ export function buildMansion(map) {
     if (archEW.length) g.add(instanced(arch, mats.arch, archEW));
     if (railX.length) g.add(instanced(new THREE.BoxGeometry(TILE, 0.08, 0.12), mats.rail, railX));
     if (railZ.length) g.add(instanced(new THREE.BoxGeometry(0.12, 0.08, TILE), mats.rail, railZ));
-    if (posts.length) g.add(instanced(new THREE.CylinderGeometry(0.03, 0.04, 1.0, 6), mats.rail, posts, { cast: false }));
+    if (posts.length) g.add(instanced(baluster, mats.rail, posts, { cast: false }));
+    if (ribs.length) g.add(instanced(ribGeo, mats.arch, ribs, { cast: false }));
+    if (bosses.length) g.add(instanced(bossGeo, mats.gold, bosses, { cast: false }));
+    const trim = basement ? mats.arch : mats.rail;
+    if (corniceX.length) g.add(instanced(corniceGeoX, trim, corniceX, { cast: false }));
+    if (corniceZ.length) g.add(instanced(corniceGeoZ, trim, corniceZ, { cast: false }));
+    if (skirtX.length) g.add(instanced(skirtGeoX, trim, skirtX, { cast: false }));
+    if (skirtZ.length) g.add(instanced(skirtGeoZ, trim, skirtZ, { cast: false }));
+    if (pilasters.length) g.add(instanced(pilasterGeo, mats.arch, pilasters, { cast: false }));
+    if (brackets.length) {
+      g.add(instanced(bracketGeo, mats.iron, brackets, { cast: false }));
+      g.add(instanced(candleGeo, mats.wax, candles, { cast: false }));
+      g.add(instanced(flameGeo, mats.flame, flames, { cast: false, receive: false }));
+    }
+    g.add(dustMotes(map, f, kit.uniforms.time));
     if (slabX.length) g.add(instanced(new THREE.BoxGeometry(TILE, 0.6, 0.1), mats.frame, slabX, { cast: false }));
     if (slabZ.length) g.add(instanced(new THREE.BoxGeometry(0.1, 0.6, TILE), mats.frame, slabZ, { cast: false }));
 
@@ -530,6 +606,70 @@ export function buildMansion(map) {
 
     burst,
   };
+}
+
+/** A stepped crown moulding (cornice) one tile long: three stacked, receding bands. */
+function moulding(len, h, d, alongZ) {
+  const parts = [[d, h * 0.3, 0], [d * 0.7, h * 0.35, h * 0.3], [d * 0.45, h * 0.35, h * 0.65]];
+  const geos = parts.map(([dd, hh, y]) => (alongZ ? new THREE.BoxGeometry(dd, hh, len) : new THREE.BoxGeometry(len, hh, dd)).translate(0, y - h / 2 + hh / 2, 0));
+  const merged = new THREE.BufferGeometry();
+  const pos = [], nrm = [], uv = [], idx = [];
+  let base = 0;
+  for (const g of geos) {
+    const gi = g.toNonIndexed();
+    pos.push(...gi.attributes.position.array);
+    nrm.push(...gi.attributes.normal.array);
+    uv.push(...gi.attributes.uv.array);
+    for (let i = 0; i < gi.attributes.position.count; i++) idx.push(base + i);
+    base += gi.attributes.position.count;
+  }
+  merged.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  merged.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+  merged.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  merged.setIndex(idx);
+  return merged;
+}
+
+/** Dust motes drifting through one floor's rooms: a single Points draw, animated in its shader. */
+function dustMotes(map, f, time) {
+  const pts = [];
+  for (const r of map.rooms) {
+    if (r.floor !== f.id) continue;
+    const n = Math.min(90, r.w * r.h);
+    for (let i = 0; i < n; i++) pts.push((r.x + Math.random() * r.w) * TILE, 0.3 + Math.random() * (WALL_HEIGHT - 0.6), (r.y + Math.random() * r.h) * TILE);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uTime: time, uColor: { value: new THREE.Color(0xffe8c8) } },
+    vertexShader: /* glsl */ `
+      uniform float uTime;
+      varying float vA;
+      void main() {
+        vec3 p = position;
+        float s = position.x * 1.7 + position.z * 2.3;
+        p.x += sin(uTime * 0.21 + s) * 0.35;
+        p.y += sin(uTime * 0.13 + s * 1.3) * 0.25;
+        p.z += cos(uTime * 0.17 + s * 0.7) * 0.35;
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        gl_Position = projectionMatrix * mv;
+        float z = -mv.z;
+        gl_PointSize = clamp(26.0 / max(z, 0.1), 0.0, 7.0);
+        // Visible from 1.5u to 14u: never a blob right in front of the lens.
+        vA = smoothstep(14.0, 4.0, z) * smoothstep(1.2, 2.5, z) * (0.55 + 0.45 * sin(uTime * 0.7 + s * 3.0));
+      }`,
+    fragmentShader: /* glsl */ `
+      uniform vec3 uColor;
+      varying float vA;
+      void main() {
+        float d = length(gl_PointCoord - 0.5);
+        gl_FragColor = vec4(uColor, smoothstep(0.5, 0.0, d) * vA * 0.22);
+      }`,
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  });
+  const points = new THREE.Points(geo, mat);
+  points.frustumCulled = false;
+  return points;
 }
 
 function heartbeatLocal(t) {

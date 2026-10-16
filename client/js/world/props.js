@@ -13,17 +13,26 @@ const std = (color, rough = 0.85, metal = 0, extra = {}) =>
   new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: metal, ...extra });
 
 export function createPropKit(tex) {
+  // Step 9: full PBR sets for the carved wood and the gilding.
+  const carved = (color, rough) => new THREE.MeshStandardMaterial({
+    color, map: tex.mahogany.map, normalMap: tex.mahogany.normalMap, roughnessMap: tex.mahogany.roughnessMap, roughness: rough,
+    normalScale: new THREE.Vector2(0.8, 0.8),
+  });
+  const gilded = (color, rough, metal) => new THREE.MeshStandardMaterial({
+    color, map: tex.gold.map, normalMap: tex.gold.normalMap, roughnessMap: tex.gold.roughnessMap, metalnessMap: tex.gold.metalnessMap,
+    roughness: rough, metalness: metal, envMapIntensity: 1.6,
+  });
   const M = {
-    woodDark: std(0x24160e, 0.75),
-    woodMid: std(0x3d2516, 0.8),
+    woodDark: carved(0x8a6a58, 0.95),
+    woodMid: carved(0xb08a6a, 1),
     woodRed: std(0x3a1510, 0.6),
     fabricRed: std(0x4a0c12, 1),
     fabricGreen: std(0x18261b, 1),
     fabricDark: std(0x161214, 1),
     velvet: std(0x2a0a10, 0.95),
     felt: std(0x0f2a18, 1),
-    brass: std(0x8a6a2a, 0.35, 0.85),
-    goldFrame: std(0x6a5020, 0.4, 0.7),
+    brass: std(0x8a6a2a, 0.3, 0.9, { envMapIntensity: 1.6 }),
+    goldFrame: gilded(0xffffff, 0.75, 1),
     iron: std(0x2b2b30, 0.45, 0.75),
     stone: std(0x5a5550, 0.95),
     stoneDark: std(0x3a3632, 0.95),
@@ -37,7 +46,7 @@ export function createPropKit(tex) {
     deadPlant: std(0x2a2418, 1),
     keys: std(0xd8d0c0, 0.4),
     bloodWater: std(0x2a0204, 0.1, 0, { emissive: 0x100000 }),
-    flame: new THREE.MeshBasicMaterial({ color: 0xffb050 }),
+    flame: new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffb050).multiplyScalar(4) }), // HDR: candles bloom
     ember: std(0x200000, 1, 0, { emissive: 0x6a1000, emissiveIntensity: 0.6 }),
     books: new THREE.MeshStandardMaterial({ map: tex.books, roughness: 0.9 }),
     clockFace: new THREE.MeshStandardMaterial({ map: tex.clockFace, roughness: 0.6 }),

@@ -418,7 +418,24 @@ export class AudioEngine {
         const tt = t + 0.1 + i * 0.32;
         this.osc('sine', 52, tt, 0.18).connect(this.env(tt, 0.004, 0.16, 0.9 - i * 0.25)).connect(o);
       }
+      // Step 9: its split mandibles snapping open, the spider limbs' bones
+      // cracking as they grip the edges of your sight: wet, splintering crunches.
+      for (let i = 0; i < 7; i++) this.boneCrunch(t + 0.04 + i * (0.09 + Math.random() * 0.08), 0.55 + Math.random() * 0.45);
     }
+  }
+
+  /** A wet bone crunch: a splintering crack, a gristly squelch, a low knock. */
+  boneCrunch(t, vol = 1) {
+    const o = this.out({ reverb: 0.15, gain: vol });
+    for (let k = 0; k < 4; k++) {
+      const tt = t + k * rand(0.004, 0.012);
+      this.noiseSrc(tt, 0.03).connect(this.filter('highpass', rand(2200, 4200), 1)).connect(this.env(tt, 0.0008, 0.025, 0.9)).connect(o);
+    }
+    const sq = this.noiseSrc(t + 0.01, 0.12);
+    const bp = this.filter('bandpass', rand(500, 900), 3.5);
+    bp.frequency.exponentialRampToValueAtTime(rand(180, 320), t + 0.12);
+    sq.connect(bp).connect(this.env(t + 0.01, 0.004, 0.11, 0.8)).connect(o);
+    this.osc('sine', rand(70, 110), t, 0.08).connect(this.env(t, 0.002, 0.07, 0.7)).connect(o);
   }
 
   // ---- Step 6 cues -------------------------------------------------------------------

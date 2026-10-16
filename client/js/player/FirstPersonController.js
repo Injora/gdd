@@ -47,7 +47,7 @@ export class FirstPersonController {
     this._onKeyDown = (e) => {
       if (e.repeat) return;
       this.keys.add(e.code);
-      if (e.code === 'KeyC' && this.enabled) this.crouchToggle = !this.crouchToggle;
+      if (e.code === 'KeyZ' && this.enabled) this.crouchToggle = !this.crouchToggle; // (C is the vanity camera)
     };
     this._onKeyUp = (e) => this.keys.delete(e.code);
     this._onBlur = () => this.keys.clear();

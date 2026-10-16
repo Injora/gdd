@@ -22,6 +22,8 @@
 //            numbers and the death dissolve, the footstep proximity bar.
 //   Step 8   activity: a spell sends the Keeper marching to your room (loud
 //            footsteps first); V + standing still survives its inspection.
+//   Step 9   the lobby's 3D hero showcase, the vanity camera (C), the Keeper's
+//            new anatomy up close, the bespoke Sin bosses (bloom, PBR) at 60+ fps.
 // Screenshots land in ./verify-output/ (git-ignored).
 //
 // Usage: npm run verify:browser    (CHROME_PATH=/path/to/chrome to override)
@@ -134,6 +136,18 @@ async function main() {
 
     await page.click('#btn-solo');
     await page.waitForSelector('.wizard-card');
+    // Step 9: the lobby's 3D hero showcase.
+    await page.waitForFunction(() => window.__lobby?.hero?.current && window.__lobby.hero.t > 0.3, { timeout: 8000 }).catch(() => failures.push('the lobby hero showcase never rendered'));
+    await shot('showcase-1-lobby-hero');
+    for (const n of [3, 6]) {
+      await page.hover(`.wizard-card:nth-child(${n})`);
+      await sleep(900);
+      const id = await page.evaluate(() => window.__lobby.hero.current?.id);
+      await shot(`showcase-${n === 3 ? 2 : 3}-${id}`);
+    }
+    const shown = await page.evaluate(() => ({ id: window.__lobby.hero.current?.id, models: window.__lobby.hero.models.size, running: window.__lobby.hero.running }));
+    check(shown.models >= 2 && shown.running, `showcase did not follow the hovered wizards (${JSON.stringify(shown)})`);
+    console.log(`lobby hero showcase: ${shown.models} wizards shown on the pedestal`);
     await page.click('.wizard-card');
     await sleep(300);
     await page.click('#btn-start');
@@ -296,6 +310,21 @@ async function main() {
     await page.keyboard.press('KeyF'); // Lumos again
     const avatarCount = await page.evaluate(() => [...window.__game.avatars.values()].filter((a) => a.group.visible).length);
     check(avatarCount >= 2, `teammate avatars not visible (${avatarCount})`);
+    // Step 9: the vanity camera (C): your own wizard, over the shoulder, then circling.
+    await page.keyboard.press('KeyC');
+    await sleep(900);
+    const vanity = await page.evaluate(() => ({ on: window.__game.vanity.on, self: window.__game.selfAvatar?.group.visible, rig: window.__game.wandRig.visible }));
+    check(vanity.on && vanity.self && !vanity.rig, `vanity camera did not show your wizard (${JSON.stringify(vanity)})`);
+    await shot('vanity-1-third-person');
+    await sleep(3400); // stand still: it circles round
+    const orbit = await page.evaluate(() => window.__game.vanity.orbit);
+    check(orbit > 0.2, `the vanity camera did not orbit (${orbit})`);
+    await shot('vanity-2-orbit');
+    fpsSamples.push(await measureFps());
+    await page.keyboard.press('KeyC');
+    await sleep(300);
+    check(!(await page.evaluate(() => window.__game.vanity.on)), 'C did not return to first person');
+    console.log(`vanity camera: third person, orbiting ${orbit.toFixed(2)} rad, back to first person`);
     // 4. The input rework: 1–4 / R only select; the trigger (Q here, LMB in play) fires.
     await page.evaluate(() => { window.__events.length = 0; });
     await page.keyboard.press('Digit3');
@@ -815,6 +844,31 @@ async function main() {
     check(investigate && inspecting && walkedOut && survived, `V + still did not survive the inspection (inspecting ${inspecting}, walked out ${walkedOut}, survived ${survived})`);
     console.log(`spell → investigating (eta ${investigate?.eta}s) · footsteps heard ${heard} · it looked around ${inspecting} · left without you ${survived}`);
     await page.keyboard.press('KeyV'); // visible again
+    // Step 9: the Keeper's new anatomy, up close (held still in front of you).
+    {
+      const g = liveGame();
+      const me = g.players.get(self0);
+      const m = g.monster;
+      const fx = -Math.sin(me.yaw), fz = -Math.cos(me.yaw);
+      const hold = () => { m.place({ x: me.x + fx * 4.5, z: me.z + fz * 4.5, floor: me.floor }); m.yaw = Math.atan2(fx, fz); m.hidden = false; };
+      const update = m.update;
+      m.setState('stalking');
+      hold();
+      m.update = () => { hold(); };
+      await page.evaluate(() => { window.__game.controller.pitch = 0.22; window.__game.terror = 0; });
+      await sleep(1500);
+      await shot('keeper-1-anatomy-closeup');
+      m.state = 'hunting'; // the pose only: its split mandible unhinged to its chest, the spider limbs flung forward
+      await sleep(900);
+      await shot('keeper-2-hunting-jaw-unhinged');
+      const jaw = await page.evaluate(() => window.__game.monsters.get('amalgam')?.mouthK ?? 0);
+      check(jaw > 0.6, `the Keeper's jaw did not unhinge when hunting (${jaw})`);
+      fpsSamples.push(await measureFps());
+      m.update = update;
+      m.setState('stalking');
+      m.place(m.hiddenSpot(me.floor, 20));
+      console.log(`Keeper up close: 7 hearts, spider limbs, split mandible (open ${jaw.toFixed(2)} hunting)`);
+    }
     {
       // The bots come back up beside the player (the chant needs every wizard at the altar).
       const g = liveGame();
@@ -861,9 +915,15 @@ async function main() {
     const bossStart = await waitEvent('boss:start', 6000);
     check(bossStart, 'the Unbound Amalgam never appeared');
     // Keep the Archon standing through the screenshots (verification only).
+    // ...and the boss above the portal threshold until we open it ourselves (the bots'
+    // Masteries could otherwise drag it under while we take pictures).
+    const { FINALE } = await import('../shared/finale.js');
+    let holdBoss = true;
     const keepAlive = setInterval(() => {
-      const A = liveGame()?.finale?.archon;
+      const fin = liveGame()?.finale;
+      const A = fin?.archon;
       if (A) A.hp = Math.max(A.hp, 300);
+      if (holdBoss && fin?.stage === 'boss') fin.boss.bossHp = Math.max(fin.boss.bossHp, FINALE.BOSS_HP * 0.5);
     }, 200);
     await sleep(800);
     const faceBoss = () => page.evaluate(() => {
@@ -891,12 +951,16 @@ async function main() {
     const { MASTERIES } = await import('../shared/finale.js');
     const masteryCast = [];
     for (const M of MASTERIES) {
-      await page.waitForFunction((id) => !window.__game.fin?.mr?.[id], { timeout: 15000 }, M.id).catch(() => {});
-      await faceBoss();
-      await page.evaluate(() => { window.__events = window.__events.filter((e) => e.type !== 'mastery'); });
-      await page.keyboard.press(`Digit${M.key}`);
-      await page.keyboard.press('KeyQ');
-      const ev = await waitEvent('mastery', 3000);
+      // (A bot may fire its own element's Mastery a moment before us: the cooldowns are shared. Retry then.)
+      let ev = null;
+      for (let attempt = 0; attempt < 3 && ev?.id !== M.id; attempt++) {
+        await page.waitForFunction((id) => !window.__game.fin?.mr?.[id], { timeout: 15000 }, M.id).catch(() => {});
+        await faceBoss();
+        await page.evaluate(() => { window.__events = window.__events.filter((e) => e.type !== 'mastery'); });
+        await page.keyboard.press(`Digit${M.key}`);
+        await page.keyboard.press('KeyQ');
+        ev = await waitEvent('mastery', 3000);
+      }
       await sleep(M.id === 'm_fire_dragon' || M.id === 'm_wind_dragon' ? 700 : 350);
       await shot(`finale-4-mastery-${M.key}-${M.id.slice(2)}`);
       const mine = ev && ev.id === M.id;
@@ -922,7 +986,24 @@ async function main() {
     fpsSamples.push(await measureFps());
 
     // The Hell Portal
+    holdBoss = false;
+    await page.evaluate(() => { window.__events.length = 0; });
     await page.keyboard.press('KeyN'); // debug: boss to 25%, wards spent
+    // Hold E through the fight: the moment the rift opens we grab it (the bots grapple
+    // too and can drag it under within a second), and note that we really were dragging.
+    await page.evaluate(() => {
+      window.__grappled = 0;
+      window.__grappleLog = [];
+      let last = '';
+      const id = setInterval(() => {
+        const g = window.__game;
+        const st = JSON.stringify({ st: g.fin?.stage, gr: g.fin?.gr, on: g.grappling, E: g.controller.keys.has('KeyE'), am: g.archonMode(), ph: g.phase });
+        if (st !== last) { window.__grappleLog.push(st); last = st; }
+        if (g.grappling && (g.fin?.gr ?? 0) >= 1) { window.__grappled = Math.max(window.__grappled, g.fin.gr); }
+        if (g.fin?.stage === 'sealing' || g.phase !== 'archon') clearInterval(id);
+      }, 16);
+    });
+    await page.keyboard.down('KeyE');
     let portal = null;
     for (let i = 0; i < 40 && !portal; i++) {
       await faceBoss();
@@ -932,7 +1013,9 @@ async function main() {
       portal = await waitEvent('portal:open', 1000);
     }
     check(portal, 'the Hell Portal never opened');
-    await sleep(1200);
+    await page.waitForFunction(() => window.__grappled >= 1, { timeout: 3000 }).catch(() => {});
+    const grapple = await page.evaluate(() => window.__grappled);
+    await sleep(900);
     await page.evaluate(() => {
       const g = window.__game;
       const P = g.fin?.portal;
@@ -941,10 +1024,8 @@ async function main() {
     });
     await sleep(300);
     await shot('finale-6-hell-portal');
-    await page.keyboard.down('KeyE'); // Soul Grapple
-    await sleep(600);
-    const grapple = await page.evaluate(() => window.__game.fin?.gr ?? 0);
     console.log(`Soul Grapple: ${grapple} wizard(s) dragging`);
+    if (!(grapple >= 1)) console.log(`  grapple timeline:\n    ${(await page.evaluate(() => window.__grappleLog)).join('\n    ')}`);
     check(grapple >= 1, 'holding E did not Soul Grapple');
     let sealing = null;
     for (let i = 0; i < 60 && !sealing; i++) {

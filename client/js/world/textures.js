@@ -444,7 +444,7 @@ function marbleVeins(ctx, rng, x, y, w, h, color, n) {
 
 /** Polished black-and-white checkered marble (the Foyer, the gallery, the ballroom). */
 function marbleChecker(rng) {
-  const S = 512, T = S / 2;
+  const S = 1024, T = S / 2; // Step 9: twice the resolution
   const L = layered(S, S);
   for (let j = 0; j < 2; j++) {
     for (let i = 0; i < 2; i++) {
@@ -454,23 +454,24 @@ function marbleChecker(rng) {
       if (dark) { g.addColorStop(0, '#16151a'); g.addColorStop(1, '#0b0a0e'); } else { g.addColorStop(0, '#d9d2c4'); g.addColorStop(1, '#bfb6a6'); }
       L.ctx.fillStyle = g;
       L.ctx.fillRect(x, y, T, T);
-      marbleVeins(L.ctx, rng, x, y, T, T, dark ? 'rgba(160,150,140,0.25)' : 'rgba(70,60,55,0.28)', 7);
-      marbleVeins(L.ctx, rng, x, y, T, T, dark ? 'rgba(220,210,200,0.12)' : 'rgba(40,30,30,0.15)', 12);
-      L.rctx.fillStyle = dark ? '#2a2a2a' : '#3a3a3a'; // polished
+      marbleVeins(L.ctx, rng, x, y, T, T, dark ? 'rgba(160,150,140,0.25)' : 'rgba(70,60,55,0.28)', 14);
+      marbleVeins(L.ctx, rng, x, y, T, T, dark ? 'rgba(220,210,200,0.12)' : 'rgba(40,30,30,0.15)', 24);
+      marbleVeins(L.hctx, rng, x, y, T, T, 'rgba(110,110,110,0.5)', 10); // veins etched a hair lower
+      L.rctx.fillStyle = dark ? '#3a3a3a' : '#484848'; // polished: a wet-looking sheen, not a mirror
       L.rctx.fillRect(x, y, T, T);
     }
   }
   // Grout
   L.ctx.fillStyle = '#4a4238';
   L.hctx.fillStyle = '#202020';
-  for (const k of [0, T, S - 2]) {
-    L.ctx.fillRect(k, 0, 3, S); L.ctx.fillRect(0, k, S, 3);
-    L.hctx.fillRect(k, 0, 3, S); L.hctx.fillRect(0, k, S, 3);
+  for (const k of [0, T, S - 4]) {
+    L.ctx.fillRect(k, 0, 5, S); L.ctx.fillRect(0, k, S, 5);
+    L.hctx.fillRect(k, 0, 5, S); L.hctx.fillRect(0, k, S, 5);
   }
   L.rctx.fillStyle = '#b0b0b0';
-  for (const k of [0, T, S - 2]) { L.rctx.fillRect(k, 0, 3, S); L.rctx.fillRect(0, k, S, 3); }
-  stains(L.ctx, S, S, rng, 3, 'rgba(0,0,0,0.18)', 120);
-  stains(L.rctx, S, S, rng, 6, 'rgba(160,160,160,0.25)', 90); // dull, scuffed patches
+  for (const k of [0, T, S - 4]) { L.rctx.fillRect(k, 0, 5, S); L.rctx.fillRect(0, k, S, 5); }
+  stains(L.ctx, S, S, rng, 3, 'rgba(0,0,0,0.18)', 240);
+  stains(L.rctx, S, S, rng, 8, 'rgba(160,160,160,0.25)', 180); // dull, scuffed patches
   grain(L.ctx, S, S, rng, 8);
   return { map: toTexture(L.c), normalMap: heightToNormal(L.hc, 2), roughnessMap: toTexture(L.rc, { srgb: false }) };
 }
@@ -587,7 +588,7 @@ function panelledWall(rng, base, motif) {
 
 /** Rough-hewn Gothic stone blocks with deep mortar joints (basement, chapel, arches). */
 function gothicStone(rng, tint = [0, 0, 0]) {
-  const W2 = 256, H2 = 512;
+  const W2 = 512, H2 = 1024; // Step 9: twice the resolution, deeper joints
   const L = layered(W2, H2);
   L.ctx.fillStyle = '#141210';
   L.ctx.fillRect(0, 0, W2, H2);
@@ -595,27 +596,35 @@ function gothicStone(rng, tint = [0, 0, 0]) {
   L.hctx.fillRect(0, 0, W2, H2);
   L.rctx.fillStyle = '#f0f0f0';
   L.rctx.fillRect(0, 0, W2, H2);
-  const rowH = 46;
+  const rowH = 92;
   for (let y = 0, row = 0; y < H2; y += rowH, row++) {
-    let x = row % 2 ? -50 : 0;
+    let x = row % 2 ? -100 : 0;
     while (x < W2) {
-      const w = rng.int(64, 120);
+      const w = rng.int(128, 240);
       const l = rng.int(44, 70);
       L.ctx.fillStyle = `rgb(${l + tint[0]},${l - 4 + tint[1]},${l - 10 + tint[2]})`;
-      L.ctx.fillRect(x + 3, y + 3, w - 6, rowH - 6);
+      L.ctx.fillRect(x + 5, y + 5, w - 10, rowH - 10);
       const g = L.hctx.createRadialGradient(x + w / 2, y + rowH / 2, 4, x + w / 2, y + rowH / 2, w * 0.6);
       g.addColorStop(0, gray(rng.int(200, 240)));
       g.addColorStop(1, '#909090');
       L.hctx.fillStyle = g;
-      L.hctx.fillRect(x + 3, y + 3, w - 6, rowH - 6);
+      L.hctx.fillRect(x + 5, y + 5, w - 10, rowH - 10);
+      // Chisel marks and seeping damp (slick: lower roughness).
+      for (let k = 0; k < 4; k++) {
+        L.hctx.strokeStyle = 'rgba(80,80,80,0.5)';
+        L.hctx.lineWidth = 2;
+        const cx = x + rng.float(10, w - 10), cy = y + rng.float(10, rowH - 10);
+        L.hctx.beginPath(); L.hctx.moveTo(cx, cy); L.hctx.lineTo(cx + rng.float(-14, 14), cy + rng.float(4, 12)); L.hctx.stroke();
+      }
       x += w;
     }
   }
-  stains(L.ctx, W2, H2, rng, 10, 'rgba(20,30,15,0.45)', 80);
-  stains(L.ctx, W2, H2, rng, 6, 'rgba(0,0,0,0.5)', 60);
+  stains(L.ctx, W2, H2, rng, 14, 'rgba(20,30,15,0.45)', 160);
+  stains(L.ctx, W2, H2, rng, 8, 'rgba(0,0,0,0.5)', 120);
+  stains(L.rctx, W2, H2, rng, 8, 'rgba(60,60,60,0.7)', 120); // wet streaks
   grain(L.ctx, W2, H2, rng, 30);
   grain(L.hctx, W2, H2, rng, 40);
-  return { map: toTexture(L.c), normalMap: heightToNormal(L.hc, 3.5), roughnessMap: toTexture(L.rc, { srgb: false }) };
+  return { map: toTexture(L.c), normalMap: heightToNormal(L.hc, 4.5), roughnessMap: toTexture(L.rc, { srgb: false }) };
 }
 
 /** Square flagstones (basement, chapel, armory, kitchen). */
@@ -703,6 +712,103 @@ function cofferedCeiling(rng) {
   stains(L.ctx, S, S, rng, 8, 'rgba(10,8,5,0.5)', 70);
   grain(L.ctx, S, S, rng, 16);
   return { map: toTexture(L.c), normalMap: heightToNormal(L.hc, 2) };
+}
+
+// ---------------------------------------------------------------------------
+// Step 9: metal and carved wood with full PBR sets (albedo, normal, roughness,
+// and for metals a metalness map), so gold reads as gold under a wand light and
+// the mansion's dim environment.
+
+/** Ornate gold filigree on dark lacquer: frames, mounts, crowns, inlays. */
+function goldFiligree(rng) {
+  const S = 512;
+  const L = layered(S, S);
+  const [mc, mctx] = makeCanvas(S, S);
+  L.ctx.fillStyle = '#2a1c0c';
+  L.ctx.fillRect(0, 0, S, S);
+  L.rctx.fillStyle = '#9a9a9a';
+  L.rctx.fillRect(0, 0, S, S);
+  mctx.fillStyle = '#000';
+  mctx.fillRect(0, 0, S, S);
+  const scroll = (ctx, x, y, r, a0, color, w) => {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = w;
+    ctx.beginPath();
+    for (let t = 0; t < 1; t += 0.02) {
+      const a = a0 + t * Math.PI * 3.2, rr = r * (1 - t * 0.85);
+      const px = x + Math.cos(a) * rr, py = y + Math.sin(a) * rr;
+      if (t === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+  };
+  for (let gy = 0; gy < S; gy += 128) {
+    for (let gx = 0; gx < S; gx += 128) {
+      for (let k = 0; k < 4; k++) {
+        const x = gx + 64 + Math.cos(k * Math.PI / 2) * 30, y = gy + 64 + Math.sin(k * Math.PI / 2) * 30;
+        const a0 = k * Math.PI / 2 + rng.float(-0.2, 0.2);
+        scroll(L.ctx, x, y, 30, a0, '#d8aa48', 7);
+        scroll(L.hctx, x, y, 30, a0, '#f0f0f0', 7);
+        scroll(L.rctx, x, y, 30, a0, '#3a3a3a', 7);
+        scroll(mctx, x, y, 30, a0, '#ffffff', 8);
+      }
+      L.ctx.fillStyle = '#e8c060';
+      L.ctx.beginPath(); L.ctx.arc(gx + 64, gy + 64, 9, 0, Math.PI * 2); L.ctx.fill();
+      L.hctx.fillStyle = '#ffffff';
+      L.hctx.beginPath(); L.hctx.arc(gx + 64, gy + 64, 9, 0, Math.PI * 2); L.hctx.fill();
+      mctx.fillStyle = '#ffffff';
+      mctx.beginPath(); mctx.arc(gx + 64, gy + 64, 10, 0, Math.PI * 2); mctx.fill();
+    }
+  }
+  // A beaded gold border on every tile edge.
+  for (let k = 0; k < S; k += 16) {
+    for (const [x, y] of [[k, 4], [4, k]]) {
+      L.ctx.fillStyle = '#c89a3c'; L.ctx.beginPath(); L.ctx.arc(x, y, 4, 0, Math.PI * 2); L.ctx.fill();
+      L.hctx.fillStyle = '#e0e0e0'; L.hctx.beginPath(); L.hctx.arc(x, y, 4, 0, Math.PI * 2); L.hctx.fill();
+      mctx.fillStyle = '#ffffff'; mctx.beginPath(); mctx.arc(x, y, 5, 0, Math.PI * 2); mctx.fill();
+    }
+  }
+  stains(L.ctx, S, S, rng, 6, 'rgba(10,6,2,0.35)', 80); // tarnish
+  stains(L.rctx, S, S, rng, 6, 'rgba(200,200,200,0.4)', 70);
+  grain(L.ctx, S, S, rng, 10);
+  return { map: toTexture(L.c), normalMap: heightToNormal(L.hc, 4), roughnessMap: toTexture(L.rc, { srgb: false }), metalnessMap: toTexture(mc, { srgb: false }) };
+}
+
+/** Deeply carved dark mahogany: grain, raised panels, acanthus relief. */
+function carvedMahogany(rng) {
+  const S = 512;
+  const L = layered(S, S);
+  L.ctx.fillStyle = '#2a120a';
+  L.ctx.fillRect(0, 0, S, S);
+  L.rctx.fillStyle = '#6a6a6a';
+  L.rctx.fillRect(0, 0, S, S);
+  // Grain
+  for (let i = 0; i < 160; i++) {
+    const y = rng.float(0, S);
+    L.ctx.strokeStyle = `rgba(${rng.int(8, 30)},${rng.int(2, 10)},0,${rng.float(0.2, 0.5)})`;
+    L.ctx.lineWidth = rng.float(0.5, 2);
+    L.ctx.beginPath();
+    L.ctx.moveTo(0, y);
+    L.ctx.bezierCurveTo(S * 0.3, y + rng.float(-10, 10), S * 0.7, y + rng.float(-10, 10), S, y + rng.float(-6, 6));
+    L.ctx.stroke();
+    L.hctx.strokeStyle = `rgba(110,110,110,0.4)`;
+    L.hctx.beginPath(); L.hctx.moveTo(0, y); L.hctx.lineTo(S, y); L.hctx.stroke();
+  }
+  // Raised, bevelled panels with acanthus leaves.
+  for (const [px, py] of [[24, 24], [280, 24], [24, 280], [280, 280]]) {
+    const g = L.hctx.createLinearGradient(px, py, px + 208, py + 208);
+    g.addColorStop(0, '#d8d8d8'); g.addColorStop(1, '#9a9a9a');
+    L.hctx.fillStyle = '#3a3a3a'; L.hctx.fillRect(px - 6, py - 6, 220, 220);
+    L.hctx.fillStyle = g; L.hctx.fillRect(px, py, 208, 208);
+    L.ctx.fillStyle = 'rgba(70,30,14,0.55)'; L.ctx.fillRect(px, py, 208, 208);
+    L.rctx.fillStyle = '#4a4a4a'; L.rctx.fillRect(px, py, 208, 208); // waxed, polished faces
+    for (let k = 0; k < 4; k++) {
+      damaskMotif(L.ctx, px + 104, py + 104, 46 - k * 6, `rgba(${40 + k * 10},${16 + k * 4},6,0.7)`);
+      damaskMotif(L.hctx, px + 104, py + 104, 46 - k * 6, `rgb(${240 - k * 20},${240 - k * 20},${240 - k * 20})`);
+    }
+  }
+  grain(L.ctx, S, S, rng, 12);
+  grain(L.hctx, S, S, rng, 18);
+  return { map: toTexture(L.c), normalMap: heightToNormal(L.hc, 3.5), roughnessMap: toTexture(L.rc, { srgb: false }) };
 }
 
 /** Pointed-arch stained glass, moonlit from outside. */
@@ -817,5 +923,7 @@ export function createTextures(seed) {
     clockFace: clockFace(),
     rug: rugTexture(rng),
     ritualCircle: ritualCircle(),
+    gold: goldFiligree(rng),
+    mahogany: carvedMahogany(rng),
   };
 }

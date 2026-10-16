@@ -5,9 +5,20 @@ import { WIZARDS, WIZARD_BY_ID } from '../shared/wizards.js';
 import { MIN_PLAYERS, MAX_PLAYERS } from '../shared/constants.js';
 import { Game } from './Game.js';
 import { botName } from './names.js';
+import { shardOf } from '../shared/shard.js';
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 let botCounter = 0;
+
+/**
+ * Step 9: per-socket rate limiting (a token bucket). Clients send ~20 state
+ * updates a second plus a few actions; a socket that floods is throttled
+ * (excess packets dropped) and, if it keeps at it, disconnected.
+ */
+export const RATE = { burst: 80, perSecond: 60, kickAfter: 400 }; // dropped packets within KICK_WINDOW
+const KICK_WINDOW = 10_000;
+const IDLE_LOBBY_MS = 15 * 60_000; // a coven that never starts is swept after this
+const SWEEP_MS = 30_000;
 
 function sanitizeName(name) {
   const clean = String(name ?? '').replace(/[<>&"'`]/g, '').trim().slice(0, 16);
@@ -23,6 +34,7 @@ class Lobby {
     this.allowSolo = false;
     this.debug = false; // enables debug:* commands (teleport, husk, wizard swap)
     this.game = null;
+    this.activeAt = Date.now(); // for the idle sweep
   }
 
   get humans() { return this.members.filter((m) => !m.isBot); }
@@ -55,10 +67,41 @@ class Lobby {
 }
 
 export class LobbyManager {
-  constructor(io) {
+  /**
+   * @param shard { index, count }: in cluster mode this worker only creates
+   *   coven codes that shard to it (shared/shard.js).
+   */
+  constructor(io, shard = { index: 0, count: 1 }) {
     this.io = io;
+    this.shard = shard;
     this.lobbies = new Map();
     this.socketLobby = new Map(); // socket.id -> code
+    this.throttled = 0; // packets dropped by the rate limiter
+    this.kicked = 0;
+    this.swept = 0;
+    this.sweeper = setInterval(() => this.sweep(), SWEEP_MS);
+    this.sweeper.unref?.();
+  }
+
+  /** Abandoned covens: no humans connected, or never started and idle for IDLE_LOBBY_MS. */
+  sweep(now = Date.now()) {
+    for (const [code, lobby] of this.lobbies) {
+      const connected = lobby.humans.filter((m) => this.io.sockets?.sockets?.get?.(m.id)).length;
+      const idle = !lobby.game && now - lobby.activeAt > IDLE_LOBBY_MS;
+      if (connected && !idle) continue;
+      lobby.game?.stop();
+      for (const m of lobby.humans) {
+        this.socketLobby.delete(m.id);
+        this.io.sockets?.sockets?.get?.(m.id)?.leave(lobby.room);
+      }
+      this.lobbies.delete(code);
+      this.swept++;
+    }
+  }
+
+  close() {
+    clearInterval(this.sweeper);
+    for (const lobby of this.lobbies.values()) lobby.game?.stop();
   }
 
   get count() { return this.lobbies.size; }
@@ -67,8 +110,38 @@ export class LobbyManager {
     for (;;) {
       let code = '';
       for (let i = 0; i < 4; i++) code += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)];
-      if (!this.lobbies.has(code)) return code;
+      if (this.lobbies.has(code) || shardOf(code, this.shard.count) !== this.shard.index) continue;
+      return code;
     }
+  }
+
+  /** A token bucket per socket: drop what floods, disconnect what keeps flooding. */
+  rateLimit(socket) {
+    let tokens = RATE.burst, at = Date.now(), dropped = 0, windowAt = at;
+    socket.use((packet, next) => {
+      const now = Date.now();
+      tokens = Math.min(RATE.burst, tokens + ((now - at) / 1000) * RATE.perSecond);
+      at = now;
+      if (tokens >= 1) {
+        tokens -= 1;
+        const lobby = this.lobbyOf(socket);
+        if (lobby) lobby.activeAt = now;
+        return next();
+      }
+      this.throttled++;
+      if (now - windowAt > KICK_WINDOW) { windowAt = now; dropped = 0; }
+      if (++dropped >= RATE.kickAfter) {
+        this.kicked++;
+        socket.disconnect(true);
+      }
+      // (dropped: the handler never sees it)
+    });
+  }
+
+  stats() {
+    let inGame = 0;
+    for (const l of this.lobbies.values()) if (l.game) inGame++;
+    return { lobbies: this.lobbies.size, games: inGame, sockets: this.io.engine?.clientsCount ?? 0, throttled: this.throttled, kicked: this.kicked, swept: this.swept };
   }
 
   broadcast(lobby) {
@@ -81,6 +154,9 @@ export class LobbyManager {
 
   handleConnection(socket) {
     const reply = (cb, payload) => typeof cb === 'function' && cb(payload);
+    this.rateLimit(socket);
+    // Which worker this is (cluster mode): the client checks a code's shard before joining.
+    socket.emit('hello', { shard: this.shard.index, shards: this.shard.count });
     const hostInGame = (fn) => (data) => {
       const lobby = this.lobbyOf(socket);
       if (lobby?.game && lobby.hostId === socket.id) fn(lobby, data ?? {});

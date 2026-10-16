@@ -11,6 +11,7 @@ if (debug) document.body.classList.add('debug');
 let game = null;
 
 const lobby = new LobbyUI(net, { debug });
+if (debug) window.__lobby = lobby; // console / test access
 
 net.on('game:start', (init) => {
   lobby.hide();

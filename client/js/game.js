@@ -3,6 +3,7 @@
 // network glue for a running match.
 
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { createCollisionWorld, addBarrier, removeBarrier, lineOfSight } from '/shared/collision.js';
 import { roomAt } from '/shared/mapgen.js';
 import { PHASE, INTERACT_RANGE, NET_SEND_RATE, FLOOR_Y, STAMINA, HP, LUMOS, FLOOR, HEART_COUNT, footstepCloseness } from '/shared/constants.js';
@@ -22,12 +23,15 @@ import { SinDemonAvatar } from './entities/SinDemonAvatar.js';
 import { buildMansion } from './world/MansionBuilder.js';
 import { FirstPersonController } from './player/FirstPersonController.js';
 import { WizardAvatar } from './entities/WizardAvatar.js';
+import { buildWizardModel } from './entities/wizardModel.js';
+import { VanityCam } from './player/VanityCam.js';
 import { MonsterAvatar } from './entities/MonsterAvatar.js';
 import { SpellFX } from './fx/SpellFX.js';
 import { GrimoireFX } from './fx/GrimoireFX.js';
 import { FinaleFX } from './fx/FinaleFX.js';
 import { Epilogue } from './epilogue/Epilogue.js';
 import { FINALE, MASTERIES } from '/shared/finale.js';
+import { SnapshotDecoder } from '/shared/netcodec.js';
 import { PostFX } from './fx/PostFX.js';
 import { AudioEngine } from './audio/AudioEngine.js';
 import { AmalgamAvatar } from './entities/AmalgamAvatar.js';
@@ -92,6 +96,9 @@ export class GameClient {
     this.scrapeAt = 0;
     this.pings = [];
     this.input = new SpellInput(); // 1–4 / R select; LMB / Q fire
+    this.vanity = new VanityCam(); // C: the third-person vanity camera
+    this.selfAvatar = null;
+    this.decoder = new SnapshotDecoder();
     this.invisOn = false; // V: an infinite toggle (Step 7)
     this.ultExpended = false; // the Ultimate: once per game
     this.carry = null; // 'ingot' | 'platter' while carrying a task item
@@ -140,6 +147,7 @@ export class GameClient {
       x: sp.x, z: sp.z, floor: this.map.spawn.floor, yaw: this.map.spawn.yaw,
     });
 
+    this.buildSelfAvatar();
     this.hud = new HUD();
     this.hud.show();
     this.hud.setPhase(this.phase);
@@ -201,6 +209,16 @@ export class GameClient {
     scene.background = new THREE.Color(0x000000);
     scene.fog = new THREE.FogExp2(0x000000, 0.075);
     this.scene = scene;
+    // Step 9: a faint, pre-filtered environment so polished marble, gold and steel
+    // actually reflect something (kept very dim: this is a house in the dark).
+    {
+      const pmrem = new THREE.PMREMGenerator(this.renderer);
+      const env = new RoomEnvironment();
+      scene.environment = pmrem.fromScene(env, 0.04).texture;
+      scene.environmentIntensity = 0.07;
+      env.dispose?.();
+      pmrem.dispose();
+    }
 
     this.camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.05, 90);
     scene.add(this.camera);
@@ -218,55 +236,9 @@ export class GameClient {
     const rig = new THREE.Group();
     rig.position.set(0.2, -0.2, -0.36);
     rig.rotation.set(0.12, 0.08, 0);
-    // First person: a robed sleeve with a cuff in your colour, a hand, and a carved wand.
-    this.handMats = [];
-    const fp = (m) => { this.handMats.push(m); return m; };
-    const sleeveMat = fp(new THREE.MeshStandardMaterial({ color: 0x0c0a0e, roughness: 0.85 }));
-    const cuffMat = fp(new THREE.MeshStandardMaterial({ color: this.wizard.color, roughness: 0.45, emissive: this.wizard.color, emissiveIntensity: 0.08 }));
-    const skinMat = fp(new THREE.MeshStandardMaterial({ color: 0xd2b49a, roughness: 0.6 }));
-    const woodMat = fp(new THREE.MeshStandardMaterial({ color: 0x3a2214, roughness: 0.55 }));
-    const goldMat = fp(new THREE.MeshStandardMaterial({ color: 0xc8a040, roughness: 0.35, metalness: 0.85 }));
-    const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 0.2, 10).rotateX(Math.PI / 2), sleeveMat);
-    sleeve.position.set(0.03, -0.03, 0.13);
-    rig.add(sleeve);
-    const cuff = new THREE.Mesh(new THREE.TorusGeometry(0.046, 0.008, 6, 16), cuffMat);
-    cuff.position.set(0.035, -0.035, 0.03);
-    rig.add(cuff);
-    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.02, 10, 8), skinMat);
-    hand.scale.set(1, 0.8, 1.3);
-    hand.position.set(0.006, -0.01, 0.0);
-    rig.add(hand);
-    for (let i = 0; i < 3; i++) { // fingers curled round the wand
-      const f = new THREE.Mesh(new THREE.CylinderGeometry(0.0045, 0.004, 0.022, 5).rotateZ(Math.PI / 2), skinMat);
-      f.position.set(-0.004, -0.004 + i * 0.002, -0.008 - i * 0.008);
-      rig.add(f);
-    }
-    const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.006, 0.07, 8).rotateX(Math.PI / 2), woodMat);
-    handle.position.z = -0.02;
-    rig.add(handle);
-    for (const z of [-0.045, 0.0]) {
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.0075, 0.002, 4, 10), goldMat);
-      ring.position.z = z;
-      rig.add(ring);
-    }
-    const wand = new THREE.Mesh(new THREE.CylinderGeometry(0.0035, 0.0065, 0.22, 6).rotateX(Math.PI / 2), woodMat);
-    wand.position.z = -0.15;
-    rig.add(wand);
-    this.wandTipMat = new THREE.MeshBasicMaterial({ color: this.wizard.color, transparent: true });
-    const tip = new THREE.Mesh(new THREE.SphereGeometry(0.008, 8, 6), this.wandTipMat);
-    tip.position.z = -0.262;
-    rig.add(tip);
-    this.wandTip = tip;
-    // The elemental preview aura: what the selected slot will cast.
-    this.wandAura = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: this.mansion.kit.glow(new THREE.Group(), 0, 0, 0, 0xffffff, 1).material.map,
-      color: this.wizard.color, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.5,
-    }));
-    this.wandAura.position.z = -0.262;
-    this.wandAura.scale.setScalar(0.05);
-    rig.add(this.wandAura);
     this.camera.add(rig);
     this.wandRig = rig;
+    this.buildViewmodel(this.wizard);
     // Dust motes drifting in your own Lumos beam.
     {
       const n = 160;
@@ -314,7 +286,11 @@ export class GameClient {
 
   bindNetwork() {
     this.handlers = {
-      'game:snap': (s) => this.onSnapshot(s),
+      // Step 9: the compact protocol (binary transforms, with a JSON delta of slow state when it changed).
+      'game:s': (bin, delta) => {
+        if (delta) this.decoder.applyDelta(delta);
+        this.onSnapshot(this.decoder.decode(bin));
+      },
       'game:event': (e) => this.onEvent(e),
       'game:teleport': (d) => {
         this.tseq = d.tseq;
@@ -501,6 +477,85 @@ export class GameClient {
     this.camera.add(this.carryObj);
   }
 
+  /**
+   * Step 9: your own arm in first person is the real model's: the tailored
+   * sleeve and turned-back cuff, the ringed hand, the carved wand (rim-lit),
+   * scaled down into view. Rebuilt when you swap wizards.
+   */
+  buildViewmodel(wizard) {
+    const rig = this.wandRig;
+    if (this.viewArm) rig.remove(this.viewArm);
+    const vm = buildWizardModel(wizard);
+    const fore = vm.armR.el;
+    fore.parent.remove(fore);
+    const holder = new THREE.Group();
+    holder.add(fore);
+    fore.rotation.x = Math.PI / 2; // the forearm points into the screen
+    holder.scale.setScalar(0.55);
+    holder.position.set(0.03, -0.03, 0.14);
+    rig.add(holder);
+    this.viewArm = holder;
+    this.handMats = vm.mats;
+    this.wandTipMat = vm.tipMat;
+    this.wandTipMat.transparent = true;
+    this.wandTip = vm.tip;
+    // The preview aura sits on the tip.
+    rig.updateMatrixWorld(true);
+    const at = rig.worldToLocal(this.wandTip.getWorldPosition(new THREE.Vector3()));
+    if (!this.wandAura) {
+      this.wandAura = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: this.mansion.kit.glow(new THREE.Group(), 0, 0, 0, 0xffffff, 1).material.map,
+        color: wizard.color, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.5,
+      }));
+      this.wandAura.scale.setScalar(0.05);
+      rig.add(this.wandAura);
+    }
+    this.wandAura.position.copy(at);
+    fore.traverse((o) => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; } });
+  }
+
+  /** Your own wizard, seen only through the vanity camera (C). */
+  buildSelfAvatar() {
+    if (this.selfAvatar) {
+      this.scene.remove(this.selfAvatar.group);
+      this.selfAvatar.dispose();
+    }
+    const info = this.roster.find((m) => m.id === this.selfId) ?? this.self;
+    this.selfAvatar = new WizardAvatar(info, this.wizard, (kind) => makeCarry(this.mansion.kit, kind));
+    this.selfAvatar.label.visible = false;
+    this.selfAvatar.group.visible = false;
+    this.scene.add(this.selfAvatar.group);
+  }
+
+  /** C: over the shoulder (or circling you), or back into your own eyes. */
+  toggleVanity(on = !this.vanity.on) {
+    if (this.archonMode() || this.epilogue) return;
+    this.vanity.toggle(on);
+    this.hud.caption(on ? '[ vanity camera: C to return to your own eyes ]' : '', on ? 2500 : 1);
+  }
+
+  /** Third person: place the camera, draw your own wizard from your local state. */
+  updateVanity(dt) {
+    const c = this.controller;
+    const on = this.vanity.on && !this.jumpscare && !this.archonMode();
+    this.wandRig.visible = !on;
+    if (this.carryObj) this.carryObj.visible = !on && this.invisK < 0.5;
+    const av = this.selfAvatar;
+    if (!av) return;
+    av.group.visible = on;
+    if (!on) return;
+    av.setSnapshot({
+      x: c.x, z: c.z, f: c.floor, yaw: c.yaw, pitch: c.pitch, cr: c.crouch, sp: c.sprinting && c.moving, mv: c.moving,
+      li: this.lumos, ch: this.channel?.propId ?? null, bf: this.buffs, cy: this.carry,
+    });
+    const eyeY = FLOOR_Y[c.floor] + (c.crouch ? 1.15 : 1.62);
+    const pose = this.vanity.update(dt, { x: c.x, y: eyeY, z: c.z, yaw: c.yaw, pitch: c.pitch, moving: c.moving },
+      (x0, z0, x1, z1) => lineOfSight(this.map, c.floor, x0, z0, x1, z1));
+    this.camera.position.set(pose.x, pose.y, pose.z);
+    this.camera.lookAt(pose.lookX, pose.lookY, pose.lookZ);
+    av.update(dt, this.time, this.camera, this.visibleFloors);
+  }
+
   setRoster(players) {
     const old = new Map(this.roster.map((m) => [m.id, m.wizardId]));
     this.roster = players;
@@ -512,6 +567,8 @@ export class GameClient {
         this.wandLight.color.copy(tint);
         this.fillLight.color.copy(tint);
         this.hud.setWizard(this.wizard);
+        this.buildViewmodel(this.wizard);
+        this.buildSelfAvatar();
         for (const cd of this.slotCd) Object.assign(cd, { readyAt: 0, duration: 1 });
         this.hud.whisper(`You now walk as ${this.wizard.name}, ${this.wizard.title}.`);
       } else {
@@ -572,6 +629,7 @@ export class GameClient {
       // ---- spells
       case 'cast':
         if (e.caster !== this.selfId) this.avatars.get(e.caster)?.castPulse();
+        else this.selfAvatar?.castPulse();
         if (e.wall) addBarrier(this.world, e.floor, e.id, e.wall.tiles);
         this.fx.onCast(e, this.localPos());
         this.grimoire.onCast(e, this.localPos());
@@ -1047,6 +1105,9 @@ export class GameClient {
         case 'KeyQ':
           this.castSelectedSpell(); // alternate trigger (headless tests have no pointer lock)
           break;
+        case 'KeyC':
+          this.toggleVanity();
+          break;
         case 'KeyP':
           if (this.debug) this.net.emit('debug:mode');
           break;
@@ -1229,6 +1290,7 @@ export class GameClient {
     this.renderer.info.reset();
     this.updateArchon(dt, now);
     c.update(dt);
+    this.updateVanity(dt);
     this.updateJumpscare(now);
     if (c.floor !== this.activeFloor) {
       this.activeFloor = c.floor;
@@ -1330,6 +1392,9 @@ export class GameClient {
     this.hud.crosshair(!!this.target && !!pr.text);
     this.hud.prompt(this.channel || !this.target?.entity ? null : pr.text, pr.hold);
     if (this.channel && Number.isFinite(this.channel.duration)) this.hud.progress((now - this.channel.start) / this.channel.duration);
+    // Holding E (or R) as the rift opens grabs it: no need to release and press again.
+    const k = this.controller.keys;
+    if (this.grappleStage() && !this.grappling && (k.has('KeyE') || k.has('KeyR'))) this.setGrapple(true);
     if (this.grappleStage()) this.hud.prompt(this.grappling ? 'Soul Grapple: dragging it toward the rift\u2026' : 'Soul Grapple: drag it into the rift', true);
 
     this.hud.stamina(c.stamina);
@@ -1588,7 +1653,7 @@ export class GameClient {
     a.material.color.set(color);
     a.material.opacity = op * k * (1 - this.invisK * 0.7);
     a.scale.setScalar(size * k * (1 + this.recoil * 0.8));
-    this.wandTipMat.color.set(color);
+    this.wandTipMat.color.set(color).multiplyScalar(this.lumos ? 4.5 : 3.2); // HDR: the tip blooms
     // Dust in your own Lumos beam.
     this.motes.material.opacity += ((this.lumos ? 0.55 : 0) - this.motes.material.opacity) * Math.min(1, dt * 4);
     if (this.motes.material.opacity > 0.01) {
@@ -1613,7 +1678,7 @@ export class GameClient {
       m.opacity = alpha;
     }
     this.hud.invis(active);
-    if (this.carryObj) this.carryObj.visible = this.invisK < 0.5;
+    if (this.carryObj) this.carryObj.visible = this.invisK < 0.5 && !this.vanity.on;
   }
 
   /** The footstep bar: how close its last footfalls were (fades if it stops walking). */
@@ -1817,6 +1882,7 @@ export class GameClient {
     this.hemi.color.set(0xffe8c0);
     this.hemi.groundColor.set(0x8a6a40);
     this.scene.fog = new THREE.FogExp2(0xf3dcb2, 0.012);
+    this.scene.environmentIntensity = 0.6; // morning: the gilding shines
     this.scene.background = new THREE.Color(0xf3dcb2);
     this.renderer.toneMappingExposure = 1.3;
     this.camera.fov = 62;
@@ -1843,6 +1909,7 @@ export class GameClient {
     document.removeEventListener('pointerlockchange', this._onLockChange);
     this.controller.dispose();
     for (const id of [...this.avatars.keys()]) this.removeAvatar(id);
+    if (this.selfAvatar) { this.scene.remove(this.selfAvatar.group); this.selfAvatar.dispose(); }
     this.hud.hide();
     this.hidePause();
     this.fullMap.toggle(false);

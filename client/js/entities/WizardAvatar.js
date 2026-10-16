@@ -1,16 +1,13 @@
-// A teammate (human or bot) as everyone else sees them: a robed wizard in the
-// old style. Layered robes (an open outer cloak with a trim in their colour, a
-// house crest on the breast), a striped scarf whose tails swing, a pointed hat
-// (or a deep hood), articulated arms holding a carved wand with a glowing core,
-// cloth that sways as they walk, a contact shadow underfoot, a faint name, a
-// visible Lumos beam, and the glassy shimmer of the Disillusionment Charm.
+// A teammate (human or bot) as everyone else sees them (and you, in the vanity
+// camera): Step 9's sculpted dark-fantasy mage (wizardModel.js), animated:
+// striding legs, coattails that swing with each step and stream with speed, a
+// fluttering cravat, swaying hair, the wand arm following their aim, a contact
+// shadow underfoot, a faint name, a visible Lumos beam, and the glassy shimmer
+// of the Disillusionment Charm.
 
 import * as THREE from 'three';
 import { FLOOR_Y, CROUCH_EYE_HEIGHT, EYE_HEIGHT } from '/shared/constants.js';
-import { crestTexture } from '../world/textures.js';
-
-const GLYPHS = { black: '☾', fire: '✹', water: '≈', earth: '▲', wind: '≋', white: '☀', void: '⊘' };
-const HOODED = new Set(['injorath', 'himanshu']);
+import { buildWizardModel } from './wizardModel.js';
 
 function nameSprite(text, color) {
   const c = document.createElement('canvas');
@@ -30,22 +27,6 @@ function nameSprite(text, color) {
   const s = new THREE.Sprite(mat);
   s.scale.set(1.4, 0.35, 1);
   return s;
-}
-
-/** Scarf stripes in the house colour and gold. */
-function scarfTexture(color) {
-  const c = document.createElement('canvas');
-  c.width = 16;
-  c.height = 64;
-  const ctx = c.getContext('2d');
-  for (let i = 0; i < 8; i++) {
-    ctx.fillStyle = i % 2 ? '#c8a040' : color;
-    ctx.fillRect(0, i * 8, 16, 8);
-  }
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  return t;
 }
 
 let shadowTex = null;
@@ -78,183 +59,25 @@ export class WizardAvatar {
     this.id = info.id;
     this.makeCarry = makeCarry;
     this.wizard = wizard;
-    const color = new THREE.Color(wizard.color);
-    const robeColor = color.clone().multiplyScalar(0.16).lerp(new THREE.Color(0x0b0a0c), 0.55);
-    this.mats = [];
-    const mat = (m) => { this.mats.push(m); return m; };
-
-    const robeMat = mat(new THREE.MeshStandardMaterial({ color: robeColor, roughness: 0.92 }));
-    const cloakMat = mat(new THREE.MeshStandardMaterial({ color: 0x0c0a0e, roughness: 0.85, side: THREE.DoubleSide }));
-    const liningMat = mat(new THREE.MeshStandardMaterial({ color: color.clone().multiplyScalar(0.35), roughness: 0.6, side: THREE.BackSide }));
-    const trimMat = mat(new THREE.MeshStandardMaterial({ color, roughness: 0.45, metalness: 0.2, emissive: color, emissiveIntensity: 0.08 }));
-    const goldMat = mat(new THREE.MeshStandardMaterial({ color: 0xc8a040, roughness: 0.35, metalness: 0.85 }));
-    const skinMat = mat(new THREE.MeshStandardMaterial({ color: 0xd2b49a, roughness: 0.6 }));
-    const hairMat = mat(new THREE.MeshStandardMaterial({ color: [0x1a120c, 0x3a2414, 0x0a0806, 0x5a4a3a][wizard.id.length % 4], roughness: 0.9 }));
-    const bootMat = mat(new THREE.MeshStandardMaterial({ color: 0x120c08, roughness: 0.5 }));
-    const wandMat = mat(new THREE.MeshStandardMaterial({ color: 0x3a2214, roughness: 0.55 }));
-    const scarfMat = mat(new THREE.MeshStandardMaterial({ map: scarfTexture(wizard.color), roughness: 0.95 }));
-    const crestMat = this.crestMat = mat(new THREE.MeshStandardMaterial({ map: crestTexture(wizard.color, GLYPHS[wizard.source] ?? '✦'), transparent: true, roughness: 0.5, metalness: 0.3 }));
-    this.tipMat = new THREE.MeshBasicMaterial({ color });
-
+    // Step 9: the sculpted, tailored model (shared with the lobby showcase and the vanity camera).
+    const model = buildWizardModel(wizard);
+    this.model = model;
+    this.mats = model.mats;
+    this.tipMat = model.tipMat;
     this.group = new THREE.Group();
-    this.body = new THREE.Group();
-    this.group.add(this.body);
+    this.body = model.body;
+    this.group.add(model.group);
     this.group.add(this.shadow = contactShadow());
-
-    // Boots (step under the hem)
-    this.boots = [-1, 1].map((s) => {
-      const b = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.09, 0.26), bootMat);
-      b.position.set(s * 0.11, 0.045, -0.02);
-      this.body.add(b);
-      return b;
-    });
-    // Inner robe
-    const robe = new THREE.Mesh(lathe([[0.36, 0.05], [0.34, 0.3], [0.27, 0.8], [0.22, 1.2], [0.2, 1.38], [0.1, 1.48], [0, 1.5]]), robeMat);
-    this.body.add(robe);
-    // Outer cloak: open at the front, lined, trimmed; its skirt sways.
-    this.skirt = new THREE.Group();
-    this.skirt.position.y = 1.05;
-    // Lathe angle 0 is the front (+z): leave the cloak open there.
-    const OPEN = Math.PI * 0.12;
-    const skirtGeo = lathe([[0.27, 0], [0.33, -0.45], [0.42, -0.85], [0.47, -1.02]], 24, OPEN, Math.PI * 2 - OPEN * 2);
-    this.skirt.add(new THREE.Mesh(skirtGeo, cloakMat));
-    this.skirt.add(new THREE.Mesh(skirtGeo, liningMat));
-    const hem = new THREE.Mesh(new THREE.TorusGeometry(0.47, 0.018, 5, 40, Math.PI * 2 - OPEN * 2), trimMat);
-    hem.rotation.x = Math.PI / 2;
-    hem.rotation.z = Math.PI / 2 - (Math.PI * 2 - OPEN); // the trim follows the open hem
-    hem.position.y = -1.02;
-    this.skirt.add(hem);
-    this.body.add(this.skirt);
-    const shoulders = new THREE.Mesh(lathe([[0.27, 1.05], [0.29, 1.28], [0.24, 1.42], [0.12, 1.5]], 24, Math.PI * 0.2, Math.PI * 1.6), cloakMat);
-    this.body.add(shoulders);
-    for (const side of [-1, 1]) {
-      const lapel = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.55, 0.012), trimMat);
-      lapel.position.set(side * 0.13, 1.2, 0.24);
-      lapel.rotation.z = side * 0.12;
-      this.body.add(lapel);
-    }
-    const crest = new THREE.Mesh(new THREE.PlaneGeometry(0.13, 0.13), crestMat);
-    crest.position.set(-0.11, 1.3, 0.235);
-    this.body.add(crest);
-    const belt = new THREE.Mesh(new THREE.TorusGeometry(0.23, 0.018, 5, 20), goldMat);
-    belt.rotation.x = Math.PI / 2;
-    belt.position.y = 0.98;
-    this.body.add(belt);
-
-    // Head, hair, and a pointed hat (or a deep hood).
-    this.head = new THREE.Group();
-    this.head.position.set(0, 1.58, 0);
-    const face = new THREE.Mesh(new THREE.SphereGeometry(0.115, 16, 12), skinMat);
-    face.scale.set(0.9, 1.08, 0.95);
-    this.head.add(face);
-    const eyeMat = new THREE.MeshBasicMaterial({ color: 0x0a0806 });
-    for (const sx of [-1, 1]) {
-      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.014, 6, 4), eyeMat);
-      eye.position.set(sx * 0.04, 0.02, 0.1);
-      this.head.add(eye);
-    }
-    const hooded = HOODED.has(wizard.id);
-    if (hooded) {
-      const hood = new THREE.Mesh(new THREE.SphereGeometry(0.17, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.62), cloakMat);
-      hood.rotation.x = -0.35;
-      hood.position.set(0, 0.03, -0.02);
-      this.head.add(hood);
-      const peak = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.28, 10), cloakMat);
-      peak.position.set(0, 0.06, -0.17);
-      peak.rotation.x = -1.2;
-      this.head.add(peak);
-      const hoodTrim = new THREE.Mesh(new THREE.TorusGeometry(0.15, 0.012, 5, 24), trimMat);
-      hoodTrim.position.set(0, 0.0, 0.06);
-      hoodTrim.rotation.x = -0.25;
-      this.head.add(hoodTrim);
-    } else {
-      const hair = new THREE.Mesh(new THREE.SphereGeometry(0.125, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.55), hairMat);
-      hair.position.y = 0.02;
-      hair.rotation.x = -0.2;
-      this.head.add(hair);
-      const brim = new THREE.Mesh(new THREE.RingGeometry(0.1, 0.3, 28).rotateX(-Math.PI / 2), cloakMat);
-      brim.position.y = 0.08;
-      this.head.add(brim);
-      const band = new THREE.Mesh(new THREE.CylinderGeometry(0.135, 0.14, 0.04, 20, 1, true), trimMat);
-      band.position.y = 0.11;
-      this.head.add(band);
-      // The famous crooked point: three stacked, bending cones.
-      let y = 0.09, tilt = 0;
-      const tipGroup = new THREE.Group();
-      let parent = this.head;
-      for (const [r0, r1, h] of [[0.14, 0.09, 0.2], [0.09, 0.045, 0.18], [0.045, 0.001, 0.17]]) {
-        const seg = new THREE.Group();
-        seg.position.y = y;
-        seg.rotation.x = tilt;
-        const cone = new THREE.Mesh(new THREE.CylinderGeometry(r1, r0, h, 14), cloakMat);
-        cone.position.y = h / 2;
-        seg.add(cone);
-        parent.add(seg);
-        parent = seg;
-        y = h;
-        tilt = -0.32;
-      }
-      this.hatTip = parent;
-      void tipGroup;
-    }
-    this.body.add(this.head);
-
-    // Scarf: a striped wrap and two swinging tails.
-    const wrap = new THREE.Mesh(new THREE.TorusGeometry(0.12, 0.045, 8, 20), scarfMat);
-    wrap.rotation.x = Math.PI / 2;
-    wrap.position.y = 1.44;
-    this.body.add(wrap);
-    this.scarfTails = [-1, 1].map((s, i) => {
-      const tail = new THREE.Group();
-      tail.position.set(s * 0.07, 1.42, 0.12);
-      const strip = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.42 + i * 0.08, 0.018).translate(0, -(0.21 + i * 0.04), 0), scarfMat);
-      tail.add(strip);
-      this.body.add(tail);
-      return tail;
-    });
-
-    // Arms: shoulder → elbow → hand. The right one holds the wand and follows your aim.
-    const arm = (side) => {
-      const sh = new THREE.Group();
-      sh.position.set(side * 0.26, 1.36, 0);
-      const upper = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.065, 0.32, 8).translate(0, -0.16, 0), cloakMat);
-      sh.add(upper);
-      const el = new THREE.Group();
-      el.position.y = -0.3;
-      const fore = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.05, 0.3, 8).translate(0, -0.15, 0), cloakMat);
-      el.add(fore);
-      const cuff = new THREE.Mesh(new THREE.TorusGeometry(0.07, 0.012, 5, 14), trimMat);
-      cuff.rotation.x = Math.PI / 2;
-      cuff.position.y = -0.28;
-      el.add(cuff);
-      const hand = new THREE.Mesh(new THREE.SphereGeometry(0.04, 8, 6), skinMat);
-      hand.position.y = -0.33;
-      el.add(hand);
-      sh.add(el);
-      this.body.add(sh);
-      return { sh, el, hand, side };
-    };
-    this.armL = arm(-1);
-    this.armR = arm(1);
-    // The wand: a carved handle, a tapered shaft, and its glowing core.
-    this.wand = new THREE.Group();
-    this.wand.position.y = -0.35;
-    this.wand.rotation.x = Math.PI; // continuing the forearm, tip first
-    const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.013, 0.012, 0.1, 8), wandMat);
-    this.wand.add(handle);
-    for (const y of [-0.04, 0.0, 0.04]) {
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.014, 0.004, 4, 10), goldMat);
-      ring.rotation.x = Math.PI / 2;
-      ring.position.y = y;
-      this.wand.add(ring);
-    }
-    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.01, 0.32, 6), wandMat);
-    shaft.position.y = 0.2;
-    this.wand.add(shaft);
-    this.tip = new THREE.Mesh(new THREE.SphereGeometry(0.018, 8, 6), this.tipMat);
-    this.tip.position.y = 0.37;
-    this.wand.add(this.tip);
-    this.armR.el.add(this.wand);
+    this.head = model.head;
+    this.hair = model.hair;
+    this.legs = model.legs;
+    this.coattails = model.coattails;
+    this.cravatTail = model.cravatTail;
+    this.armL = model.armL;
+    this.armR = model.armR;
+    this.wand = model.wand;
+    this.tip = model.tip;
+    this.halo = model.parts.halo ?? null;
 
     this.label = nameSprite(info.name, wizard.color);
     this.label.position.y = 2.3;
@@ -335,14 +158,28 @@ export class WizardAvatar {
     const moving = !!this.state.mv;
     if (moving) this.walk += dt * (this.state.sp ? 11 : 7);
     const sway = moving ? Math.sin(this.walk) : 0;
-    this.body.position.y = Math.abs(sway) * 0.035;
-    this.body.rotation.z = sway * 0.025;
-    // Cloth: the cloak's skirt and the scarf tails trail and swing.
-    this.skirt.rotation.x = moving ? 0.08 + Math.abs(sway) * 0.06 : Math.sin(t * 0.9) * 0.015;
-    this.skirt.rotation.z = sway * 0.05;
-    this.scarfTails.forEach((tail, i) => { tail.rotation.x = (moving ? 0.35 : 0.06) + Math.sin(t * 3 + i) * (moving ? 0.15 : 0.04); });
-    if (this.hatTip) this.hatTip.rotation.z = Math.sin(t * 1.3) * 0.08 + sway * 0.1;
-    this.boots.forEach((b, i) => { b.position.z = -0.02 + (moving ? Math.sin(this.walk + i * Math.PI) * 0.12 : 0); });
+    // Speed (from how far they moved this frame) streams the coattails out behind.
+    const speed = this.lastPos ? Math.min(8, Math.hypot(this.x - this.lastPos.x, this.z - this.lastPos.z) / Math.max(dt, 1e-3)) : 0;
+    this.lastPos = { x: this.x, z: this.z };
+    this.speedK = (this.speedK ?? 0) + (speed / 6 - (this.speedK ?? 0)) * Math.min(1, dt * 5);
+    this.body.position.y = Math.abs(sway) * 0.03;
+    this.body.rotation.z = sway * 0.02;
+    // Striding legs: hip swing, knee bend on the back-swing.
+    this.legs.forEach((l, i) => {
+      const ph = Math.sin(this.walk + i * Math.PI);
+      l.hip.rotation.x = moving ? ph * (this.state.sp ? 0.75 : 0.5) : 0;
+      l.knee.rotation.x = moving ? Math.max(0, -Math.cos(this.walk + i * Math.PI)) * 0.7 : 0;
+    });
+    // Coattails: they swing with each step and stream back with speed.
+    this.coattails.forEach((c, i) => {
+      c.rotation.x = -0.05 - this.speedK * 0.75 - Math.abs(sway) * 0.08 + Math.sin(t * 2.1 + i * 1.3) * 0.03;
+      c.rotation.z = (i ? 1 : -1) * (0.03 + this.speedK * 0.08) + sway * 0.06;
+    });
+    this.cravatTail.rotation.x = -0.1 - this.speedK * 0.5 + Math.sin(t * 3.1) * 0.06;
+    // Hair: a living sway, more when they run.
+    this.hair.rotation.z = Math.sin(t * 1.4) * 0.02 + sway * 0.03;
+    this.hair.rotation.x = -this.speedK * 0.08 + Math.sin(t * 1.1) * 0.015;
+    if (this.halo) this.halo.rotation.z = t * 0.4;
     const crouchScale = 1 - this.crouchK * (1 - CROUCH_EYE_HEIGHT / EYE_HEIGHT);
     this.body.scale.y = crouchScale;
     this.castK = Math.max(0, this.castK - dt * 3);
@@ -366,7 +203,7 @@ export class WizardAvatar {
     this.invisK += ((invis ? 1 : 0) - this.invisK) * Math.min(1, dt * 4);
     const alpha = 1 - this.invisK * (0.9 - Math.sin(t * 7) * 0.05);
     for (const m of this.mats) {
-      m.transparent = this.invisK > 0.01 || m === this.crestMat;
+      m.transparent = this.invisK > 0.01 || !!m.userData.alwaysTransparent;
       m.opacity = alpha;
       m.depthWrite = this.invisK < 0.5;
     }
@@ -401,7 +238,7 @@ export class WizardAvatar {
       this.light.distance = lumos ? 28 : 24;
       this.light.intensity = lit ? (lumos ? 130 : 45) * (channel ? 1.5 : 1) : 0;
     }
-    this.tipMat.color.set(this.wizard.color).multiplyScalar(this.state.li ? 1.8 : 1);
+    this.tipMat.color.set(this.wizard.color).multiplyScalar(this.state.li ? 3.6 : 2.8); // HDR: it blooms
   }
 
   /** Show (or drop) the carried item; its model and materials belong to the prop kit. */

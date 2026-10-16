@@ -1,5 +1,5 @@
 # HorCrux
-### Game Design Document · v3.0 (prototype)
+### Game Design Document · v4.0 (prototype)
 
 > *Seven wizards. Seven Sins. Seven hearts that must stop beating.*
 
@@ -245,7 +245,7 @@ Every wizard has **three attacks (1–3)**, **one mobility / utility spell (4)**
 
 ## 6. The Monster: the Malphas Amalgam
 
-The last lord's Keeper: too tall for the doorways, gaunt and lopsided (one arm far longer than the other), in a tattered burial shroud. Its ribcage is open, and seven heart-nodes pulse inside it. **One goes dark each time a mansion Heart is destroyed.** Its head is a pale, crooked skull with an unhinged jaw, pinpoint eyes, and hair hanging in curtains.
+The last lord's Keeper (v4.0): a 3.2-metre contorted frame on wrong-way knees, its skin dark, wet and glistening, a tattered shroud on its back. Its ribcage is exposed and cracked, and inside it **seven wet, pulsing anatomical hearts** hang tangled in black arteries. **One shrivels and goes grey each time a mansion Heart is destroyed.** Its head is a pale, elongated skull with sunken, weeping sockets and pinpoint red pupils; its lower jaw is **split in two**, and when it hunts the halves unhinge down to its chest. **Four spider-like bone limbs** flex out of its shoulder blades; black ichor drips from it; shadow tendrils creep across the floor round its feet, reaching further when it hunts. When it takes you, its split mandibles snap wide inches from your eyes while the spider limbs grip the edges of your sight, to wet, splintering bone-crunches.
 
 ### Uncanny motion (client)
 - **Stop-motion body:** limbs and head are re-posed at a quantised ~13 Hz while its position glides smoothly. It moves like a stop-motion nightmare.
@@ -275,6 +275,9 @@ The last lord's Keeper: too tall for the doorways, gaunt and lopsided (one arm f
 ## 7. Horror presentation
 
 ### Visual
+- **v4.0:** bloom on everything that glows (candle flames, wand tips, irises, spells, the Keeper's hearts and eyes); polished marble, gold filigree (metal-mapped) and carved mahogany that catch light; ribbed Gothic vaulting, cornices, pilasters, turned balusters, candle brackets and dust in every room.
+- **The seven wizards** look like dark-fantasy heroes: sculpted faces (jaw, cheekbones, nose bridge, brows), luminous eyes in their element's colour, each with their own hair (Injorath's obsidian undercut with bangs over one violet eye; Parthius's swept-back auburn with ember tips; Himandriel's parted silver-blue; Sushantus's wavy bronze; Kartavian's wind-swept platinum; Soham's layered gold with a halo; Himanshu's ash-silver spikes under a black crown), high-collared longcoats over waistcoats, silk cravats, pauldrons with a draped chain, split coattails that stream with speed, fitted boots, a signet ring and a carved wand. The lobby shows each on a turning pedestal under studio light; **C** shows your own.
+- **The Seven Sins** are bespoke bosses: Pride a faceless porcelain angel with six shattered-mirror wings and a crown of bleeding golden eyes; Greed a six-armed hulk of melted bullion with chained skeletons and a furnace chest; Lust a porcelain-masked arachnid bride on crimson puppeteer threads with scissor claws; Envy a crooked skin-walker with five weeping masks orbiting its neck and parasitic tendrils; Gluttony a centipede behemoth whose torso splits into a ringed maw of rotating teeth; Wrath a flayed minotaur in red-hot chains with twin molten cleavers and steam venting from its skull; Sloth a floating corpse-giant chained in a broken pendulum cage, dragging iron weights and exhaling black mist.
 - `FogExp2` black fog and a near-zero hemisphere fill. The wand spotlight is about 25° with soft edges and casts shadows from a hand offset, so shadows swing as you move.
 - **Post-processing** (`client/js/fx/PostFX.js`):
   - film grain;
@@ -370,7 +373,8 @@ Three levels (1 tile = 2 m): **Floor 1** (ground, 60 × 60 tiles), **Floor 2** (
 | Mouse | Look (pointer lock; click to capture, Esc to release) |
 | W A S D / arrows | Move |
 | Shift | Sprint: loud, uses stamina (drains in about 4s, recovers in about 7s) |
-| C (toggle) / Ctrl (hold) | Crouch: slow and quiet |
+| Z (toggle) / Ctrl (hold) | Crouch: slow and quiet |
+| C | Vanity camera: see your own wizard over the shoulder; stand still and it circles round you |
 | 1 – 4 | **Select** spell 1–4 (no cast; the wand tip previews it) |
 | R | **Select** the Ultimate (charges over 5:00; once per game) |
 | Left Mouse | **Cast** the selected slot |
@@ -418,6 +422,7 @@ Three levels (1 tile = 2 m): **Floor 1** (ground, 60 × 60 tiles), **Floor 2** (
 | 4 | Malphas Amalgam (model, stop-motion, AI states, haunting, noise, stare), procedural audio, post-processing, Lights Out, terror, capture/rescue/ping/game over, bot rescue | ✅ Done |
 | 4.5 | Lumos, 35-spell grimoire + Ultimates and charge, player HP, tougher Amalgam (attacks, tendrils, smashing, phantoms), bots using the grimoire | ✅ Done |
 | 5 | Forbidden Spell (group chant), Soul Merge, the Archon (7 Masteries, crown), the Unbound Amalgam (volleys, shockwaves, charges, wards), Hell Portal + Soul Grapple, sunlit Epilogue with families + Play Again | ✅ Done |
+| 9 (v4.0) | 1,500 concurrent players: a coven-routed worker cluster, one staggered tick loop per process, shared mansions, a binary + delta snapshot protocol, rate limits and idle sweeps, and a 1,500-player load test; bloom, PBR metal/wood/marble sets, a dim environment and an instanced architectural detail layer; sculpted handsome wizards with their own hair and tailored attire, a lobby hero showcase and a vanity camera (C); the Keeper's anatomical overhaul and its new capture; seven bespoke Sin bosses | ✅ Done |
 | 8 (v3.1) | The Keeper hunts activity: the room graph; activity pings (Sin task steps, spells, sprint / Lumos near corridors, the gate, prisoners' calls); movement 1 room away; doorway crossings bias its patrol; the investigation (a paced 4.2 u/s march, step in, a 3–4s look around, out) with V-and-still as the way to survive it; the project renamed **HorCrux** | ✅ Done |
 | 7 (v3.0) | The full map for everyone (M / Tab); only the Keeper's footsteps are heard (28u, exponential, heartbeat, HUD proximity bar); V as an infinite toggle that fails in its sight; crosshair dot, centre raycast, white outlines and "[Hold E]" billboards; tethers from each Heart; seven thematic Sin tasks (two carry tasks) in the Sins' own rooms; Sins scaled to the coven with telegraphs and an enrage phase; kits of 3 attacks + 1 utility; a 5-minute, once-per-game Ultimate; damage numbers, hit-flash, camera punch, death dissolve, the task tracker | ✅ Done |
 | 6 (v2.0) | Select-then-fire input; 2-story mansion + basement (Balcony Gallery over the Foyer, dual spiral staircases, family stair); top-left Marauder's-Map minimap with footstep ripples; PBR-style procedural materials, Gothic arches, stained-glass moonbeams, moving paintings, sconces, chandeliers; robed Harry-Potter-style wizard avatars; 7 Hearts with 3-part room wards; the Seven Deadly Sins in locked arenas; the unkillable Keeper with sight-lock, heavy footsteps, the Disillusionment Charm (V) and the three-Ultimate escape; the 1.5s Scary Capture Screen and the Underground Iron Cage | ✅ Done |
