@@ -6,13 +6,35 @@
 // every handler registered through `net.on` moves to the new socket.
 
 import { shardOf } from '/shared/shard.js';
+import { NET_VERSION } from '/shared/netcodec.js';
 
 const handlers = new Map(); // event -> Set(fn)
 let shard = { index: 0, count: 1 };
 
+/**
+ * The server runs different code than this page (it was started before an
+ * update, or the page is stale): snapshots would never decode, so nothing
+ * else in the world would ever appear. Say so instead of failing silently.
+ */
+function versionMismatch(why) {
+  if (document.getElementById('version-mismatch')) return;
+  const el = document.createElement('div');
+  el.id = 'version-mismatch';
+  el.textContent = `${why} Restart the server (Ctrl+C, then npm start) and reload this page.`;
+  document.body.appendChild(el);
+}
+
 function connect(coven = null) {
   const s = window.io({ transports: ['websocket'], query: coven ? { coven } : {}, forceNew: true });
-  s.on('hello', (h) => { shard = { index: h.shard, count: h.shards }; });
+  let greeted = false;
+  s.on('hello', (h) => {
+    greeted = true;
+    shard = { index: h.shard, count: h.shards };
+    if (h.net !== NET_VERSION) versionMismatch(`The server speaks network protocol v${h.net ?? 0}, this page v${NET_VERSION}.`);
+  });
+  // A server from before Step 9 never says hello, and sends JSON snapshots as 'game:snap'.
+  s.on('connect', () => setTimeout(() => { if (!greeted && s.connected) versionMismatch('The server is running an older version of HorCrux.'); }, 4000));
+  s.on('game:snap', () => versionMismatch('The server is running an older version of HorCrux.'));
   for (const [event, fns] of handlers) for (const fn of fns) s.on(event, fn);
   return s;
 }

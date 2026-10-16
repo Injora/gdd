@@ -6,6 +6,7 @@ import { MIN_PLAYERS, MAX_PLAYERS } from '../shared/constants.js';
 import { Game } from './Game.js';
 import { botName } from './names.js';
 import { shardOf } from '../shared/shard.js';
+import { NET_VERSION } from '../shared/netcodec.js';
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 let botCounter = 0;
@@ -156,7 +157,8 @@ export class LobbyManager {
     const reply = (cb, payload) => typeof cb === 'function' && cb(payload);
     this.rateLimit(socket);
     // Which worker this is (cluster mode): the client checks a code's shard before joining.
-    socket.emit('hello', { shard: this.shard.index, shards: this.shard.count });
+    // `net`: the snapshot protocol, so a client newer or older than the server can say so.
+    socket.emit('hello', { shard: this.shard.index, shards: this.shard.count, net: NET_VERSION });
     const hostInGame = (fn) => (data) => {
       const lobby = this.lobbyOf(socket);
       if (lobby?.game && lobby.hostId === socket.id) fn(lobby, data ?? {});

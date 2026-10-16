@@ -845,3 +845,10 @@ body.archon .minimap { opacity: 0.55; }
 .showcase-info li b { color: var(--wiz, var(--gold)); font-family: var(--display); font-size: 0.78rem; letter-spacing: 0.05em; }
 .showcase-info .kind { color: var(--ink-dim); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.12em; margin-right: 4px; }
 @media (max-width: 860px) { .showcase { grid-template-columns: 1fr; } .showcase canvas { height: 320px; } }
+
+/* The server runs different code than this page (see net.js). */
+#version-mismatch {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 10000;
+  padding: 0.7rem 1rem; text-align: center;
+  background: var(--blood); color: #fff; font-weight: bold;
+}

@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { io as connect } from 'socket.io-client';
 import { shardOf } from '../shared/shard.js';
+import { NET_VERSION } from '../shared/netcodec.js';
 import { covenOf, workerCount } from '../server.js';
 
 const WORKERS = 3;
@@ -57,6 +58,7 @@ test('a coven created on any worker is joined through its owner; other workers c
   const host = client();
   const h = await hello(host);
   assert.equal(h.shards, WORKERS);
+  assert.equal(h.net, NET_VERSION, 'hello names the snapshot protocol (the client warns on a mismatch)');
   const made = await request(host, 'lobby:create', { name: 'Host' });
   assert.ok(made.ok);
   assert.equal(shardOf(made.code, WORKERS), h.shard, 'its code shards to the worker that made it');
